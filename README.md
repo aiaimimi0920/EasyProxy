@@ -16,8 +16,6 @@ EasyProxiesV2 是一个轻量级、高性能的代理池与订阅管理工具，
 
 ## 🖼️ 项目预览
 
-> 以下图片来自 `frontend/public`，按顺序展示：
-
 ![项目预览 1](./frontend/public/1.png)
 ![项目预览 2](./frontend/public/2.png)
 ![项目预览 3](./frontend/public/3.png)
