@@ -77,6 +77,7 @@ type Manager struct {
 	healthCheckStarted bool
 	configListeners    []ConfigUpdateListener
 	idle               bool // true when manager was started but stopped due to 0 enabled nodes
+	ephemeralNodes     []config.NodeConfig
 
 	// lastAppliedMode and lastAppliedBasePort track the mode/BasePort from the
 	// last successful Start/Reload. Used by TriggerReload to detect changes,
@@ -865,6 +866,22 @@ func (m *Manager) TriggerReload(ctx context.Context) error {
 		}
 	}
 
+	m.mu.RLock()
+	ephemeralNodes := cloneNodes(m.ephemeralNodes)
+	m.mu.RUnlock()
+	if len(ephemeralNodes) > 0 {
+		existing := make(map[string]struct{}, len(newCfg.Nodes))
+		for _, node := range newCfg.Nodes {
+			existing[node.URI] = struct{}{}
+		}
+		for _, node := range ephemeralNodes {
+			if _, ok := existing[node.URI]; ok {
+				continue
+			}
+			newCfg.Nodes = append(newCfg.Nodes, node)
+		}
+	}
+
 	// If no enabled nodes available after merging, enter idle state:
 	// stop the running box gracefully so disabled nodes are no longer served.
 	if len(newCfg.Nodes) == 0 {
@@ -1041,6 +1058,14 @@ func cloneNodes(nodes []config.NodeConfig) []config.NodeConfig {
 	return out
 }
 
+// SetEphemeralNodes stores runtime-generated nodes that should survive reloads
+// but must not be written into the persistent local store.
+func (m *Manager) SetEphemeralNodes(nodes []config.NodeConfig) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ephemeralNodes = cloneNodes(nodes)
+}
+
 func (m *Manager) copyConfigLocked() *config.Config {
 	if m.cfg == nil {
 		return nil
@@ -1098,10 +1123,17 @@ func (m *Manager) nextAvailablePortLocked() uint16 {
 
 func (m *Manager) prepareNodeLocked(node config.NodeConfig, currentName string) (config.NodeConfig, error) {
 	node.Name = strings.TrimSpace(node.Name)
-	node.URI = strings.TrimSpace(node.URI)
+	defaultScheme := "http"
+	if m.cfg != nil && strings.TrimSpace(m.cfg.SourceSync.DefaultDirectProxyScheme) != "" {
+		defaultScheme = strings.TrimSpace(m.cfg.SourceSync.DefaultDirectProxyScheme)
+	}
+	node.URI = config.NormalizeProxyURIInput(strings.TrimSpace(node.URI), defaultScheme)
 
 	if node.URI == "" {
 		return config.NodeConfig{}, fmt.Errorf("%w: URI 不能为空", monitor.ErrInvalidNode)
+	}
+	if !config.IsProxyURI(node.URI) {
+		return config.NodeConfig{}, fmt.Errorf("%w: 不支持的 URI 协议", monitor.ErrInvalidNode)
 	}
 
 	// Extract name from URI fragment (#name) if not provided

@@ -57,6 +57,10 @@ type SubscriptionRefresher interface {
 	Status() SubscriptionStatus
 }
 
+type SourceSyncReporter interface {
+	SourceSyncStatus() SourceSyncStatus
+}
+
 // SubscriptionStatus represents subscription refresh status.
 type SubscriptionStatus struct {
 	Enabled          bool      `json:"enabled"`           // Whether auto-refresh is enabled in config
@@ -93,6 +97,7 @@ type Server struct {
 
 	subRefresher SubscriptionRefresher
 	nodeMgr      NodeManager
+	sourceSync   SourceSyncReporter
 }
 
 // NewServer constructs a server; it can be nil when disabled.
@@ -139,6 +144,7 @@ func NewServer(cfg Config, mgr *Manager, logger *log.Logger) *Server {
 	mux.HandleFunc("/api/import", s.withAuth(s.handleImport))
 	mux.HandleFunc("/api/subscription/status", s.withAuth(s.handleSubscriptionStatus))
 	mux.HandleFunc("/api/subscription/refresh", s.withAuth(s.handleSubscriptionRefresh))
+	mux.HandleFunc("/api/source-sync/status", s.withAuth(s.handleSourceSyncStatus))
 	mux.HandleFunc("/api/reload", s.withAuth(s.handleReload))
 
 	// Default handler for static assets (React App)
@@ -151,6 +157,12 @@ func NewServer(cfg Config, mgr *Manager, logger *log.Logger) *Server {
 func (s *Server) SetSubscriptionRefresher(sr SubscriptionRefresher) {
 	if s != nil {
 		s.subRefresher = sr
+	}
+}
+
+func (s *Server) SetSourceSyncReporter(sr SourceSyncReporter) {
+	if s != nil {
+		s.sourceSync = sr
 	}
 }
 
@@ -227,6 +239,15 @@ type allSettingsResponse struct {
 	SubRefreshDrainTimeout       string `json:"sub_refresh_drain_timeout"`
 	SubRefreshMinAvailableNodes  int    `json:"sub_refresh_min_available_nodes"`
 
+	// Source sync
+	SourceSyncEnabled                  bool     `json:"source_sync_enabled"`
+	SourceSyncManifestURL              string   `json:"source_sync_manifest_url"`
+	SourceSyncManifestToken            string   `json:"source_sync_manifest_token"`
+	SourceSyncRefreshInterval          string   `json:"source_sync_refresh_interval"`
+	SourceSyncRequestTimeout           string   `json:"source_sync_request_timeout"`
+	SourceSyncFallbackSubscriptions    []string `json:"source_sync_fallback_subscriptions"`
+	SourceSyncDefaultDirectProxyScheme string   `json:"source_sync_default_direct_proxy_scheme"`
+
 	// GeoIP
 	GeoIPEnabled            bool   `json:"geoip_enabled"`
 	GeoIPDatabasePath       string `json:"geoip_database_path"`
@@ -278,6 +299,15 @@ type allSettingsRequest struct {
 	SubRefreshHealthCheckTimeout string `json:"sub_refresh_health_check_timeout"`
 	SubRefreshDrainTimeout       string `json:"sub_refresh_drain_timeout"`
 	SubRefreshMinAvailableNodes  int    `json:"sub_refresh_min_available_nodes"`
+
+	// Source sync
+	SourceSyncEnabled                  bool     `json:"source_sync_enabled"`
+	SourceSyncManifestURL              string   `json:"source_sync_manifest_url"`
+	SourceSyncManifestToken            string   `json:"source_sync_manifest_token"`
+	SourceSyncRefreshInterval          string   `json:"source_sync_refresh_interval"`
+	SourceSyncRequestTimeout           string   `json:"source_sync_request_timeout"`
+	SourceSyncFallbackSubscriptions    []string `json:"source_sync_fallback_subscriptions"`
+	SourceSyncDefaultDirectProxyScheme string   `json:"source_sync_default_direct_proxy_scheme"`
 
 	// GeoIP
 	GeoIPEnabled            bool   `json:"geoip_enabled"`
@@ -341,6 +371,14 @@ func (s *Server) getAllSettings() allSettingsResponse {
 		SubRefreshDrainTimeout:       c.SubscriptionRefresh.DrainTimeout.String(),
 		SubRefreshMinAvailableNodes:  c.SubscriptionRefresh.MinAvailableNodes,
 
+		SourceSyncEnabled:                  c.SourceSync.Enabled,
+		SourceSyncManifestURL:              c.SourceSync.ManifestURL,
+		SourceSyncManifestToken:            c.SourceSync.ManifestToken,
+		SourceSyncRefreshInterval:          c.SourceSync.RefreshInterval.String(),
+		SourceSyncRequestTimeout:           c.SourceSync.RequestTimeout.String(),
+		SourceSyncFallbackSubscriptions:    c.SourceSync.FallbackSubscriptions,
+		SourceSyncDefaultDirectProxyScheme: c.SourceSync.DefaultDirectProxyScheme,
+
 		GeoIPEnabled:            c.GeoIP.Enabled,
 		GeoIPDatabasePath:       c.GeoIP.DatabasePath,
 		GeoIPAutoUpdateEnabled:  c.GeoIP.AutoUpdateEnabled,
@@ -358,6 +396,7 @@ func (s *Server) updateAllSettings(req allSettingsRequest) error {
 		req.ListenerProtocol, req.MultiPortProtocol,
 		req.PoolBlacklistDuration, req.SubRefreshInterval, req.SubRefreshTimeout,
 		req.SubRefreshHealthCheckTimeout, req.SubRefreshDrainTimeout,
+		req.SourceSyncRefreshInterval, req.SourceSyncRequestTimeout,
 		req.GeoIPAutoUpdateInterval, req.ManagementHealthCheckInterval,
 	); err != nil {
 		return fmt.Errorf("参数验证失败: %w", err)
@@ -432,6 +471,22 @@ func (s *Server) updateAllSettings(req allSettingsRequest) error {
 		c.SubscriptionRefresh.DrainTimeout = d
 	}
 	c.SubscriptionRefresh.MinAvailableNodes = req.SubRefreshMinAvailableNodes
+
+	// Source sync
+	c.SourceSync.Enabled = req.SourceSyncEnabled
+	c.SourceSync.ManifestURL = strings.TrimSpace(req.SourceSyncManifestURL)
+	c.SourceSync.ManifestToken = strings.TrimSpace(req.SourceSyncManifestToken)
+	if d, err := time.ParseDuration(req.SourceSyncRefreshInterval); err == nil && d > 0 {
+		c.SourceSync.RefreshInterval = d
+	}
+	if d, err := time.ParseDuration(req.SourceSyncRequestTimeout); err == nil && d > 0 {
+		c.SourceSync.RequestTimeout = d
+	}
+	c.SourceSync.FallbackSubscriptions = req.SourceSyncFallbackSubscriptions
+	c.SourceSync.DefaultDirectProxyScheme = strings.TrimSpace(req.SourceSyncDefaultDirectProxyScheme)
+	if c.SourceSync.DefaultDirectProxyScheme == "" {
+		c.SourceSync.DefaultDirectProxyScheme = "http"
+	}
 
 	// GeoIP
 	c.GeoIP.Enabled = req.GeoIPEnabled
@@ -881,11 +936,16 @@ func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		// 检查 Authorization header (Bearer token)
-		authHeader := r.Header.Get("Authorization")
+		// 检查 Authorization header:
+		// 1. Bearer session token (WebUI login flow)
+		// 2. Raw management password / Bearer management password (service-to-service flow)
+		authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
 		if authHeader != "" {
-			token := strings.TrimPrefix(authHeader, "Bearer ")
-			if s.validateSession(token) {
+			if token, ok := bearerTokenFromHeader(authHeader); ok && s.validateSession(token) {
+				next(w, r)
+				return
+			}
+			if s.validateManagementPassword(authHeader) {
 				next(w, r)
 				return
 			}
@@ -895,6 +955,31 @@ func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
 		w.WriteHeader(http.StatusUnauthorized)
 		writeJSON(w, map[string]any{"error": "未授权，请先登录"})
 	}
+}
+
+func bearerTokenFromHeader(authHeader string) (string, bool) {
+	const prefix = "Bearer "
+	if len(authHeader) < len(prefix) || !strings.EqualFold(authHeader[:len(prefix)], prefix) {
+		return "", false
+	}
+	return strings.TrimSpace(authHeader[len(prefix):]), true
+}
+
+func (s *Server) validateManagementPassword(authHeader string) bool {
+	if s == nil || s.cfg.Password == "" {
+		return false
+	}
+
+	if secureCompareStrings(authHeader, s.cfg.Password) {
+		return true
+	}
+
+	token, ok := bearerTokenFromHeader(authHeader)
+	if !ok {
+		return false
+	}
+
+	return secureCompareStrings(token, s.cfg.Password)
 }
 
 // handleAuth 处理登录认证
@@ -1169,6 +1254,20 @@ func (s *Server) handleSubscriptionRefresh(w http.ResponseWriter, r *http.Reques
 		"message":    "刷新成功",
 		"node_count": status.NodeCount,
 	})
+}
+
+func (s *Server) handleSourceSyncStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.sourceSync == nil {
+		writeJSON(w, SourceSyncStatus{})
+		return
+	}
+
+	writeJSON(w, s.sourceSync.SourceSyncStatus())
 }
 
 // nodePayload is the JSON request body for node CRUD operations.

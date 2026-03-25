@@ -104,7 +104,7 @@ cp ./config.example.yaml ./config.yaml
 - `listener`: 代理入口监听与认证（新增 `listener.protocol`: `http` / `socks5` / `mixed`）
 - `multi_port`: 多端口入口参数（新增 `multi_port.protocol`: `http` / `socks5` / `mixed`）
 - `management.listen`: Web 管理面板地址（默认 `0.0.0.0:9888`）
-- `management.password`: 面板登录密码（为空则不需要登录）
+- `management.password`: 面板登录密码（为空则不需要登录）；服务间调用时也可直接作为 `Authorization` 头值访问管理 API
 - `subscriptions` / `nodes_file` / `nodes`: 节点来源（三选一或混用）
 
 ---

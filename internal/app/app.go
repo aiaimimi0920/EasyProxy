@@ -63,6 +63,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 
 	// ── 4. Create and start BoxManager ──
 	boxMgr := boxmgr.New(cfg, monitorCfg, boxmgr.WithStore(dataStore))
+	boxMgr.SetEphemeralNodes(filterEphemeralNodes(cfg.Nodes))
 	if err := boxMgr.Start(ctx); err != nil {
 		return fmt.Errorf("start box manager: %w", err)
 	}
@@ -87,6 +88,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 
 	if server := boxMgr.MonitorServer(); server != nil {
 		server.SetSubscriptionRefresher(subMgr)
+		server.SetSourceSyncReporter(subMgr)
 	}
 
 	// ── 6. Start periodic stats flush ──
@@ -138,6 +140,10 @@ func Run(ctx context.Context, cfg *config.Config) error {
 // If the Store is empty, seeds it with whatever nodes config already has
 // (from config.yaml inline nodes or subscription fetch), then returns.
 func loadNodesFromStore(ctx context.Context, cfg *config.Config, s store.Store) error {
+	if deleted, err := s.DeleteNodesBySource(ctx, store.NodeSourceSubscription); err == nil && deleted > 0 {
+		log.Printf("[app] cleaned %d legacy subscription nodes from store", deleted)
+	}
+
 	nodes, err := s.ListNodes(ctx, store.NodeFilter{})
 	if err != nil {
 		return fmt.Errorf("list nodes from store: %w", err)
@@ -157,25 +163,44 @@ func loadNodesFromStore(ctx context.Context, cfg *config.Config, s store.Store) 
 		return nil
 	}
 
-	// Convert store.Node to config.NodeConfig
-	var configNodes []config.NodeConfig
+	// Merge enabled persistent local nodes from store into the current config.
+	// Subscription-derived runtime nodes remain in memory only and are preserved
+	// from cfg.Nodes instead of being restored from the store.
+	configNodes := cloneConfigNodes(cfg.Nodes)
+	byURI := make(map[string]int, len(configNodes))
+	for idx, node := range configNodes {
+		byURI[node.URI] = idx
+	}
 	for _, n := range nodes {
 		if !n.Enabled {
+			if idx, ok := byURI[n.URI]; ok {
+				configNodes = append(configNodes[:idx], configNodes[idx+1:]...)
+				byURI = make(map[string]int, len(configNodes))
+				for rebuildIdx, node := range configNodes {
+					byURI[node.URI] = rebuildIdx
+				}
+			}
 			continue
 		}
-		configNodes = append(configNodes, config.NodeConfig{
+		nodeCfg := config.NodeConfig{
 			Name:     n.Name,
 			URI:      n.URI,
 			Port:     n.Port,
 			Username: n.Username,
 			Password: n.Password,
 			Source:   config.NodeSource(n.Source),
-		})
+		}
+		if idx, ok := byURI[nodeCfg.URI]; ok {
+			configNodes[idx] = nodeCfg
+			continue
+		}
+		configNodes = append(configNodes, nodeCfg)
+		byURI[nodeCfg.URI] = len(configNodes) - 1
 	}
 
 	if len(configNodes) > 0 {
 		cfg.Nodes = configNodes
-		log.Printf("[app] loaded %d nodes from store", len(configNodes))
+		log.Printf("[app] merged %d nodes from store into runtime config", len(configNodes))
 	}
 
 	return nil
@@ -186,9 +211,12 @@ func loadNodesFromStore(ctx context.Context, cfg *config.Config, s store.Store) 
 func seedStoreFromConfig(ctx context.Context, cfg *config.Config, s store.Store) error {
 	var storeNodes []store.Node
 	for _, n := range cfg.Nodes {
+		if n.Source == config.NodeSourceSubscription || n.Source == config.NodeSourceManifest || n.Source == config.NodeSourceFallback {
+			continue
+		}
 		source := string(n.Source)
 		if source == "" {
-			source = store.NodeSourceSubscription
+			source = store.NodeSourceInline
 		}
 		storeNodes = append(storeNodes, store.Node{
 			URI:      n.URI,
@@ -207,6 +235,25 @@ func seedStoreFromConfig(ctx context.Context, cfg *config.Config, s store.Store)
 
 	log.Printf("[app] seeded %d nodes into store", len(storeNodes))
 	return nil
+}
+
+func filterEphemeralNodes(nodes []config.NodeConfig) []config.NodeConfig {
+	var ephemeral []config.NodeConfig
+	for _, node := range nodes {
+		if node.Source == config.NodeSourceSubscription || node.Source == config.NodeSourceManifest || node.Source == config.NodeSourceFallback {
+			ephemeral = append(ephemeral, node)
+		}
+	}
+	return ephemeral
+}
+
+func cloneConfigNodes(nodes []config.NodeConfig) []config.NodeConfig {
+	if len(nodes) == 0 {
+		return nil
+	}
+	cloned := make([]config.NodeConfig, len(nodes))
+	copy(cloned, nodes)
+	return cloned
 }
 
 // periodicStatsFlush periodically writes in-memory node stats to the Store.

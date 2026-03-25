@@ -8,6 +8,7 @@ import type {
   ConfigNodePayload,
   ConfigNodeMutationResponse,
   SubscriptionStatus,
+  SourceSyncStatus,
   ProbeSSEEvent,
   TrafficStreamEvent,
 } from '../types'
@@ -338,6 +339,10 @@ export async function fetchSubscriptionStatus(): Promise<SubscriptionStatus> {
 
 export async function refreshSubscription(): Promise<{ message: string; node_count: number }> {
   return request('/api/subscription/refresh', { method: 'POST' })
+}
+
+export async function fetchSourceSyncStatus(): Promise<SourceSyncStatus> {
+  return request<SourceSyncStatus>('/api/source-sync/status')
 }
 
 // ---- Export API ----

@@ -117,6 +117,15 @@ export interface SettingsData {
   sub_refresh_drain_timeout: string
   sub_refresh_min_available_nodes: number
 
+  // Source sync
+  source_sync_enabled: boolean
+  source_sync_manifest_url: string
+  source_sync_manifest_token: string
+  source_sync_refresh_interval: string
+  source_sync_request_timeout: string
+  source_sync_fallback_subscriptions: string[]
+  source_sync_default_direct_proxy_scheme: string
+
   // GeoIP
   geoip_enabled: boolean
   geoip_database_path: string
@@ -185,6 +194,19 @@ export interface SubscriptionStatus {
   refresh_count?: number
   is_refreshing?: boolean
   message?: string
+}
+
+export interface SourceSyncStatus {
+  enabled: boolean
+  manifest_url?: string
+  manifest_healthy?: boolean
+  last_sync?: string
+  last_success?: string
+  last_error?: string
+  fallback_active?: boolean
+  local_source_count?: number
+  manifest_source_count?: number
+  fallback_source_count?: number
 }
 
 // ---- SSE Probe types ----

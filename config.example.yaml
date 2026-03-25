@@ -62,7 +62,7 @@ management:
   listen: 0.0.0.0:9888                               # 监听地址
   probe_target: http://cp.cloudflare.com/generate_204  # 健康检查目标
   health_check_interval: 2h                          # 周期健康检查间隔（默认 2 小时）
-  password: "123456"                                       # WebUI 访问密码，为空则不需要密码
+  password: "123456"                                # WebUI 访问密码；服务间也可直接作为 Authorization 头值调用管理 API
 
 # ───────────────────────────────────────────────────────────────
 # GeoIP 地域分区配置（可选）
@@ -98,6 +98,21 @@ geoip:
 #   health_check_timeout: 60s   # 新节点健康检查超时
 #   drain_timeout: 30s          # 旧实例排空超时时间
 #   min_available_nodes: 1      # 最少可用节点数，低于此值不切换
+
+# ───────────────────────────────────────────────────────────────
+# Source Sync（可选）
+# ───────────────────────────────────────────────────────────────
+# 用于从 MiSub 拉取统一 manifest，并在 manifest 不可用时启用 aggregator 回退订阅。
+# local 优先级最高：本地 subscriptions / nodes / WebUI 手动节点始终保留。
+# source_sync:
+#   enabled: false
+#   manifest_url: "https://misub.example.com/api/manifest/profile-id"
+#   manifest_token: "replace-with-manifest-token"
+#   refresh_interval: 5m
+#   request_timeout: 15s
+#   default_direct_proxy_scheme: http   # 裸 residential 输入默认补成 http://
+#   fallback_subscriptions:
+#     - "https://r2.example.com/fallback-profile.txt"
 
 # ═══════════════════════════════════════════════════════════════
 # 节点配置方式（三选一或混合使用）

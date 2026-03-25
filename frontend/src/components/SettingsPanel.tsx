@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
-import type { SettingsData, SubscriptionStatus } from '../types'
-import { fetchSettings, updateSettings, triggerReload, fetchSubscriptionStatus, refreshSubscription } from '../api/client'
+import type { SettingsData, SourceSyncStatus, SubscriptionStatus } from '../types'
+import { fetchSettings, updateSettings, triggerReload, fetchSubscriptionStatus, fetchSourceSyncStatus, refreshSubscription } from '../api/client'
 
 const defaultSettings: SettingsData = {
   mode: 'pool',
@@ -37,6 +37,14 @@ const defaultSettings: SettingsData = {
   sub_refresh_drain_timeout: '30s',
   sub_refresh_min_available_nodes: 1,
 
+  source_sync_enabled: false,
+  source_sync_manifest_url: '',
+  source_sync_manifest_token: '',
+  source_sync_refresh_interval: '5m0s',
+  source_sync_request_timeout: '15s',
+  source_sync_fallback_subscriptions: [],
+  source_sync_default_direct_proxy_scheme: 'http',
+
   geoip_enabled: false,
   geoip_database_path: './GeoLite2-Country.mmdb',
   geoip_auto_update_enabled: true,
@@ -58,15 +66,21 @@ export default function SettingsPanel() {
 
   // Subscription status
   const [subStatus, setSubStatus] = useState<SubscriptionStatus | null>(null)
+  const [sourceSyncStatus, setSourceSyncStatus] = useState<SourceSyncStatus | null>(null)
   const [subRefreshing, setSubRefreshing] = useState(false)
 
   // New subscription input
   const [newSubUrl, setNewSubUrl] = useState('')
+  const [newFallbackUrl, setNewFallbackUrl] = useState('')
 
-  const refreshSubStatus = useCallback(async () => {
+  const refreshRuntimeStatus = useCallback(async () => {
     try {
-      const subData = await fetchSubscriptionStatus()
+      const [subData, sourceData] = await Promise.all([
+        fetchSubscriptionStatus(),
+        fetchSourceSyncStatus(),
+      ])
       if (subData) setSubStatus(subData)
+      if (sourceData) setSourceSyncStatus(sourceData)
     } catch {
       // ignore errors
     }
@@ -77,10 +91,11 @@ export default function SettingsPanel() {
       try {
         const [settingsData] = await Promise.all([
           fetchSettings(),
-          refreshSubStatus(),
+          refreshRuntimeStatus(),
         ])
         const subscriptions = settingsData.subscriptions || []
-        const merged = { ...defaultSettings, ...settingsData, subscriptions }
+        const fallbackSubscriptions = settingsData.source_sync_fallback_subscriptions || []
+        const merged = { ...defaultSettings, ...settingsData, subscriptions, source_sync_fallback_subscriptions: fallbackSubscriptions }
         setSettings(merged)
         setSavedSettings(merged)
         setIsDirty(false)
@@ -91,7 +106,7 @@ export default function SettingsPanel() {
       }
     }
     load()
-  }, [refreshSubStatus])
+  }, [refreshRuntimeStatus])
 
   useEffect(() => {
     if (success) {
@@ -111,7 +126,7 @@ export default function SettingsPanel() {
       setIsDirty(false)
       if (res.need_reload) setNeedReload(true)
       // Refresh subscription status after saving (config may have changed)
-      await refreshSubStatus()
+      await refreshRuntimeStatus()
     } catch (err) {
       setError(err instanceof Error ? err.message : '保存失败')
     } finally {
@@ -127,7 +142,7 @@ export default function SettingsPanel() {
       setSuccess(res.message || '重载成功')
       setNeedReload(false)
       // Refresh subscription status after reload (subscription manager config updated)
-      await refreshSubStatus()
+      await refreshRuntimeStatus()
     } catch (err) {
       setError(err instanceof Error ? err.message : '重载失败')
     } finally {
@@ -141,7 +156,7 @@ export default function SettingsPanel() {
     try {
       const res = await refreshSubscription()
       setSuccess(`订阅刷新成功，共 ${res.node_count} 个节点`)
-      await refreshSubStatus()
+      await refreshRuntimeStatus()
     } catch (err) {
       setError(err instanceof Error ? err.message : '刷新订阅失败')
     } finally {
@@ -167,6 +182,35 @@ export default function SettingsPanel() {
   const removeSubscription = (index: number) => {
     setSettings(s => {
       const updated = { ...s, subscriptions: s.subscriptions.filter((_, i) => i !== index) }
+      setIsDirty(JSON.stringify(updated) !== JSON.stringify(savedSettings))
+      return updated
+    })
+  }
+
+  const addFallbackSubscription = () => {
+    const url = newFallbackUrl.trim()
+    if (!url) return
+    if (settings.source_sync_fallback_subscriptions.includes(url)) {
+      setError('该回退订阅地址已存在')
+      return
+    }
+    setSettings(s => {
+      const updated = {
+        ...s,
+        source_sync_fallback_subscriptions: [...s.source_sync_fallback_subscriptions, url],
+      }
+      setIsDirty(JSON.stringify(updated) !== JSON.stringify(savedSettings))
+      return updated
+    })
+    setNewFallbackUrl('')
+  }
+
+  const removeFallbackSubscription = (index: number) => {
+    setSettings(s => {
+      const updated = {
+        ...s,
+        source_sync_fallback_subscriptions: s.source_sync_fallback_subscriptions.filter((_, i) => i !== index),
+      }
       setIsDirty(JSON.stringify(updated) !== JSON.stringify(savedSettings))
       return updated
     })
@@ -776,6 +820,168 @@ export default function SettingsPanel() {
                 />
                 <p className="label text-base-content/50 mt-1">低于此值时不切换新节点</p>
               </fieldset>
+            </div>
+          )}
+        </div>
+
+        {/* ===== Source Sync ===== */}
+        <div className="rounded-2xl border border-base-300/50 bg-base-100 p-6 lg:p-8 space-y-5 shadow-sm transition-shadow hover:shadow-md lg:col-span-2">
+          <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4 border-b border-base-200 pb-4 mb-2">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-secondary/10 flex items-center justify-center text-secondary shrink-0">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 9l4-4 4 4m0 6l-4 4-4-4M4 12h16" />
+                </svg>
+              </div>
+              <div>
+                <h3 className="font-bold text-lg text-base-content">Source Sync</h3>
+                <p className="text-xs text-base-content/50 font-medium">从 MiSub 拉取统一 manifest，并在失败时切到 aggregator 回退订阅</p>
+              </div>
+            </div>
+
+            {sourceSyncStatus && (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className={`badge badge-sm border-none ${sourceSyncStatus.manifest_healthy ? 'bg-success/20 text-success' : 'bg-error/20 text-error'}`}>
+                  {sourceSyncStatus.manifest_healthy ? 'Manifest 正常' : 'Manifest 异常'}
+                </span>
+                {sourceSyncStatus.fallback_active && (
+                  <span className="badge badge-warning badge-sm border-none bg-warning/20 text-warning-content">回退已激活</span>
+                )}
+                <span className="badge badge-ghost badge-sm">本地 {sourceSyncStatus.local_source_count || 0}</span>
+                <span className="badge badge-ghost badge-sm">远端 {sourceSyncStatus.manifest_source_count || 0}</span>
+                <span className="badge badge-ghost badge-sm">回退 {sourceSyncStatus.fallback_source_count || 0}</span>
+              </div>
+            )}
+          </div>
+
+          <label className="flex items-center justify-between cursor-pointer gap-4 bg-base-200/30 p-4 rounded-xl border border-base-200 hover:border-base-300 transition-colors">
+            <div>
+              <span className="font-semibold text-base-content/90 block mb-0.5">启用 Source Sync</span>
+              <p className="text-xs text-base-content/50 m-0">启用后，本地会按周期请求 MiSub manifest；失败时仅启用回退订阅</p>
+            </div>
+            <input
+              type="checkbox"
+              className="toggle toggle-primary toggle-md"
+              checked={settings.source_sync_enabled}
+              onChange={(e) => updateField('source_sync_enabled', e.target.checked)}
+            />
+          </label>
+
+          {sourceSyncStatus?.last_error && (
+            <div role="alert" className="alert alert-error alert-soft text-sm">
+              <span>{sourceSyncStatus.last_error}</span>
+            </div>
+          )}
+
+          {settings.source_sync_enabled && (
+            <div className="space-y-4 pt-2 animate-in fade-in slide-in-from-top-2">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <fieldset className="fieldset">
+                  <legend className="fieldset-legend font-semibold text-base-content/80">Manifest URL</legend>
+                  <input
+                    type="text"
+                    className="input input-md w-full bg-base-200/50 focus:bg-base-100 transition-colors focus:border-primary/50"
+                    placeholder="https://misub.example.com/api/manifest/profile-id"
+                    value={settings.source_sync_manifest_url}
+                    onChange={(e) => updateField('source_sync_manifest_url', e.target.value)}
+                  />
+                </fieldset>
+                <fieldset className="fieldset">
+                  <legend className="fieldset-legend font-semibold text-base-content/80">Manifest Token</legend>
+                  <input
+                    type="text"
+                    className="input input-md w-full bg-base-200/50 focus:bg-base-100 transition-colors focus:border-primary/50"
+                    placeholder="Bearer token for /api/manifest/:profileId"
+                    value={settings.source_sync_manifest_token}
+                    onChange={(e) => updateField('source_sync_manifest_token', e.target.value)}
+                  />
+                </fieldset>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                <fieldset className="fieldset">
+                  <legend className="fieldset-legend font-semibold text-base-content/80">同步间隔</legend>
+                  <input
+                    type="text"
+                    className="input input-md w-full bg-base-200/50 focus:bg-base-100 transition-colors focus:border-primary/50"
+                    value={settings.source_sync_refresh_interval}
+                    onChange={(e) => updateField('source_sync_refresh_interval', e.target.value)}
+                  />
+                </fieldset>
+                <fieldset className="fieldset">
+                  <legend className="fieldset-legend font-semibold text-base-content/80">请求超时</legend>
+                  <input
+                    type="text"
+                    className="input input-md w-full bg-base-200/50 focus:bg-base-100 transition-colors focus:border-primary/50"
+                    value={settings.source_sync_request_timeout}
+                    onChange={(e) => updateField('source_sync_request_timeout', e.target.value)}
+                  />
+                </fieldset>
+                <fieldset className="fieldset">
+                  <legend className="fieldset-legend font-semibold text-base-content/80">裸代理默认协议</legend>
+                  <select
+                    className="select select-md w-full bg-base-200/50 focus:bg-base-100 transition-colors focus:border-primary/50"
+                    value={settings.source_sync_default_direct_proxy_scheme}
+                    onChange={(e) => updateField('source_sync_default_direct_proxy_scheme', e.target.value)}
+                  >
+                    <option value="http">http</option>
+                    <option value="socks5">socks5</option>
+                  </select>
+                </fieldset>
+              </div>
+
+              <div className="grid grid-cols-1 xl:grid-cols-[1fr_auto] gap-3 items-end">
+                <fieldset className="fieldset">
+                  <legend className="fieldset-legend font-semibold text-base-content/80">Fallback 订阅 URL</legend>
+                  <input
+                    type="text"
+                    className="input input-md w-full bg-base-200/50 focus:bg-base-100 transition-colors focus:border-primary/50"
+                    placeholder="https://r2.example.com/fallback-profile.txt"
+                    value={newFallbackUrl}
+                    onChange={(e) => setNewFallbackUrl(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && addFallbackSubscription()}
+                  />
+                </fieldset>
+                <button className="btn btn-md btn-primary shadow-sm" onClick={addFallbackSubscription} disabled={!newFallbackUrl.trim()}>
+                  添加回退
+                </button>
+              </div>
+
+              {settings.source_sync_fallback_subscriptions.length > 0 ? (
+                <div className="space-y-3">
+                  {settings.source_sync_fallback_subscriptions.map((url, index) => (
+                    <div key={index} className="flex items-center gap-3 p-3 rounded-xl border border-base-200 bg-base-200/30 hover:bg-base-200/60 transition-colors group">
+                      <code className="text-sm font-mono text-base-content/80 break-all flex-1">{url}</code>
+                      <button
+                        className="btn btn-sm btn-square btn-ghost text-base-content/40 hover:text-error hover:bg-error/10 shrink-0 opacity-0 group-hover:opacity-100 transition-all"
+                        onClick={() => removeFallbackSubscription(index)}
+                        title="删除回退订阅"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-sm text-base-content/50 rounded-xl border border-dashed border-base-300 bg-base-200/20 p-4">
+                  当前没有配置 fallback 订阅。当 Manifest 不可用且本地也没有其他订阅时，将不会有保底订阅可用。
+                </div>
+              )}
+
+              {sourceSyncStatus && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-base-content/60">
+                  <div className="rounded-xl bg-base-200/30 p-4 border border-base-200">
+                    <div>最后同步: {sourceSyncStatus.last_sync || '-'}</div>
+                    <div>最后成功: {sourceSyncStatus.last_success || '-'}</div>
+                  </div>
+                  <div className="rounded-xl bg-base-200/30 p-4 border border-base-200">
+                    <div>Manifest URL: {sourceSyncStatus.manifest_url || '-'}</div>
+                    <div>运行状态: {sourceSyncStatus.manifest_healthy ? 'Healthy' : (sourceSyncStatus.fallback_active ? 'Fallback' : 'Error')}</div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

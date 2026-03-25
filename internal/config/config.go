@@ -29,6 +29,7 @@ type Config struct {
 	Pool                PoolConfig                `yaml:"pool"`
 	Management          ManagementConfig          `yaml:"management"`
 	SubscriptionRefresh SubscriptionRefreshConfig `yaml:"subscription_refresh"`
+	SourceSync          SourceSyncConfig          `yaml:"source_sync"`
 	GeoIP               GeoIPConfig               `yaml:"geoip"`
 	Nodes               []NodeConfig              `yaml:"nodes"`
 	NodesFile           string                    `yaml:"nodes_file"`    // 节点文件路径，每行一个 URI
@@ -95,6 +96,17 @@ type SubscriptionRefreshConfig struct {
 	MinAvailableNodes  int           `yaml:"min_available_nodes"`  // 最少可用节点数，低于此值不切换
 }
 
+// SourceSyncConfig controls MiSub manifest sync and aggregator fallback.
+type SourceSyncConfig struct {
+	Enabled                  bool          `yaml:"enabled"`
+	ManifestURL              string        `yaml:"manifest_url"`
+	ManifestToken            string        `yaml:"manifest_token"`
+	RefreshInterval          time.Duration `yaml:"refresh_interval"`
+	RequestTimeout           time.Duration `yaml:"request_timeout"`
+	FallbackSubscriptions    []string      `yaml:"fallback_subscriptions"`
+	DefaultDirectProxyScheme string        `yaml:"default_direct_proxy_scheme"`
+}
+
 // NodeSource indicates where a node configuration originated from.
 type NodeSource string
 
@@ -103,6 +115,8 @@ const (
 	NodeSourceFile         NodeSource = "nodes_file"   // Loaded from external nodes file
 	NodeSourceSubscription NodeSource = "subscription" // Fetched from subscription URL
 	NodeSourceManual       NodeSource = "manual"       // Added manually via WebUI
+	NodeSourceManifest     NodeSource = "manifest"     // Materialized from remote MiSub manifest
+	NodeSourceFallback     NodeSource = "fallback"     // Materialized from aggregator fallback subscription
 )
 
 const (
@@ -123,6 +137,42 @@ var supportedProxyURISchemes = []string{
 	"anytls://",
 	"http://",
 	"socks5://",
+}
+
+// NormalizeProxyURIInput converts bare residential inputs such as
+// user:pass@host:port into explicit proxy URIs.
+func NormalizeProxyURIInput(value string, defaultScheme string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	if strings.Contains(trimmed, "://") {
+		return trimmed
+	}
+	if !isBareProxyInput(trimmed) {
+		return trimmed
+	}
+	scheme := strings.TrimSpace(defaultScheme)
+	if scheme == "" {
+		scheme = "http"
+	}
+	return fmt.Sprintf("%s://%s", scheme, trimmed)
+}
+
+func isBareProxyInput(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return false
+	}
+	if strings.Contains(trimmed, "://") || strings.ContainsAny(trimmed, "/?#") {
+		return false
+	}
+	hostPort := trimmed
+	if at := strings.LastIndex(hostPort, "@"); at >= 0 && at < len(hostPort)-1 {
+		hostPort = hostPort[at+1:]
+	}
+	host, port, err := net.SplitHostPort(hostPort)
+	return err == nil && host != "" && port != ""
 }
 
 // NormalizeInboundProtocol normalizes inbound protocol aliases and validates the value.
@@ -302,6 +352,15 @@ func (c *Config) applyDefaults() error {
 	if c.SubscriptionRefresh.MinAvailableNodes <= 0 {
 		c.SubscriptionRefresh.MinAvailableNodes = 1
 	}
+	if c.SourceSync.RefreshInterval <= 0 {
+		c.SourceSync.RefreshInterval = 5 * time.Minute
+	}
+	if c.SourceSync.RequestTimeout <= 0 {
+		c.SourceSync.RequestTimeout = 15 * time.Second
+	}
+	if strings.TrimSpace(c.SourceSync.DefaultDirectProxyScheme) == "" {
+		c.SourceSync.DefaultDirectProxyScheme = "http"
+	}
 
 	if c.LogLevel == "" {
 		c.LogLevel = "info"
@@ -373,7 +432,7 @@ func (c *Config) normalizeInternal(skipSubscriptionFetch bool) error {
 	portCursor := c.MultiPort.BasePort
 	for idx := range c.Nodes {
 		c.Nodes[idx].Name = strings.TrimSpace(c.Nodes[idx].Name)
-		c.Nodes[idx].URI = strings.TrimSpace(c.Nodes[idx].URI)
+		c.Nodes[idx].URI = NormalizeProxyURIInput(strings.TrimSpace(c.Nodes[idx].URI), c.SourceSync.DefaultDirectProxyScheme)
 
 		if c.Nodes[idx].URI == "" {
 			return fmt.Errorf("node %d is missing uri", idx)
@@ -487,7 +546,7 @@ func (c *Config) NormalizeWithPortMap(portMap map[string]uint16) error {
 	// First pass: assign ports from portMap for existing nodes, and track all pre-existing ports
 	for idx := range c.Nodes {
 		c.Nodes[idx].Name = strings.TrimSpace(c.Nodes[idx].Name)
-		c.Nodes[idx].URI = strings.TrimSpace(c.Nodes[idx].URI)
+		c.Nodes[idx].URI = NormalizeProxyURIInput(strings.TrimSpace(c.Nodes[idx].URI), c.SourceSync.DefaultDirectProxyScheme)
 		if c.Nodes[idx].URI == "" {
 			return fmt.Errorf("node %d is missing uri", idx)
 		}
@@ -655,9 +714,10 @@ func parseNodesFromContent(content string) ([]NodeConfig, error) {
 		}
 
 		// Check if it's a valid proxy URI
-		if IsProxyURI(line) {
+		normalizedLine := NormalizeProxyURIInput(line, "http")
+		if IsProxyURI(normalizedLine) {
 			nodes = append(nodes, NodeConfig{
-				URI: line,
+				URI: normalizedLine,
 			})
 		}
 	}
@@ -697,7 +757,7 @@ func isBase64(s string) bool {
 
 // IsProxyURI checks if a string is a valid proxy URI
 func IsProxyURI(s string) bool {
-	lower := strings.ToLower(strings.TrimSpace(s))
+	lower := strings.ToLower(strings.TrimSpace(NormalizeProxyURIInput(s, "http")))
 	for _, scheme := range supportedProxyURISchemes {
 		if strings.HasPrefix(lower, scheme) {
 			return true
@@ -994,6 +1054,10 @@ func (c *Config) Clone() *Config {
 		cloned.Subscriptions = make([]string, len(c.Subscriptions))
 		copy(cloned.Subscriptions, c.Subscriptions)
 	}
+	if c.SourceSync.FallbackSubscriptions != nil {
+		cloned.SourceSync.FallbackSubscriptions = make([]string, len(c.SourceSync.FallbackSubscriptions))
+		copy(cloned.SourceSync.FallbackSubscriptions, c.SourceSync.FallbackSubscriptions)
+	}
 	return &cloned
 }
 
@@ -1060,6 +1124,9 @@ func (c *Config) SaveSettings() error {
 	// Subscription refresh
 	saveCfg.SubscriptionRefresh = c.SubscriptionRefresh
 
+	// Source sync
+	saveCfg.SourceSync = c.SourceSync
+
 	// GeoIP
 	saveCfg.GeoIP = c.GeoIP
 
@@ -1084,6 +1151,7 @@ func ValidateSettingsRequest(mode string, listenerPort, multiPortBasePort uint16
 	listenerProtocol, multiPortProtocol,
 	poolBlacklistDuration, subRefreshInterval, subRefreshTimeout,
 	subRefreshHealthCheckTimeout, subRefreshDrainTimeout,
+	sourceSyncRefreshInterval, sourceSyncRequestTimeout,
 	geoIPAutoUpdateInterval, managementHealthCheckInterval string) error {
 
 	// Validate mode
@@ -1119,6 +1187,8 @@ func ValidateSettingsRequest(mode string, listenerPort, multiPortBasePort uint16
 		{"订阅获取超时", subRefreshTimeout},
 		{"健康检查超时", subRefreshHealthCheckTimeout},
 		{"排空超时", subRefreshDrainTimeout},
+		{"Source Sync 刷新间隔", sourceSyncRefreshInterval},
+		{"Source Sync 请求超时", sourceSyncRequestTimeout},
 		{"GeoIP 更新间隔", geoIPAutoUpdateInterval},
 		{"周期健康检查间隔", managementHealthCheckInterval},
 	}
