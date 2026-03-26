@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -592,19 +593,67 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(data)
 }
 
+func isTruthyQueryValue(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func isEffectiveSnapshot(snap Snapshot) bool {
+	return snap.InitialCheckDone && snap.Available && !snap.Blacklisted
+}
+
+func filterEffectiveSnapshots(nodes []Snapshot) []Snapshot {
+	filtered := make([]Snapshot, 0, len(nodes))
+	for _, snap := range nodes {
+		if isEffectiveSnapshot(snap) {
+			filtered = append(filtered, snap)
+		}
+	}
+	return filtered
+}
+
+func preferEffectiveSnapshots(nodes []Snapshot) []Snapshot {
+	reordered := append([]Snapshot(nil), nodes...)
+	sort.SliceStable(reordered, func(i, j int) bool {
+		leftEffective := isEffectiveSnapshot(reordered[i])
+		rightEffective := isEffectiveSnapshot(reordered[j])
+		if leftEffective == rightEffective {
+			return false
+		}
+		return leftEffective && !rightEffective
+	})
+	return reordered
+}
+
 func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	// 返回所有注册节点，让前端根据状态过滤展示
+
 	allNodes := s.mgr.Snapshot()
-	totalNodes := len(allNodes)
+	availableNodes := filterEffectiveSnapshots(allNodes)
+	onlyAvailable := isTruthyQueryValue(r.URL.Query().Get("only_available")) ||
+		isTruthyQueryValue(r.URL.Query().Get("available_only"))
+	preferAvailable := onlyAvailable || isTruthyQueryValue(r.URL.Query().Get("prefer_available"))
+
+	nodes := allNodes
+	if onlyAvailable {
+		nodes = availableNodes
+	} else if preferAvailable {
+		nodes = preferEffectiveSnapshots(allNodes)
+	}
+
+	totalNodes := len(nodes)
 
 	// Calculate region statistics and traffic totals
 	regionStats := make(map[string]int)
 	regionHealthy := make(map[string]int)
-	for _, snap := range allNodes {
+	for _, snap := range nodes {
 		region := snap.Region
 		if region == "" {
 			region = "other"
@@ -619,8 +668,10 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	traffic := s.mgr.TrafficSummary(false)
 
 	payload := map[string]any{
-		"nodes":           allNodes,
+		"nodes":           nodes,
 		"total_nodes":     totalNodes,
+		"all_total_nodes": len(allNodes),
+		"available_nodes": len(availableNodes),
 		"total_upload":    traffic.TotalUpload,
 		"total_download":  traffic.TotalDownload,
 		"upload_speed":    traffic.UploadSpeed,
@@ -628,6 +679,8 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		"traffic_sampled": traffic.SampledAt,
 		"region_stats":    regionStats,
 		"region_healthy":  regionHealthy,
+		"only_available":  onlyAvailable,
+		"prefer_available": preferAvailable,
 	}
 	writeJSON(w, payload)
 }
