@@ -100,6 +100,7 @@ type Server struct {
 	nodeMgr      NodeManager
 	connectorMgr ConnectorManager
 	sourceSync   SourceSyncReporter
+	proxyCompat  *proxyCompatState
 }
 
 // NewServer constructs a server; it can be nil when disabled.
@@ -118,13 +119,14 @@ func NewServer(cfg Config, mgr *Manager, logger *log.Logger) *Server {
 	}
 
 	s := &Server{
-		cfg:        cfg,
-		mgr:        mgr,
-		logger:     logger,
-		sessions:   make(map[string]*Session),
-		sessionTTL: 24 * time.Hour,
-		probeSem:   semaphore.NewWeighted(maxConcurrentProbes),
-		done:       make(chan struct{}),
+		cfg:         cfg,
+		mgr:         mgr,
+		logger:      logger,
+		sessions:    make(map[string]*Session),
+		sessionTTL:  24 * time.Hour,
+		probeSem:    semaphore.NewWeighted(maxConcurrentProbes),
+		done:        make(chan struct{}),
+		proxyCompat: newProxyCompatState(),
 	}
 
 	// Start session cleanup goroutine
@@ -156,6 +158,13 @@ func NewServer(cfg Config, mgr *Manager, logger *log.Logger) *Server {
 	mux.HandleFunc("/api/subscription/refresh", s.withAuth(s.handleSubscriptionRefresh))
 	mux.HandleFunc("/api/source-sync/status", s.withAuth(s.handleSourceSyncStatus))
 	mux.HandleFunc("/api/reload", s.withAuth(s.handleReload))
+	mux.HandleFunc("/proxy/catalog", s.withAuth(s.handleProxyCatalog))
+	mux.HandleFunc("/proxy/snapshot", s.withAuth(s.handleProxySnapshot))
+	mux.HandleFunc("/proxy/leases/plan", s.withAuth(s.handleProxyPlanCheckout))
+	mux.HandleFunc("/proxy/leases/checkout", s.withAuth(s.handleProxyCheckout))
+	mux.HandleFunc("/proxy/leases/report", s.withAuth(s.handleProxyReportUsage))
+	mux.HandleFunc("/proxy/leases/", s.withAuth(s.handleProxyLeaseItem))
+	mux.HandleFunc("/proxy/maintenance/run", s.withAuth(s.handleProxyMaintenanceRun))
 
 	// Default handler for static assets (React App)
 	mux.HandleFunc("/", s.handleIndex)

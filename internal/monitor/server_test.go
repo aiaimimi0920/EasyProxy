@@ -1,11 +1,14 @@
 package monitor
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"easy_proxies/internal/config"
 )
 
 func TestWithAuthAllowsDirectManagementPassword(t *testing.T) {
@@ -211,4 +214,172 @@ func TestHandleNodesPreferAvailableOrdering(t *testing.T) {
 	}
 
 	_ = unchecked
+}
+
+func TestProxyCompatCheckoutLifecycle(t *testing.T) {
+	mgr, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+
+	healthy := mgr.Register(NodeInfo{
+		Tag:           "preferred-node",
+		Name:          "Preferred Node",
+		ListenAddress: "127.0.0.1",
+		Port:          34001,
+		Region:        "jp",
+		Country:       "Japan",
+	})
+	healthy.MarkInitialCheckDone(true)
+
+	unhealthy := mgr.Register(NodeInfo{
+		Tag:  "unhealthy-node",
+		Name: "Unhealthy Node",
+		Port: 34002,
+	})
+	unhealthy.MarkInitialCheckDone(false)
+
+	s := &Server{
+		cfg:         Config{ProxyUsername: "node-user", ProxyPassword: "node-pass"},
+		mgr:         mgr,
+		sessions:    map[string]*Session{},
+		proxyCompat: newProxyCompatState(),
+	}
+
+	cfg := &config.Config{}
+	cfg.Listener.Port = 2323
+	cfg.Listener.Protocol = "http"
+	cfg.Management.Listen = "0.0.0.0:9888"
+	cfg.MultiPort.Protocol = "http"
+	cfg.MultiPort.Username = "node-user"
+	cfg.MultiPort.Password = "node-pass"
+	cfg.Mode = "hybrid"
+	s.SetConfig(cfg)
+
+	checkoutReq := proxyCompatCheckoutRequest{
+		HostID:        "register-service",
+		ProvisionMode: "reuse-only",
+		BindingMode:   "shared-instance",
+	}
+	checkoutBody, err := json.Marshal(checkoutReq)
+	if err != nil {
+		t.Fatalf("Marshal checkout request failed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/proxy/leases/checkout", bytes.NewReader(checkoutBody))
+	req.Host = "easy-proxies-service:9888"
+	rec := httptest.NewRecorder()
+	s.handleProxyCheckout(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected checkout status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+
+	var checkoutResp struct {
+		Result proxyCompatCheckoutResult `json:"result"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &checkoutResp); err != nil {
+		t.Fatalf("failed to decode checkout response: %v", err)
+	}
+
+	if checkoutResp.Result.Lease.ID == "" {
+		t.Fatal("expected lease id to be populated")
+	}
+	if checkoutResp.Result.Lease.ProviderTypeKey != "easy-proxies" {
+		t.Fatalf("unexpected provider type: %s", checkoutResp.Result.Lease.ProviderTypeKey)
+	}
+	if checkoutResp.Result.Lease.ProxyURL != "http://node-user:node-pass@easy-proxies-service:34001" {
+		t.Fatalf("unexpected proxy url: %s", checkoutResp.Result.Lease.ProxyURL)
+	}
+	if checkoutResp.Result.Lease.Metadata["selectedNodeTag"] != "preferred-node" {
+		t.Fatalf("unexpected selected node tag: %+v", checkoutResp.Result.Lease.Metadata)
+	}
+
+	reportReq := proxyCompatUsageReport{
+		LeaseID:   checkoutResp.Result.Lease.ID,
+		Success:   true,
+		LatencyMs: 123,
+	}
+	reportBody, err := json.Marshal(reportReq)
+	if err != nil {
+		t.Fatalf("Marshal report request failed: %v", err)
+	}
+
+	reportRecorder := httptest.NewRecorder()
+	s.handleProxyReportUsage(reportRecorder, httptest.NewRequest(http.MethodPost, "/proxy/leases/report", bytes.NewReader(reportBody)))
+	if reportRecorder.Code != http.StatusOK {
+		t.Fatalf("expected report status %d, got %d: %s", http.StatusOK, reportRecorder.Code, reportRecorder.Body.String())
+	}
+
+	readRecorder := httptest.NewRecorder()
+	readReq := httptest.NewRequest(http.MethodGet, "/proxy/leases/"+checkoutResp.Result.Lease.ID, nil)
+	s.handleProxyLeaseItem(readRecorder, readReq)
+	if readRecorder.Code != http.StatusOK {
+		t.Fatalf("expected read status %d, got %d: %s", http.StatusOK, readRecorder.Code, readRecorder.Body.String())
+	}
+
+	var readResp struct {
+		Lease proxyCompatLease `json:"lease"`
+	}
+	if err := json.Unmarshal(readRecorder.Body.Bytes(), &readResp); err != nil {
+		t.Fatalf("failed to decode read response: %v", err)
+	}
+	if readResp.Lease.Status != "active" {
+		t.Fatalf("expected active lease, got %s", readResp.Lease.Status)
+	}
+
+	releaseRecorder := httptest.NewRecorder()
+	releaseReq := httptest.NewRequest(http.MethodPost, "/proxy/leases/"+checkoutResp.Result.Lease.ID+"/release", nil)
+	s.handleProxyLeaseItem(releaseRecorder, releaseReq)
+	if releaseRecorder.Code != http.StatusOK {
+		t.Fatalf("expected release status %d, got %d: %s", http.StatusOK, releaseRecorder.Code, releaseRecorder.Body.String())
+	}
+
+	postReleaseRecorder := httptest.NewRecorder()
+	postReleaseReq := httptest.NewRequest(http.MethodGet, "/proxy/leases/"+checkoutResp.Result.Lease.ID, nil)
+	s.handleProxyLeaseItem(postReleaseRecorder, postReleaseReq)
+
+	var postReleaseResp struct {
+		Lease proxyCompatLease `json:"lease"`
+	}
+	if err := json.Unmarshal(postReleaseRecorder.Body.Bytes(), &postReleaseResp); err != nil {
+		t.Fatalf("failed to decode released lease: %v", err)
+	}
+	if postReleaseResp.Lease.Status != "released" {
+		t.Fatalf("expected released lease, got %s", postReleaseResp.Lease.Status)
+	}
+}
+
+func TestProxyCompatRejectsUnsupportedProviderType(t *testing.T) {
+	mgr, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+
+	node := mgr.Register(NodeInfo{Tag: "healthy", Name: "Healthy Node", Port: 34001})
+	node.MarkInitialCheckDone(true)
+
+	s := &Server{
+		mgr:         mgr,
+		sessions:    map[string]*Session{},
+		proxyCompat: newProxyCompatState(),
+	}
+
+	body, err := json.Marshal(proxyCompatCheckoutRequest{
+		HostID:          "register-service",
+		ProviderTypeKey: "official",
+		ProvisionMode:   "reuse-only",
+		BindingMode:     "shared-instance",
+	})
+	if err != nil {
+		t.Fatalf("Marshal request failed: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/proxy/leases/checkout", bytes.NewReader(body))
+	s.handleProxyCheckout(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusServiceUnavailable, rec.Code, rec.Body.String())
+	}
 }
