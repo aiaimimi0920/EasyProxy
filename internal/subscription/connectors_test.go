@@ -352,3 +352,57 @@ func TestBuildActiveSourceSnapshotPreservesDistinctConnectorVariants(t *testing.
 		t.Fatalf("unexpected ephemeral proxy source count: %d", len(snapshot.EphemeralProxySources))
 	}
 }
+
+func TestBuildActiveSourceSnapshotIncludesLocalConnectorRuntimeSources(t *testing.T) {
+	fakeRuntime := &fakeConnectorRuntime{
+		returned: []RuntimeSource{
+			{
+				ID:     "local-ech-runtime",
+				Kind:   SourceKindProxyURI,
+				Name:   "Local ECH Runtime",
+				Input:  "socks5://127.0.0.1:30010",
+				Origin: "local",
+			},
+		},
+	}
+
+	cfg := &config.Config{
+		Connectors: []config.ConnectorSourceConfig{
+			{
+				Name:          "Local ECH Template",
+				Input:         "https://ech.example.com",
+				Enabled:       true,
+				ConnectorType: connectorTypeECHWorker,
+				ConnectorConfig: map[string]any{
+					"access_token":   "ech-token",
+					"local_protocol": "socks5",
+				},
+			},
+		},
+		SourceSync: config.SourceSyncConfig{
+			DefaultDirectProxyScheme: "http",
+		},
+	}
+
+	manager := New(cfg, nil, WithConnectorRuntime(fakeRuntime))
+	snapshot, err := manager.buildActiveSourceSnapshot()
+	if err != nil {
+		t.Fatalf("buildActiveSourceSnapshot() error = %v", err)
+	}
+
+	if snapshot.LocalSourceCount != 1 {
+		t.Fatalf("unexpected local source count: %d", snapshot.LocalSourceCount)
+	}
+	if snapshot.ConnectorSourceCount != 1 {
+		t.Fatalf("unexpected connector source count: %d", snapshot.ConnectorSourceCount)
+	}
+	if snapshot.ConnectorInstanceCount != 1 {
+		t.Fatalf("unexpected connector instance count: %d", snapshot.ConnectorInstanceCount)
+	}
+	if len(snapshot.EphemeralProxySources) != 1 {
+		t.Fatalf("unexpected ephemeral proxy source count: %d", len(snapshot.EphemeralProxySources))
+	}
+	if len(fakeRuntime.got) != 1 || fakeRuntime.got[0].Kind != SourceKindConnector {
+		t.Fatalf("connector runtime got unexpected local sources: %#v", fakeRuntime.got)
+	}
+}

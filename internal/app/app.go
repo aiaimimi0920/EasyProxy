@@ -66,7 +66,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	subMgr := subscription.New(cfg, nil, subscription.WithStore(dataStore))
 	defer subMgr.Stop()
 
-	if shouldBootstrapSourceSync(cfg) {
+	if shouldBootstrapRuntimeSources(cfg) {
 		if err := subMgr.BootstrapRuntimeNodes(); err != nil {
 			return fmt.Errorf("bootstrap source sync runtime nodes: %w", err)
 		}
@@ -99,6 +99,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	if server := boxMgr.MonitorServer(); server != nil {
 		server.SetSubscriptionRefresher(subMgr)
 		server.SetSourceSyncReporter(subMgr)
+		server.SetConnectorManager(subMgr)
 	}
 
 	// ── 7. Start periodic stats flush ──
@@ -247,17 +248,29 @@ func seedStoreFromConfig(ctx context.Context, cfg *config.Config, s store.Store)
 	return nil
 }
 
-func shouldBootstrapSourceSync(cfg *config.Config) bool {
+func shouldBootstrapRuntimeSources(cfg *config.Config) bool {
 	if cfg == nil {
 		return false
 	}
 	if len(cfg.Nodes) > 0 {
 		return false
 	}
+	if hasEnabledBootstrapConnectors(cfg.Connectors) {
+		return true
+	}
 	if !cfg.SourceSync.Enabled {
 		return false
 	}
 	return strings.TrimSpace(cfg.SourceSync.ManifestURL) != "" || len(cfg.SourceSync.FallbackSubscriptions) > 0
+}
+
+func hasEnabledBootstrapConnectors(connectors []config.ConnectorSourceConfig) bool {
+	for _, connector := range connectors {
+		if connector.Enabled && !connector.TemplateOnly && strings.TrimSpace(connector.Input) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func filterEphemeralNodes(nodes []config.NodeConfig) []config.NodeConfig {

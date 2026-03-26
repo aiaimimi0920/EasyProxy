@@ -234,6 +234,7 @@ func (m *Manager) Stop() {
 func (m *Manager) RefreshNow() error {
 	m.mu.RLock()
 	hasRefreshSources := len(m.baseCfg.Subscriptions) > 0 ||
+		hasEnabledLocalConnectors(m.baseCfg.Connectors) ||
 		(m.baseCfg.SourceSync.Enabled && (strings.TrimSpace(m.baseCfg.SourceSync.ManifestURL) != "" || len(m.baseCfg.SourceSync.FallbackSubscriptions) > 0))
 	timeout := m.baseCfg.SubscriptionRefresh.Timeout
 	healthCheckTimeout := m.baseCfg.SubscriptionRefresh.HealthCheckTimeout
@@ -286,7 +287,7 @@ func (m *Manager) Status() monitor.SubscriptionStatus {
 	m.mu.RLock()
 	status := m.status
 	status.Enabled = m.isEnabledLocked()
-	status.HasSubscriptions = len(m.baseCfg.Subscriptions) > 0 || m.baseCfg.SourceSync.Enabled || len(m.baseCfg.SourceSync.FallbackSubscriptions) > 0
+	status.HasSubscriptions = len(m.baseCfg.Subscriptions) > 0 || hasEnabledLocalConnectors(m.baseCfg.Connectors) || m.baseCfg.SourceSync.Enabled || len(m.baseCfg.SourceSync.FallbackSubscriptions) > 0
 	m.mu.RUnlock()
 
 	// Check if nodes have been modified since last refresh
@@ -384,9 +385,10 @@ func (m *Manager) isEnabled() bool {
 // isEnabledLocked checks if auto-refresh should run (caller must hold mu).
 func (m *Manager) isEnabledLocked() bool {
 	localSubscriptionsEnabled := m.baseCfg.SubscriptionRefresh.Enabled && len(m.baseCfg.Subscriptions) > 0
+	localConnectorsEnabled := hasEnabledLocalConnectors(m.baseCfg.Connectors)
 	sourceSyncEnabled := m.baseCfg.SourceSync.Enabled &&
 		(strings.TrimSpace(m.baseCfg.SourceSync.ManifestURL) != "" || len(m.baseCfg.SourceSync.FallbackSubscriptions) > 0)
-	return localSubscriptionsEnabled || sourceSyncEnabled
+	return localSubscriptionsEnabled || localConnectorsEnabled || sourceSyncEnabled
 }
 
 // currentInterval returns the configured refresh interval (acquires read lock).
@@ -540,9 +542,29 @@ func (m *Manager) buildActiveSourceSnapshot() (activeSourceSnapshot, error) {
 	localSources := m.buildLocalSources(cfg)
 	snapshot.LocalSourceCount = len(localSources)
 
+	var localSubscriptionSources []RuntimeSource
+	var localProxySources []RuntimeSource
+	var localConnectorSources []RuntimeSource
+	for _, source := range localSources {
+		switch source.Kind {
+		case SourceKindSubscription:
+			localSubscriptionSources = append(localSubscriptionSources, source)
+		case SourceKindProxyURI:
+			localProxySources = append(localProxySources, source)
+		case SourceKindConnector:
+			localConnectorSources = append(localConnectorSources, source)
+		}
+	}
+
 	if !cfg.SourceSync.Enabled || strings.TrimSpace(cfg.SourceSync.ManifestURL) == "" {
-		m.reconcileConnectorSources(cfg, nil)
-		snapshot.SubscriptionSources = dedupeSourcesWithPrecedence(localSources)
+		connectorProxySources, connectorErr := m.reconcileConnectorSources(cfg, localConnectorSources)
+		if connectorErr != nil {
+			m.logger.Warnf("connector reconcile failed: %v", connectorErr)
+		}
+		snapshot.SubscriptionSources = dedupeSourcesWithPrecedence(localSubscriptionSources)
+		snapshot.EphemeralProxySources = dedupeSourcesWithPrecedence(connectorProxySources)
+		snapshot.ConnectorSourceCount = len(localConnectorSources)
+		snapshot.ConnectorInstanceCount = len(connectorProxySources)
 		m.mu.Lock()
 		m.sourceSyncStatus.Enabled = cfg.SourceSync.Enabled
 		m.sourceSyncStatus.ManifestURL = strings.TrimSpace(cfg.SourceSync.ManifestURL)
@@ -551,8 +573,8 @@ func (m *Manager) buildActiveSourceSnapshot() (activeSourceSnapshot, error) {
 		m.sourceSyncStatus.LocalSourceCount = snapshot.LocalSourceCount
 		m.sourceSyncStatus.ManifestSourceCount = 0
 		m.sourceSyncStatus.FallbackSourceCount = 0
-		m.sourceSyncStatus.ConnectorSourceCount = 0
-		m.sourceSyncStatus.ConnectorInstanceCount = 0
+		m.sourceSyncStatus.ConnectorSourceCount = snapshot.ConnectorSourceCount
+		m.sourceSyncStatus.ConnectorInstanceCount = snapshot.ConnectorInstanceCount
 		m.sourceSyncStatus.FallbackActive = false
 		m.mu.Unlock()
 		return snapshot, nil
@@ -560,19 +582,10 @@ func (m *Manager) buildActiveSourceSnapshot() (activeSourceSnapshot, error) {
 
 	manifestSources, err := m.fetchManifestSources(cfg)
 	if err == nil {
-		var localSubscriptionSources []RuntimeSource
-		var localProxySources []RuntimeSource
 		var manifestSubscriptionSources []RuntimeSource
 		var manifestProxySources []RuntimeSource
 		var manifestConnectorSources []RuntimeSource
 
-		for _, source := range localSources {
-			if source.Kind == SourceKindSubscription {
-				localSubscriptionSources = append(localSubscriptionSources, source)
-			} else if source.Kind == SourceKindProxyURI {
-				localProxySources = append(localProxySources, source)
-			}
-		}
 		for _, source := range manifestSources {
 			switch source.Kind {
 			case SourceKindSubscription:
@@ -583,9 +596,10 @@ func (m *Manager) buildActiveSourceSnapshot() (activeSourceSnapshot, error) {
 				manifestConnectorSources = append(manifestConnectorSources, source)
 			}
 		}
-		snapshot.ConnectorSourceCount = len(manifestConnectorSources)
+		activeConnectorSources := dedupeSourcesWithPrecedence(localConnectorSources, manifestConnectorSources)
+		snapshot.ConnectorSourceCount = len(activeConnectorSources)
 
-		connectorProxySources, connectorErr := m.reconcileConnectorSources(cfg, manifestConnectorSources)
+		connectorProxySources, connectorErr := m.reconcileConnectorSources(cfg, activeConnectorSources)
 		if connectorErr != nil {
 			m.logger.Warnf("connector reconcile failed: %v", connectorErr)
 		}
@@ -621,7 +635,10 @@ func (m *Manager) buildActiveSourceSnapshot() (activeSourceSnapshot, error) {
 		return snapshot, nil
 	}
 
-	m.reconcileConnectorSources(cfg, nil)
+	connectorProxySources, connectorErr := m.reconcileConnectorSources(cfg, localConnectorSources)
+	if connectorErr != nil {
+		m.logger.Warnf("connector reconcile failed: %v", connectorErr)
+	}
 	fallbackSources := make([]RuntimeSource, 0, len(cfg.SourceSync.FallbackSubscriptions))
 	for idx, subURL := range cfg.SourceSync.FallbackSubscriptions {
 		normalized := normalizeRuntimeSource(RuntimeSource{
@@ -637,16 +654,12 @@ func (m *Manager) buildActiveSourceSnapshot() (activeSourceSnapshot, error) {
 		fallbackSources = append(fallbackSources, normalized)
 	}
 
-	var localSubscriptionSources []RuntimeSource
-	for _, source := range localSources {
-		if source.Kind == SourceKindSubscription {
-			localSubscriptionSources = append(localSubscriptionSources, source)
-		}
-	}
-
 	snapshot.SubscriptionSources = dedupeSourcesWithPrecedence(localSubscriptionSources, fallbackSources)
+	snapshot.EphemeralProxySources = dedupeSourcesWithPrecedence(connectorProxySources)
 	snapshot.FallbackActive = len(fallbackSources) > 0
 	snapshot.FallbackSourceCount = len(fallbackSources)
+	snapshot.ConnectorSourceCount = len(localConnectorSources)
+	snapshot.ConnectorInstanceCount = len(connectorProxySources)
 
 	m.mu.Lock()
 	m.sourceSyncStatus.Enabled = true
@@ -658,8 +671,8 @@ func (m *Manager) buildActiveSourceSnapshot() (activeSourceSnapshot, error) {
 	m.sourceSyncStatus.LocalSourceCount = snapshot.LocalSourceCount
 	m.sourceSyncStatus.ManifestSourceCount = 0
 	m.sourceSyncStatus.FallbackSourceCount = snapshot.FallbackSourceCount
-	m.sourceSyncStatus.ConnectorSourceCount = 0
-	m.sourceSyncStatus.ConnectorInstanceCount = 0
+	m.sourceSyncStatus.ConnectorSourceCount = snapshot.ConnectorSourceCount
+	m.sourceSyncStatus.ConnectorInstanceCount = snapshot.ConnectorInstanceCount
 	m.mu.Unlock()
 
 	if len(snapshot.SubscriptionSources) == 0 && snapshot.LocalSourceCount == 0 {
@@ -707,6 +720,27 @@ func (m *Manager) buildLocalSources(cfg *config.Config) []RuntimeSource {
 			}
 			sources = append(sources, normalized)
 		}
+	}
+
+	for idx, connector := range cfg.Connectors {
+		if !connector.Enabled || connector.TemplateOnly {
+			continue
+		}
+		normalized := normalizeRuntimeSource(RuntimeSource{
+			ID:     fmt.Sprintf("local-connector-%d", idx+1),
+			Kind:   SourceKindConnector,
+			Name:   connector.Name,
+			Input:  connector.Input,
+			Origin: "local",
+			Options: map[string]any{
+				"connector_type":   strings.TrimSpace(connector.ConnectorType),
+				"connector_config": cloneConnectorOptions(connector.ConnectorConfig),
+			},
+		}, cfg.SourceSync.DefaultDirectProxyScheme)
+		if strings.TrimSpace(normalized.Input) == "" {
+			continue
+		}
+		sources = append(sources, normalized)
 	}
 
 	return dedupeSourcesWithPrecedence(sources)
@@ -829,6 +863,34 @@ func mapSourceOriginToNodeSource(origin string) config.NodeSource {
 	default:
 		return config.NodeSourceSubscription
 	}
+}
+
+func hasEnabledLocalConnectors(connectors []config.ConnectorSourceConfig) bool {
+	for _, connector := range connectors {
+		if connector.Enabled && !connector.TemplateOnly && strings.TrimSpace(connector.Input) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func cloneConnectorOptions(input map[string]any) map[string]any {
+	if len(input) == 0 {
+		return map[string]any{}
+	}
+	cloned := make(map[string]any, len(input))
+	for key, value := range input {
+		if nested, ok := value.(map[string]any); ok {
+			child := make(map[string]any, len(nested))
+			for childKey, childValue := range nested {
+				child[childKey] = childValue
+			}
+			cloned[key] = child
+			continue
+		}
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func (m *Manager) currentFetchTimeout() time.Duration {

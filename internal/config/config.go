@@ -32,6 +32,7 @@ type Config struct {
 	SourceSync          SourceSyncConfig          `yaml:"source_sync"`
 	GeoIP               GeoIPConfig               `yaml:"geoip"`
 	Nodes               []NodeConfig              `yaml:"nodes"`
+	Connectors          []ConnectorSourceConfig   `yaml:"connectors"`
 	NodesFile           string                    `yaml:"nodes_file"`    // 节点文件路径，每行一个 URI
 	Subscriptions       []string                  `yaml:"subscriptions"` // 订阅链接列表
 	ExternalIP          string                    `yaml:"external_ip"`   // 外部 IP 地址，用于导出时替换 0.0.0.0
@@ -110,12 +111,22 @@ type SourceSyncConfig struct {
 
 // ConnectorRuntimeConfig controls local execution of manifest connectors such as ech-workers.
 type ConnectorRuntimeConfig struct {
-	Enabled          *bool         `yaml:"enabled"`
+	Enabled          *bool                      `yaml:"enabled"`
+	BinaryPath       string                     `yaml:"binary_path"`
+	WorkingDirectory string                     `yaml:"working_directory"`
+	ListenHost       string                     `yaml:"listen_host"`
+	ListenStartPort  uint16                     `yaml:"listen_start_port"`
+	StartupTimeout   time.Duration              `yaml:"startup_timeout"`
+	PreferredIP      PreferredIPGeneratorConfig `yaml:"preferred_ip"`
+}
+
+// PreferredIPGeneratorConfig controls optional local generation of preferred
+// Cloudflare entry IPs for connector templates.
+type PreferredIPGeneratorConfig struct {
 	BinaryPath       string        `yaml:"binary_path"`
+	IPFilePath       string        `yaml:"ip_file_path"`
 	WorkingDirectory string        `yaml:"working_directory"`
-	ListenHost       string        `yaml:"listen_host"`
-	ListenStartPort  uint16        `yaml:"listen_start_port"`
-	StartupTimeout   time.Duration `yaml:"startup_timeout"`
+	Timeout          time.Duration `yaml:"timeout"`
 }
 
 // NodeSource indicates where a node configuration originated from.
@@ -216,6 +227,18 @@ type NodeConfig struct {
 // This is used to preserve port assignments across reloads.
 func (n *NodeConfig) NodeKey() string {
 	return n.URI
+}
+
+// ConnectorSourceConfig describes a locally managed connector source.
+type ConnectorSourceConfig struct {
+	Name            string         `yaml:"name" json:"name"`
+	Input           string         `yaml:"input" json:"input"`
+	Enabled         bool           `yaml:"enabled" json:"enabled"`
+	TemplateOnly    bool           `yaml:"template_only,omitempty" json:"template_only,omitempty"`
+	Group           string         `yaml:"group,omitempty" json:"group,omitempty"`
+	Notes           string         `yaml:"notes,omitempty" json:"notes,omitempty"`
+	ConnectorType   string         `yaml:"connector_type" json:"connector_type"`
+	ConnectorConfig map[string]any `yaml:"connector_config,omitempty" json:"connector_config,omitempty"`
 }
 
 // Load reads YAML config from disk and applies defaults/validation.
@@ -384,6 +407,22 @@ func (c *Config) applyDefaults() error {
 	}
 	if c.SourceSync.ConnectorRuntime.StartupTimeout <= 0 {
 		c.SourceSync.ConnectorRuntime.StartupTimeout = 10 * time.Second
+	}
+	if strings.TrimSpace(c.SourceSync.ConnectorRuntime.PreferredIP.BinaryPath) == "" {
+		c.SourceSync.ConnectorRuntime.PreferredIP.BinaryPath = "cfst"
+	}
+	if c.SourceSync.ConnectorRuntime.PreferredIP.Timeout <= 0 {
+		c.SourceSync.ConnectorRuntime.PreferredIP.Timeout = 5 * time.Minute
+	}
+	if strings.TrimSpace(c.SourceSync.ConnectorRuntime.PreferredIP.WorkingDirectory) == "" {
+		baseDir := "."
+		if strings.TrimSpace(c.filePath) != "" {
+			baseDir = filepath.Dir(c.filePath)
+		}
+		c.SourceSync.ConnectorRuntime.PreferredIP.WorkingDirectory = filepath.Join(baseDir, "data", "connectors", "preferred-ip")
+	}
+	if strings.TrimSpace(c.SourceSync.ConnectorRuntime.PreferredIP.IPFilePath) == "" {
+		c.SourceSync.ConnectorRuntime.PreferredIP.IPFilePath = "/usr/local/share/cfst/ip.txt"
 	}
 
 	if c.LogLevel == "" {
@@ -1082,6 +1121,18 @@ func (c *Config) Clone() *Config {
 		cloned.Nodes = make([]NodeConfig, len(c.Nodes))
 		copy(cloned.Nodes, c.Nodes)
 	}
+	if c.Connectors != nil {
+		cloned.Connectors = make([]ConnectorSourceConfig, len(c.Connectors))
+		for idx, connector := range c.Connectors {
+			cloned.Connectors[idx] = connector
+			if connector.ConnectorConfig != nil {
+				cloned.Connectors[idx].ConnectorConfig = make(map[string]any, len(connector.ConnectorConfig))
+				for key, value := range connector.ConnectorConfig {
+					cloned.Connectors[idx].ConnectorConfig[key] = value
+				}
+			}
+		}
+	}
 	if c.Subscriptions != nil {
 		cloned.Subscriptions = make([]string, len(c.Subscriptions))
 		copy(cloned.Subscriptions, c.Subscriptions)
@@ -1161,6 +1212,9 @@ func (c *Config) SaveSettings() error {
 
 	// GeoIP
 	saveCfg.GeoIP = c.GeoIP
+
+	// Connectors
+	saveCfg.Connectors = c.Connectors
 
 	// Subscriptions
 	saveCfg.Subscriptions = c.Subscriptions

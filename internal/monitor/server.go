@@ -98,6 +98,7 @@ type Server struct {
 
 	subRefresher SubscriptionRefresher
 	nodeMgr      NodeManager
+	connectorMgr ConnectorManager
 	sourceSync   SourceSyncReporter
 }
 
@@ -137,6 +138,14 @@ func NewServer(cfg Config, mgr *Manager, logger *log.Logger) *Server {
 	mux.HandleFunc("/api/nodes/config/batch-toggle", s.withAuth(s.handleConfigNodesBatchToggle))
 	mux.HandleFunc("/api/nodes/config/batch-delete", s.withAuth(s.handleConfigNodesBatchDelete))
 	mux.HandleFunc("/api/nodes/config/", s.withAuth(s.handleConfigNodeItem))
+	mux.HandleFunc("/api/connectors/config", s.withAuth(s.handleConfigConnectors))
+	mux.HandleFunc("/api/connectors/config/", s.withAuth(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/preferred-ips/refresh") {
+			s.handleConnectorPreferredIPRefresh(w, r)
+			return
+		}
+		s.handleConfigConnectorItem(w, r)
+	}))
 	mux.HandleFunc("/api/nodes/probe-all", s.withAuth(s.handleProbeAll))
 	mux.HandleFunc("/api/nodes/traffic/stream", s.withAuth(s.handleTrafficStream))
 	mux.HandleFunc("/api/nodes/", s.withAuth(s.handleNodeAction))
@@ -668,18 +677,18 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	traffic := s.mgr.TrafficSummary(false)
 
 	payload := map[string]any{
-		"nodes":           nodes,
-		"total_nodes":     totalNodes,
-		"all_total_nodes": len(allNodes),
-		"available_nodes": len(availableNodes),
-		"total_upload":    traffic.TotalUpload,
-		"total_download":  traffic.TotalDownload,
-		"upload_speed":    traffic.UploadSpeed,
-		"download_speed":  traffic.DownloadSpeed,
-		"traffic_sampled": traffic.SampledAt,
-		"region_stats":    regionStats,
-		"region_healthy":  regionHealthy,
-		"only_available":  onlyAvailable,
+		"nodes":            nodes,
+		"total_nodes":      totalNodes,
+		"all_total_nodes":  len(allNodes),
+		"available_nodes":  len(availableNodes),
+		"total_upload":     traffic.TotalUpload,
+		"total_download":   traffic.TotalDownload,
+		"upload_speed":     traffic.UploadSpeed,
+		"download_speed":   traffic.DownloadSpeed,
+		"traffic_sampled":  traffic.SampledAt,
+		"region_stats":     regionStats,
+		"region_healthy":   regionHealthy,
+		"only_available":   onlyAvailable,
 		"prefer_available": preferAvailable,
 	}
 	writeJSON(w, payload)
