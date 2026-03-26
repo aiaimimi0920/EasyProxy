@@ -69,6 +69,35 @@ func TestBuildECHWorkerConnectorSpec(t *testing.T) {
 	}
 }
 
+func TestSourceKeyKeepsDistinctConnectorConfigs(t *testing.T) {
+	first := RuntimeSource{
+		Kind:  SourceKindConnector,
+		Input: "https://ech.example.com",
+		Options: map[string]any{
+			"connector_type": connectorTypeECHWorker,
+			"connector_config": map[string]any{
+				"access_token": "ech-token",
+				"server_ip":    "198.41.132.114",
+			},
+		},
+	}
+	second := RuntimeSource{
+		Kind:  SourceKindConnector,
+		Input: "https://ech.example.com",
+		Options: map[string]any{
+			"connector_type": connectorTypeECHWorker,
+			"connector_config": map[string]any{
+				"access_token": "ech-token",
+				"server_ip":    "198.41.140.152",
+			},
+		},
+	}
+
+	if sourceKey(first) == sourceKey(second) {
+		t.Fatalf("expected distinct keys for different connector configs")
+	}
+}
+
 func TestBuildActiveSourceSnapshotIncludesConnectorRuntimeSources(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer manifest-token" {
@@ -232,5 +261,94 @@ func TestBootstrapRuntimeNodesMaterializesConnectorSources(t *testing.T) {
 	}
 	if status.ConnectorSourceCount != 1 || status.ConnectorInstanceCount != 1 {
 		t.Fatalf("unexpected connector status: %#v", status)
+	}
+}
+
+func TestBuildActiveSourceSnapshotPreservesDistinctConnectorVariants(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(manifestResponse{
+			Success: true,
+			Sources: []manifestSource{
+				{
+					ID:      "remote-ech-1",
+					Kind:    SourceKindConnector,
+					Name:    "Remote ECH 1",
+					Enabled: true,
+					Input:   "https://ech.example.com",
+					Options: map[string]any{
+						"connector_type": connectorTypeECHWorker,
+						"connector_config": map[string]any{
+							"access_token": "ech-token",
+							"server_ip":    "198.41.132.114",
+						},
+					},
+				},
+				{
+					ID:      "remote-ech-2",
+					Kind:    SourceKindConnector,
+					Name:    "Remote ECH 2",
+					Enabled: true,
+					Input:   "https://ech.example.com",
+					Options: map[string]any{
+						"connector_type": connectorTypeECHWorker,
+						"connector_config": map[string]any{
+							"access_token": "ech-token",
+							"server_ip":    "198.41.140.152",
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	fakeRuntime := &fakeConnectorRuntime{
+		returned: []RuntimeSource{
+			{
+				ID:     "remote-ech-runtime-1",
+				Kind:   SourceKindProxyURI,
+				Name:   "Remote ECH Runtime 1",
+				Input:  "socks5://127.0.0.1:30000",
+				Origin: "manifest",
+			},
+			{
+				ID:     "remote-ech-runtime-2",
+				Kind:   SourceKindProxyURI,
+				Name:   "Remote ECH Runtime 2",
+				Input:  "socks5://127.0.0.1:30001",
+				Origin: "manifest",
+			},
+		},
+	}
+
+	cfg := &config.Config{
+		SourceSync: config.SourceSyncConfig{
+			Enabled:                  true,
+			ManifestURL:              server.URL,
+			DefaultDirectProxyScheme: "http",
+		},
+	}
+
+	manager := New(cfg, nil, WithConnectorRuntime(fakeRuntime))
+	snapshot, err := manager.buildActiveSourceSnapshot()
+	if err != nil {
+		t.Fatalf("buildActiveSourceSnapshot() error = %v", err)
+	}
+
+	if len(fakeRuntime.got) != 2 {
+		t.Fatalf("expected 2 connector sources, got %d", len(fakeRuntime.got))
+	}
+	if snapshot.ManifestSourceCount != 2 {
+		t.Fatalf("unexpected manifest source count: %d", snapshot.ManifestSourceCount)
+	}
+	if snapshot.ConnectorSourceCount != 2 {
+		t.Fatalf("unexpected connector source count: %d", snapshot.ConnectorSourceCount)
+	}
+	if snapshot.ConnectorInstanceCount != 2 {
+		t.Fatalf("unexpected connector instance count: %d", snapshot.ConnectorInstanceCount)
+	}
+	if len(snapshot.EphemeralProxySources) != 2 {
+		t.Fatalf("unexpected ephemeral proxy source count: %d", len(snapshot.EphemeralProxySources))
 	}
 }

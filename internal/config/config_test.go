@@ -20,3 +20,15 @@ func TestIsProxyURIRecognizesHTTPAndSOCKS5(t *testing.T) {
 		}
 	}
 }
+
+func TestApplyDefaultsSetsCloudflareProbeTarget(t *testing.T) {
+	cfg := &Config{}
+
+	if err := cfg.applyDefaults(); err != nil {
+		t.Fatalf("applyDefaults() error = %v", err)
+	}
+
+	if cfg.Management.ProbeTarget != "https://www.google.com/generate_204" {
+		t.Fatalf("unexpected default probe target: %q", cfg.Management.ProbeTarget)
+	}
+}

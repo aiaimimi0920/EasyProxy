@@ -3,6 +3,7 @@ package pool
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"math/rand"
 	"net"
@@ -286,7 +287,7 @@ func (p *poolOutbound) probeAllMembersOnStartup() {
 		}
 
 		// Perform HTTP probe to measure actual latency (TTFB)
-		_, err = httpProbe(conn, destination.AddrString())
+		_, err = httpProbe(conn, destination)
 		conn.Close()
 
 		if err != nil {
@@ -511,32 +512,42 @@ func (p *poolOutbound) makeReleaseFunc(member *memberState) func() {
 
 // httpProbe performs an HTTP probe through the connection and measures TTFB.
 // It sends a minimal HTTP request and waits for the first byte of response.
-func httpProbe(conn net.Conn, host string) (time.Duration, error) {
-	// Build HTTP request
+func httpProbe(conn net.Conn, destination M.Socksaddr) (time.Duration, error) {
+	probeConn := conn
+	host := destination.AddrString()
+	if destination.Port == 443 {
+		serverName := destination.Fqdn
+		if serverName == "" {
+			serverName = host
+		}
+		tlsConn := tls.Client(conn, &tls.Config{
+			ServerName:         serverName,
+			InsecureSkipVerify: true,
+		})
+		if err := tlsConn.Handshake(); err != nil {
+			return 0, fmt.Errorf("tls handshake: %w", err)
+		}
+		probeConn = tlsConn
+	}
+
 	req := fmt.Sprintf("GET /generate_204 HTTP/1.1\r\nHost: %s\r\nConnection: close\r\nUser-Agent: Mozilla/5.0\r\n\r\n", host)
 
-	// Try to set write deadline (ignore errors for connections that don't support it)
-	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	_ = probeConn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 
-	// Record time just before sending request
 	start := time.Now()
 
-	// Send HTTP request
-	if _, err := conn.Write([]byte(req)); err != nil {
+	if _, err := probeConn.Write([]byte(req)); err != nil {
 		return 0, fmt.Errorf("write request: %w", err)
 	}
 
-	// Try to set read deadline (ignore errors for connections that don't support it)
-	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	_ = probeConn.SetReadDeadline(time.Now().Add(10 * time.Second))
 
-	// Read first byte (TTFB - Time To First Byte)
-	reader := bufio.NewReader(conn)
+	reader := bufio.NewReader(probeConn)
 	_, err := reader.ReadByte()
 	if err != nil {
 		return 0, fmt.Errorf("read response: %w", err)
 	}
 
-	// Calculate TTFB
 	ttfb := time.Since(start)
 	return ttfb, nil
 }
@@ -568,7 +579,7 @@ func (p *poolOutbound) makeProbeFunc(member *memberState) func(ctx context.Conte
 		defer conn.Close()
 
 		// Perform HTTP probe to measure actual latency (TTFB)
-		_, err = httpProbe(conn, destination.AddrString())
+		_, err = httpProbe(conn, destination)
 		if err != nil {
 			if member.entry != nil {
 				member.entry.RecordFailure(err, probeDst)
@@ -636,7 +647,7 @@ func (p *poolOutbound) makeProbeByTagFunc(tag string) func(ctx context.Context) 
 		defer conn.Close()
 
 		// Perform HTTP probe to measure actual latency (TTFB)
-		_, err = httpProbe(conn, destination.AddrString())
+		_, err = httpProbe(conn, destination)
 		if err != nil {
 			if member.entry != nil {
 				member.entry.RecordFailure(err, probeDst)

@@ -138,11 +138,11 @@ type Manager struct {
 	logger     Logger
 
 	// periodic health check control
-	healthMu        sync.Mutex
-	healthInterval  time.Duration
-	healthTimeout   time.Duration
-	healthTicker    *time.Ticker
-	healthIntervalC chan time.Duration
+	healthMu         sync.Mutex
+	healthInterval   time.Duration
+	healthTimeout    time.Duration
+	healthTicker     *time.Ticker
+	healthIntervalC  chan time.Duration
 	probeAllInFlight atomic.Bool
 }
 
@@ -482,8 +482,12 @@ func (m *Manager) UpdateProbeTarget(target string) error {
 		return nil
 	}
 
+	original := target
+
 	// Strip URL scheme if present
+	isHTTPS := false
 	if strings.HasPrefix(target, "https://") {
+		isHTTPS = true
 		target = strings.TrimPrefix(target, "https://")
 	} else if strings.HasPrefix(target, "http://") {
 		target = strings.TrimPrefix(target, "http://")
@@ -495,9 +499,13 @@ func (m *Manager) UpdateProbeTarget(target string) error {
 
 	host, port, err := net.SplitHostPort(target)
 	if err != nil {
-		// If no port specified, use default port 80
+		// If no port specified, infer it from the original scheme.
 		host = target
-		port = "80"
+		if isHTTPS {
+			port = "443"
+		} else {
+			port = "80"
+		}
 	}
 
 	parsed := M.ParseSocksaddrHostPort(host, parsePort(port))
@@ -505,7 +513,7 @@ func (m *Manager) UpdateProbeTarget(target string) error {
 	m.mu.Lock()
 	m.probeDst = parsed
 	m.probeReady = true
-	m.cfg.ProbeTarget = target
+	m.cfg.ProbeTarget = original
 	m.mu.Unlock()
 
 	return nil

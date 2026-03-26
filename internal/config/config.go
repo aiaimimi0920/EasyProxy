@@ -337,7 +337,7 @@ func (c *Config) applyDefaults() error {
 		c.Management.Listen = "127.0.0.1:9090"
 	}
 	if c.Management.ProbeTarget == "" {
-		c.Management.ProbeTarget = "www.apple.com:80"
+		c.Management.ProbeTarget = "https://www.google.com/generate_204"
 	}
 	if c.Management.Enabled == nil {
 		defaultEnabled := true

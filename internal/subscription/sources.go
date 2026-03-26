@@ -1,6 +1,7 @@
 package subscription
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"strings"
@@ -107,7 +108,22 @@ func isLikelyHTTPProxyInput(value string) bool {
 }
 
 func sourceKey(source RuntimeSource) string {
+	if source.Kind == SourceKindConnector {
+		return fmt.Sprintf("%s:%s:%s", source.Kind, source.Input, optionsFingerprint(source.Options))
+	}
 	return fmt.Sprintf("%s:%s", source.Kind, source.Input)
+}
+
+func optionsFingerprint(options map[string]any) string {
+	if len(options) == 0 {
+		return ""
+	}
+
+	payload, err := json.Marshal(options)
+	if err != nil {
+		return fmt.Sprintf("%v", options)
+	}
+	return string(payload)
 }
 
 func dedupeSourcesWithPrecedence(groups ...[]RuntimeSource) []RuntimeSource {
