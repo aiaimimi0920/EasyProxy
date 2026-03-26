@@ -98,13 +98,24 @@ type SubscriptionRefreshConfig struct {
 
 // SourceSyncConfig controls MiSub manifest sync and aggregator fallback.
 type SourceSyncConfig struct {
-	Enabled                  bool          `yaml:"enabled"`
-	ManifestURL              string        `yaml:"manifest_url"`
-	ManifestToken            string        `yaml:"manifest_token"`
-	RefreshInterval          time.Duration `yaml:"refresh_interval"`
-	RequestTimeout           time.Duration `yaml:"request_timeout"`
-	FallbackSubscriptions    []string      `yaml:"fallback_subscriptions"`
-	DefaultDirectProxyScheme string        `yaml:"default_direct_proxy_scheme"`
+	Enabled                  bool                   `yaml:"enabled"`
+	ManifestURL              string                 `yaml:"manifest_url"`
+	ManifestToken            string                 `yaml:"manifest_token"`
+	RefreshInterval          time.Duration          `yaml:"refresh_interval"`
+	RequestTimeout           time.Duration          `yaml:"request_timeout"`
+	FallbackSubscriptions    []string               `yaml:"fallback_subscriptions"`
+	DefaultDirectProxyScheme string                 `yaml:"default_direct_proxy_scheme"`
+	ConnectorRuntime         ConnectorRuntimeConfig `yaml:"connector_runtime"`
+}
+
+// ConnectorRuntimeConfig controls local execution of manifest connectors such as ech-workers.
+type ConnectorRuntimeConfig struct {
+	Enabled          *bool         `yaml:"enabled"`
+	BinaryPath       string        `yaml:"binary_path"`
+	WorkingDirectory string        `yaml:"working_directory"`
+	ListenHost       string        `yaml:"listen_host"`
+	ListenStartPort  uint16        `yaml:"listen_start_port"`
+	StartupTimeout   time.Duration `yaml:"startup_timeout"`
 }
 
 // NodeSource indicates where a node configuration originated from.
@@ -360,6 +371,19 @@ func (c *Config) applyDefaults() error {
 	}
 	if strings.TrimSpace(c.SourceSync.DefaultDirectProxyScheme) == "" {
 		c.SourceSync.DefaultDirectProxyScheme = "http"
+	}
+	if c.SourceSync.ConnectorRuntime.Enabled == nil {
+		defaultEnabled := true
+		c.SourceSync.ConnectorRuntime.Enabled = &defaultEnabled
+	}
+	if strings.TrimSpace(c.SourceSync.ConnectorRuntime.ListenHost) == "" {
+		c.SourceSync.ConnectorRuntime.ListenHost = "127.0.0.1"
+	}
+	if c.SourceSync.ConnectorRuntime.ListenStartPort == 0 {
+		c.SourceSync.ConnectorRuntime.ListenStartPort = 30000
+	}
+	if c.SourceSync.ConnectorRuntime.StartupTimeout <= 0 {
+		c.SourceSync.ConnectorRuntime.StartupTimeout = 10 * time.Second
 	}
 
 	if c.LogLevel == "" {
@@ -617,6 +641,14 @@ func (c *Config) ManagementEnabled() bool {
 		return true
 	}
 	return *c.Management.Enabled
+}
+
+// ConnectorRuntimeEnabled reports whether manifest connectors should be executed locally.
+func (c *Config) ConnectorRuntimeEnabled() bool {
+	if c == nil || c.SourceSync.ConnectorRuntime.Enabled == nil {
+		return true
+	}
+	return *c.SourceSync.ConnectorRuntime.Enabled
 }
 
 // loadNodesFromFile reads a nodes file where each line is a proxy URI

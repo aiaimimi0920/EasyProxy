@@ -113,6 +113,18 @@ geoip:
 #   default_direct_proxy_scheme: http   # 裸 residential 输入默认补成 http://
 #   fallback_subscriptions:
 #     - "https://r2.example.com/fallback-profile.txt"
+#   connector_runtime:
+#     enabled: true
+#     binary_path: ""                   # 留空时自动从 PATH 查找 ech-workers / ech-win
+#     working_directory: ""             # 留空时默认使用 <config-dir>/data/connectors
+#     listen_host: 127.0.0.1
+#     listen_start_port: 30000
+#     startup_timeout: 10s
+
+# connector 说明：
+# - manifest 中 kind=connector、connector_type=ech_worker 的来源会被本地拉起为 ech-workers 进程
+# - 每个 connector 会被转换成本地 socks5://127.0.0.1:<port> 或 http://127.0.0.1:<port> 上游
+# - 这些上游属于运行时临时来源，不会写回持久化本地节点库
 
 # ═══════════════════════════════════════════════════════════════
 # 节点配置方式（三选一或混合使用）

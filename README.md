@@ -106,6 +106,8 @@ cp ./config.example.yaml ./config.yaml
 - `management.listen`: Web 管理面板地址（默认 `0.0.0.0:9888`）
 - `management.password`: 面板登录密码（为空则不需要登录）；服务间调用时也可直接作为 `Authorization` 头值访问管理 API
 - `subscriptions` / `nodes_file` / `nodes`: 节点来源（三选一或混用）
+- `source_sync.*`: 从 MiSub 拉取 machine manifest，并在失败时启用本地 fallback 订阅
+- `source_sync.connector_runtime.*`: 当 manifest 含有 `connector_type = ech_worker` 时，本地拉起 `ech-workers` 并转换成临时上游代理
 
 ---
 
