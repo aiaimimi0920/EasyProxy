@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -61,7 +62,17 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		ExternalIP:    cfg.ExternalIP,
 	}
 
-	// ── 4. Create and start BoxManager ──
+	// ── 4. Bootstrap runtime-only sources before initial startup ──
+	subMgr := subscription.New(cfg, nil, subscription.WithStore(dataStore))
+	defer subMgr.Stop()
+
+	if shouldBootstrapSourceSync(cfg) {
+		if err := subMgr.BootstrapRuntimeNodes(); err != nil {
+			return fmt.Errorf("bootstrap source sync runtime nodes: %w", err)
+		}
+	}
+
+	// ── 5. Create and start BoxManager ──
 	boxMgr := boxmgr.New(cfg, monitorCfg, boxmgr.WithStore(dataStore))
 	boxMgr.SetEphemeralNodes(filterEphemeralNodes(cfg.Nodes))
 	if err := boxMgr.Start(ctx); err != nil {
@@ -75,13 +86,12 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		server.SetStore(dataStore)
 	}
 
-	// ── 5. Create and start SubscriptionManager ──
+	// ── 6. Attach and start SubscriptionManager ──
 	// Always created so it can dynamically respond to config changes
 	// (e.g., user enables subscriptions via WebUI). The manager's internal
 	// refresh loop checks config state to decide when to actually refresh.
-	subMgr := subscription.New(cfg, boxMgr, subscription.WithStore(dataStore))
+	subMgr.SetBoxManager(boxMgr)
 	subMgr.Start()
-	defer subMgr.Stop()
 
 	// Register as config update listener so baseCfg stays in sync after reloads
 	boxMgr.AddConfigListener(subMgr)
@@ -91,12 +101,12 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		server.SetSourceSyncReporter(subMgr)
 	}
 
-	// ── 6. Start periodic stats flush ──
+	// ── 7. Start periodic stats flush ──
 	statsCtx, statsCancel := context.WithCancel(ctx)
 	defer statsCancel()
 	go periodicStatsFlush(statsCtx, boxMgr, dataStore)
 
-	// ── 7. Wait for shutdown signal ──
+	// ── 8. Wait for shutdown signal ──
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
@@ -108,7 +118,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		fmt.Printf("Received %s, initiating graceful shutdown...\n", sig)
 	}
 
-	// ── 8. Graceful shutdown ──
+	// ── 9. Graceful shutdown ──
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
 
@@ -235,6 +245,19 @@ func seedStoreFromConfig(ctx context.Context, cfg *config.Config, s store.Store)
 
 	log.Printf("[app] seeded %d nodes into store", len(storeNodes))
 	return nil
+}
+
+func shouldBootstrapSourceSync(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	if len(cfg.Nodes) > 0 {
+		return false
+	}
+	if !cfg.SourceSync.Enabled {
+		return false
+	}
+	return strings.TrimSpace(cfg.SourceSync.ManifestURL) != "" || len(cfg.SourceSync.FallbackSubscriptions) > 0
 }
 
 func filterEphemeralNodes(nodes []config.NodeConfig) []config.NodeConfig {

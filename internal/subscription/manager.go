@@ -131,6 +131,73 @@ func New(cfg *config.Config, boxMgr *boxmgr.Manager, opts ...Option) *Manager {
 	return m
 }
 
+// SetBoxManager attaches the runtime box manager after a bootstrap-only manager
+// was created from config. This allows source-sync bootstrap to happen before
+// sing-box starts when no local nodes are configured yet.
+func (m *Manager) SetBoxManager(boxMgr *boxmgr.Manager) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.boxMgr = boxMgr
+}
+
+// BootstrapRuntimeNodes materializes manifest/fallback runtime sources into the
+// in-memory config before the initial box manager startup. This is required for
+// source_sync-only deployments where no local nodes exist yet.
+func (m *Manager) BootstrapRuntimeNodes() error {
+	if m == nil {
+		return fmt.Errorf("subscription manager is nil")
+	}
+
+	snapshot, err := m.buildActiveSourceSnapshot()
+	if err != nil {
+		return err
+	}
+
+	subscriptionNodes, err := m.fetchSubscriptionSources(snapshot.SubscriptionSources)
+	if err != nil {
+		return err
+	}
+
+	ephemeralNodes := append(subscriptionNodes, m.materializeProxySources(snapshot.EphemeralProxySources)...)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.baseCfg == nil {
+		return fmt.Errorf("config is nil")
+	}
+
+	persistentNodes := make([]config.NodeConfig, 0, len(m.baseCfg.Nodes))
+	for _, node := range m.baseCfg.Nodes {
+		switch node.Source {
+		case config.NodeSourceManifest, config.NodeSourceFallback, config.NodeSourceSubscription:
+			continue
+		default:
+			persistentNodes = append(persistentNodes, node)
+		}
+	}
+
+	m.baseCfg.Nodes = append(persistentNodes, ephemeralNodes...)
+	m.status.NodeCount = len(m.baseCfg.Nodes)
+	m.status.LastRefresh = time.Now()
+	m.sourceSyncStatus.Enabled = m.baseCfg.SourceSync.Enabled
+	m.sourceSyncStatus.ManifestURL = strings.TrimSpace(m.baseCfg.SourceSync.ManifestURL)
+	m.sourceSyncStatus.ManifestHealthy = m.baseCfg.SourceSync.Enabled && strings.TrimSpace(m.baseCfg.SourceSync.ManifestURL) != ""
+	m.sourceSyncStatus.LastSync = m.status.LastRefresh
+	m.sourceSyncStatus.LastSuccess = m.status.LastRefresh
+	m.sourceSyncStatus.FallbackActive = snapshot.FallbackActive
+	m.sourceSyncStatus.LocalSourceCount = snapshot.LocalSourceCount
+	m.sourceSyncStatus.ManifestSourceCount = snapshot.ManifestSourceCount
+	m.sourceSyncStatus.FallbackSourceCount = snapshot.FallbackSourceCount
+	m.sourceSyncStatus.ConnectorSourceCount = snapshot.ConnectorSourceCount
+	m.sourceSyncStatus.ConnectorInstanceCount = snapshot.ConnectorInstanceCount
+
+	return nil
+}
+
 // Start begins the background goroutine that manages periodic subscription refresh.
 // The goroutine dynamically checks config to decide whether to actually perform refreshes,
 // so it's safe to call Start() even when subscription refresh is initially disabled.

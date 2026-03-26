@@ -161,3 +161,76 @@ func TestBuildActiveSourceSnapshotIncludesConnectorRuntimeSources(t *testing.T) 
 		t.Fatalf("unexpected ephemeral proxy source count: %d", len(snapshot.EphemeralProxySources))
 	}
 }
+
+func TestBootstrapRuntimeNodesMaterializesConnectorSources(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer manifest-token" {
+			t.Fatalf("unexpected auth header: %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(manifestResponse{
+			Success: true,
+			Sources: []manifestSource{
+				{
+					ID:      "remote-ech",
+					Kind:    SourceKindConnector,
+					Name:    "Remote ECH",
+					Enabled: true,
+					Input:   "https://ech.example.com/connect",
+					Options: map[string]any{
+						"connector_type": connectorTypeECHWorker,
+						"connector_config": map[string]any{
+							"local_protocol": "socks5",
+							"access_token":   "ech-token",
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	fakeRuntime := &fakeConnectorRuntime{
+		returned: []RuntimeSource{
+			{
+				ID:     "remote-ech-runtime",
+				Kind:   SourceKindProxyURI,
+				Name:   "Remote ECH Runtime",
+				Input:  "socks5://127.0.0.1:30000",
+				Origin: "manifest",
+			},
+		},
+	}
+
+	cfg := &config.Config{
+		SourceSync: config.SourceSyncConfig{
+			Enabled:                  true,
+			ManifestURL:              server.URL,
+			ManifestToken:            "manifest-token",
+			DefaultDirectProxyScheme: "http",
+		},
+	}
+
+	manager := New(cfg, nil, WithConnectorRuntime(fakeRuntime))
+	if err := manager.BootstrapRuntimeNodes(); err != nil {
+		t.Fatalf("BootstrapRuntimeNodes() error = %v", err)
+	}
+
+	if len(cfg.Nodes) != 1 {
+		t.Fatalf("unexpected node count after bootstrap: %d", len(cfg.Nodes))
+	}
+	if cfg.Nodes[0].URI != "socks5://127.0.0.1:30000" {
+		t.Fatalf("unexpected bootstrapped uri: %q", cfg.Nodes[0].URI)
+	}
+	if cfg.Nodes[0].Source != config.NodeSourceManifest {
+		t.Fatalf("unexpected node source: %q", cfg.Nodes[0].Source)
+	}
+
+	status := manager.SourceSyncStatus()
+	if !status.ManifestHealthy {
+		t.Fatalf("expected manifest to be healthy after bootstrap")
+	}
+	if status.ConnectorSourceCount != 1 || status.ConnectorInstanceCount != 1 {
+		t.Fatalf("unexpected connector status: %#v", status)
+	}
+}
