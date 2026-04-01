@@ -1,6 +1,6 @@
-# EasyProxiesV2
+# EasyProxy
 
-EasyProxiesV2 是一个轻量级、高性能的代理池与订阅管理工具，底层基于 [sing-box](https://github.com/SagerNet/sing-box)。
+EasyProxy 是一个轻量级、高性能的代理池与订阅管理工具，底层基于 [sing-box](https://github.com/SagerNet/sing-box)。
 项目内置现代化 Web 管理面板，支持节点健康检查、订阅刷新、流量监控与可视化管理。
 
 > 二开声明：本项目基于 [jasonwong1991/easy_proxies](https://github.com/jasonwong1991/easy_proxies) 二次开发，V2 版本重点重构了前端与工程化流程。
@@ -8,7 +8,7 @@ EasyProxiesV2 是一个轻量级、高性能的代理池与订阅管理工具，
 ## ❤️ 赞助木木
 
 木木是独立开发者 / 开源爱好者，长期投入开源项目维护与迭代。
-如果 EasyProxiesV2 对你有帮助，或者你认可我的工作，欢迎请我喝杯咖啡。你的支持是我持续创造的动力源泉 ⚡
+如果 EasyProxy 对你有帮助，或者你认可我的工作，欢迎请我喝杯咖啡。你的支持是我持续创造的动力源泉 ⚡
 
 - [赞助地址](https://mumuverse.space:1588/)
 
@@ -41,8 +41,8 @@ EasyProxiesV2 是一个轻量级、高性能的代理池与订阅管理工具，
 
 从 GitHub Releases 下载这两个文件之一：
 
-- Linux: `easy-proxies-linux-amd64`
-- Windows: `easy-proxies-windows-amd64.exe`
+- Linux: `easy-proxy-linux-amd64`
+- Windows: `easy-proxy-windows-amd64.exe`
 
 并同时准备配置文件：
 
@@ -55,7 +55,7 @@ EasyProxiesV2 是一个轻量级、高性能的代理池与订阅管理工具，
 
 ### 1) 赋予执行权限
 ```bash
-chmod +x ./easy-proxies-linux-amd64
+chmod +x ./easy-proxy-linux-amd64
 ```
 
 ### 2) 准备配置
@@ -65,7 +65,7 @@ cp ./config.example.yaml ./config.yaml
 
 ### 3) 启动程序
 ```bash
-./easy-proxies-linux-amd64 --config ./config.yaml
+./easy-proxy-linux-amd64 --config ./config.yaml
 ```
 
 ### 4) 访问管理面板
@@ -82,12 +82,12 @@ cp ./config.example.yaml ./config.yaml
 ### 1) 准备文件
 把下面两个文件放到同一目录：
 
-- `easy-proxies-windows-amd64.exe`
+- `easy-proxy-windows-amd64.exe`
 - `config.yaml`（由 `config.example.yaml` 复制并修改）
 
 ### 2) 启动程序（PowerShell 或 CMD）
 ```powershell
-.\easy-proxies-windows-amd64.exe --config .\config.yaml
+.\easy-proxy-windows-amd64.exe --config .\config.yaml
 ```
 
 ### 3) 访问管理面板
@@ -126,7 +126,7 @@ npm run build
 ### 2) 构建后端
 ```bash
 go mod download
-go build -tags "with_utls with_quic with_grpc with_wireguard with_gvisor" -o easy-proxies ./cmd/easy_proxies
+go build -tags "with_utls with_quic with_grpc with_wireguard with_gvisor" -o easy-proxy ./cmd/easy_proxies
 ```
 
 ---
@@ -136,7 +136,7 @@ go build -tags "with_utls with_quic with_grpc with_wireguard with_gvisor" -o eas
 如果你偏好容器部署，可使用现成的 `Dockerfile` 与 `docker-compose.yml`：
 
 ```bash
-docker build -t easy-proxies:latest .
+docker build -t easy-proxy:latest .
 docker compose up -d
 ```
 

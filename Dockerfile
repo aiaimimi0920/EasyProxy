@@ -20,7 +20,7 @@ RUN go env -w GOPROXY=${GOPROXY} && go mod download
 COPY . .
 # Copy frontend build output into the embed directory
 COPY --from=frontend /frontend-dist/ ./internal/monitor/assets/
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -tags "with_utls with_quic with_grpc with_wireguard with_gvisor" -o easy-proxies ./cmd/easy_proxies
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -tags "with_utls with_quic with_grpc with_wireguard with_gvisor" -o easy-proxy ./cmd/easy_proxies
 
 # ── Stage 3: Runtime ───────────────────────────────────────────
 FROM debian:bookworm-slim AS runtime
@@ -30,14 +30,14 @@ RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debia
     && apt-get install -y --no-install-recommends ca-certificates gosu \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -r -u 10001 easy \
-    && mkdir -p /etc/easy-proxies/data \
-    && chown -R easy:easy /etc/easy-proxies
+    && mkdir -p /etc/easy-proxy/data \
+    && chown -R easy:easy /etc/easy-proxy
 WORKDIR /app
-COPY --from=builder /src/easy-proxies /usr/local/bin/easy-proxies
+COPY --from=builder /src/easy-proxy /usr/local/bin/easy-proxy
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
-COPY --chown=easy:easy config.example.yaml /etc/easy-proxies/config.yaml
+COPY --chown=easy:easy config.example.yaml /etc/easy-proxy/config.yaml
 # Pool/Hybrid mode: 2323, Management: 9091, Multi-port/Hybrid mode: 24000-24200
 EXPOSE 2323 9091 24000-24200
 ENTRYPOINT ["docker-entrypoint.sh"]
-CMD ["--config", "/etc/easy-proxies/config.yaml"]
+CMD ["--config", "/etc/easy-proxy/config.yaml"]
