@@ -383,3 +383,127 @@ func TestProxyCompatRejectsUnsupportedProviderType(t *testing.T) {
 		t.Fatalf("expected status %d, got %d: %s", http.StatusServiceUnavailable, rec.Code, rec.Body.String())
 	}
 }
+
+func TestProxyCompatFailureReportsReduceAvailabilityScore(t *testing.T) {
+	mgr, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+
+	first := mgr.Register(NodeInfo{
+		Tag:           "a-node",
+		Name:          "A Node",
+		ListenAddress: "127.0.0.1",
+		Port:          34001,
+	})
+	first.MarkInitialCheckDone(true)
+
+	second := mgr.Register(NodeInfo{
+		Tag:           "b-node",
+		Name:          "B Node",
+		ListenAddress: "127.0.0.1",
+		Port:          34002,
+	})
+	second.MarkInitialCheckDone(true)
+
+	s := &Server{
+		cfg:         Config{ProxyUsername: "node-user", ProxyPassword: "node-pass"},
+		mgr:         mgr,
+		sessions:    map[string]*Session{},
+		proxyCompat: newProxyCompatState(),
+	}
+
+	cfg := &config.Config{}
+	cfg.Listener.Port = 2323
+	cfg.Listener.Protocol = "http"
+	cfg.Management.Listen = "0.0.0.0:9888"
+	cfg.MultiPort.Protocol = "http"
+	cfg.MultiPort.Username = "node-user"
+	cfg.MultiPort.Password = "node-pass"
+	cfg.Mode = "hybrid"
+	cfg.Pool.FailureThreshold = 3
+	cfg.Pool.BlacklistDuration = 24 * time.Hour
+	s.SetConfig(cfg)
+
+	checkoutBody, err := json.Marshal(proxyCompatCheckoutRequest{
+		HostID:        "register-service",
+		ProvisionMode: "reuse-only",
+		BindingMode:   "shared-instance",
+	})
+	if err != nil {
+		t.Fatalf("Marshal checkout request failed: %v", err)
+	}
+
+	checkoutReq := httptest.NewRequest(http.MethodPost, "/proxy/leases/checkout", bytes.NewReader(checkoutBody))
+	checkoutReq.Host = "easy-proxy-service:9888"
+	checkoutRec := httptest.NewRecorder()
+	s.handleProxyCheckout(checkoutRec, checkoutReq)
+	if checkoutRec.Code != http.StatusOK {
+		t.Fatalf("expected checkout status %d, got %d: %s", http.StatusOK, checkoutRec.Code, checkoutRec.Body.String())
+	}
+
+	var checkoutResp struct {
+		Result proxyCompatCheckoutResult `json:"result"`
+	}
+	if err := json.Unmarshal(checkoutRec.Body.Bytes(), &checkoutResp); err != nil {
+		t.Fatalf("failed to decode checkout response: %v", err)
+	}
+	if checkoutResp.Result.Lease.Metadata["selectedNodeTag"] != "a-node" {
+		t.Fatalf("expected first node to be selected initially, got %+v", checkoutResp.Result.Lease.Metadata)
+	}
+
+	reportBody, err := json.Marshal(proxyCompatUsageReport{
+		LeaseID:   checkoutResp.Result.Lease.ID,
+		Success:   false,
+		ErrorCode: "upstream-timeout",
+	})
+	if err != nil {
+		t.Fatalf("Marshal report request failed: %v", err)
+	}
+
+	reportRec := httptest.NewRecorder()
+	s.handleProxyReportUsage(reportRec, httptest.NewRequest(http.MethodPost, "/proxy/leases/report", bytes.NewReader(reportBody)))
+	if reportRec.Code != http.StatusOK {
+		t.Fatalf("expected report status %d, got %d: %s", http.StatusOK, reportRec.Code, reportRec.Body.String())
+	}
+
+	releaseRec := httptest.NewRecorder()
+	releaseReq := httptest.NewRequest(http.MethodPost, "/proxy/leases/"+checkoutResp.Result.Lease.ID+"/release", nil)
+	s.handleProxyLeaseItem(releaseRec, releaseReq)
+	if releaseRec.Code != http.StatusOK {
+		t.Fatalf("expected release status %d, got %d: %s", http.StatusOK, releaseRec.Code, releaseRec.Body.String())
+	}
+
+	snapshots := mgr.Snapshot()
+	var firstScore int
+	var secondScore int
+	for _, snap := range snapshots {
+		switch snap.Tag {
+		case "a-node":
+			firstScore = snap.AvailabilityScore
+		case "b-node":
+			secondScore = snap.AvailabilityScore
+		}
+	}
+	if firstScore >= secondScore {
+		t.Fatalf("expected first node score to drop below second node score, got first=%d second=%d", firstScore, secondScore)
+	}
+
+	nextReq := httptest.NewRequest(http.MethodPost, "/proxy/leases/checkout", bytes.NewReader(checkoutBody))
+	nextReq.Host = "easy-proxy-service:9888"
+	nextRec := httptest.NewRecorder()
+	s.handleProxyCheckout(nextRec, nextReq)
+	if nextRec.Code != http.StatusOK {
+		t.Fatalf("expected second checkout status %d, got %d: %s", http.StatusOK, nextRec.Code, nextRec.Body.String())
+	}
+
+	var nextResp struct {
+		Result proxyCompatCheckoutResult `json:"result"`
+	}
+	if err := json.Unmarshal(nextRec.Body.Bytes(), &nextResp); err != nil {
+		t.Fatalf("failed to decode second checkout response: %v", err)
+	}
+	if nextResp.Result.Lease.Metadata["selectedNodeTag"] != "b-node" {
+		t.Fatalf("expected second node to be preferred after failure report, got %+v", nextResp.Result.Lease.Metadata)
+	}
+}

@@ -20,12 +20,12 @@ const defaultSettings: SettingsData = {
   multi_port_username: '',
   multi_port_password: '',
 
-  pool_mode: 'sequential',
+  pool_mode: 'auto',
   pool_failure_threshold: 3,
   pool_blacklist_duration: '24h0m0s',
 
   management_enabled: true,
-  management_listen: '0.0.0.0:9090',
+  management_listen: '0.0.0.0:9888',
   management_probe_target: '',
   management_password: '',
   management_health_check_interval: '2h0m0s',
@@ -569,6 +569,7 @@ export default function SettingsPanel() {
               value={settings.pool_mode}
               onChange={(e) => updateField('pool_mode', e.target.value)}
             >
+              <option value="auto">auto - 健康优先自动策略</option>
               <option value="sequential">sequential - 顺序轮询</option>
               <option value="random">random - 随机选择</option>
               <option value="balance">balance - 最小连接数负载均衡</option>

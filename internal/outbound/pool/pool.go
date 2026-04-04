@@ -30,6 +30,7 @@ const (
 	// Tag is the default outbound tag used by builder.
 	Tag = "proxy-pool"
 
+	modeAuto       = "auto"
 	modeSequential = "sequential"
 	modeRandom     = "random"
 	modeBalance    = "balance"
@@ -160,12 +161,14 @@ func normalizeOptions(options Options) Options {
 		options.Metadata = make(map[string]MemberMeta)
 	}
 	switch strings.ToLower(options.Mode) {
+	case modeAuto:
+		options.Mode = modeAuto
 	case modeRandom:
 		options.Mode = modeRandom
 	case modeBalance:
 		options.Mode = modeBalance
 	default:
-		options.Mode = modeSequential
+		options.Mode = modeAuto
 	}
 	return options
 }
@@ -446,13 +449,80 @@ func (p *poolOutbound) selectMember(candidates []*memberState) *memberState {
 			if selected == nil || active < minActive {
 				selected = member
 				minActive = active
+				continue
+			}
+			if active == minActive && compareMembersByHealth(member, selected) {
+				selected = member
 			}
 		}
 		return selected
-	default:
+	case modeSequential:
 		idx := int(p.rrCounter.Add(1)-1) % len(candidates)
 		return candidates[idx]
+	default:
+		best := candidates[0]
+		for _, candidate := range candidates[1:] {
+			if compareMembersByHealth(candidate, best) {
+				best = candidate
+			}
+		}
+		return best
 	}
+}
+
+func compareMembersByHealth(left, right *memberState) bool {
+	leftSnap := memberSelectionSnapshot(left)
+	rightSnap := memberSelectionSnapshot(right)
+
+	if leftSnap.AvailabilityScore != rightSnap.AvailabilityScore {
+		return leftSnap.AvailabilityScore > rightSnap.AvailabilityScore
+	}
+
+	leftActive := int32(0)
+	if left.shared != nil {
+		leftActive = left.shared.activeCount()
+	}
+	rightActive := int32(0)
+	if right.shared != nil {
+		rightActive = right.shared.activeCount()
+	}
+	if leftActive != rightActive {
+		return leftActive < rightActive
+	}
+
+	leftLatency := normalizeLatencyForSelection(leftSnap.LastLatencyMs)
+	rightLatency := normalizeLatencyForSelection(rightSnap.LastLatencyMs)
+	if leftLatency != rightLatency {
+		return leftLatency < rightLatency
+	}
+
+	if leftSnap.ReportedFailureCount != rightSnap.ReportedFailureCount {
+		return leftSnap.ReportedFailureCount < rightSnap.ReportedFailureCount
+	}
+	if leftSnap.ReportedSuccessCount != rightSnap.ReportedSuccessCount {
+		return leftSnap.ReportedSuccessCount > rightSnap.ReportedSuccessCount
+	}
+	if leftSnap.FailureCount != rightSnap.FailureCount {
+		return leftSnap.FailureCount < rightSnap.FailureCount
+	}
+	if leftSnap.SuccessCount != rightSnap.SuccessCount {
+		return leftSnap.SuccessCount > rightSnap.SuccessCount
+	}
+	return left.tag < right.tag
+}
+
+func memberSelectionSnapshot(member *memberState) monitor.Snapshot {
+	if member == nil || member.entry == nil {
+		return monitor.Snapshot{AvailabilityScore: 100, LastLatencyMs: -1}
+	}
+	return member.entry.Snapshot()
+}
+
+func normalizeLatencyForSelection(value int64) int64 {
+	if value <= 0 {
+		return 1<<62 - 1
+	}
+	return value
 }
 
 func (p *poolOutbound) recordFailure(member *memberState, cause error, destination string) {

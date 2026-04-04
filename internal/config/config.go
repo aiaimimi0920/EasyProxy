@@ -334,7 +334,7 @@ func (c *Config) applyDefaults() error {
 	}
 	c.Listener.Protocol = listenerProtocol
 	if c.Pool.Mode == "" {
-		c.Pool.Mode = "sequential"
+		c.Pool.Mode = "auto"
 	}
 	if c.Pool.FailureThreshold <= 0 {
 		c.Pool.FailureThreshold = 3
@@ -357,7 +357,7 @@ func (c *Config) applyDefaults() error {
 	}
 	c.MultiPort.Protocol = multiPortProtocol
 	if c.Management.Listen == "" {
-		c.Management.Listen = "127.0.0.1:9090"
+		c.Management.Listen = "0.0.0.0:9888"
 	}
 	if c.Management.ProbeTarget == "" {
 		c.Management.ProbeTarget = "https://www.google.com/generate_204"
@@ -737,11 +737,14 @@ func loadNodesFromSubscription(subURL string, timeout time.Duration) ([]NodeConf
 	content := string(body)
 
 	// Try to detect and parse different formats
-	return parseSubscriptionContent(content)
+	return ParseSubscriptionContent(content)
 }
 
-// parseSubscriptionContent tries to parse subscription content in various formats (optimized)
-func parseSubscriptionContent(content string) ([]NodeConfig, error) {
+// ParseSubscriptionContent tries to parse subscription content in various
+// formats. It is shared by both config-time subscription loading and runtime
+// source-sync/bootstrap refresh paths so manifest/fallback subscriptions are
+// interpreted exactly the same way as local subscription URLs.
+func ParseSubscriptionContent(content string) ([]NodeConfig, error) {
 	content = strings.TrimSpace(content)
 
 	// Quick check for YAML format (check first 200 chars for "proxies:")
@@ -769,6 +772,10 @@ func parseSubscriptionContent(content string) ([]NodeConfig, error) {
 
 	// Parse as plain text (one URI per line)
 	return parseNodesFromContent(content)
+}
+
+func parseSubscriptionContent(content string) ([]NodeConfig, error) {
+	return ParseSubscriptionContent(content)
 }
 
 // parseNodesFromContent parses nodes from plain text content (one URI per line)
@@ -1234,7 +1241,7 @@ func (c *Config) SaveSettings() error {
 // ValidateSettingsRequest validates the settings request fields and returns
 // a descriptive error for any invalid values, instead of silently ignoring them.
 func ValidateSettingsRequest(mode string, listenerPort, multiPortBasePort uint16,
-	listenerProtocol, multiPortProtocol,
+	listenerProtocol, multiPortProtocol, poolMode,
 	poolBlacklistDuration, subRefreshInterval, subRefreshTimeout,
 	subRefreshHealthCheckTimeout, subRefreshDrainTimeout,
 	sourceSyncRefreshInterval, sourceSyncRequestTimeout,
@@ -1245,6 +1252,12 @@ func ValidateSettingsRequest(mode string, listenerPort, multiPortBasePort uint16
 	case "pool", "multi-port", "hybrid":
 	default:
 		return fmt.Errorf("不支持的运行模式: %q", mode)
+	}
+
+	switch strings.ToLower(strings.TrimSpace(poolMode)) {
+	case "auto", "sequential", "random", "balance":
+	default:
+		return fmt.Errorf("不支持的代理池调度模式: %q", poolMode)
 	}
 
 	// Validate ports

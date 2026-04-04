@@ -175,6 +175,7 @@ type proxyCompatUsageRecord struct {
 	ID                 string `json:"id"`
 	LeaseID            string `json:"leaseId"`
 	ProviderInstanceID string `json:"providerInstanceId"`
+	SelectedNodeTag    string `json:"selectedNodeTag,omitempty"`
 	ReportedAt         string `json:"reportedAt"`
 	Success            bool   `json:"success"`
 	LatencyMs          int64  `json:"latencyMs,omitempty"`
@@ -228,8 +229,8 @@ type proxyCompatMaintenanceResult struct {
 }
 
 var (
-	errProxyCompatUnsupportedProvider = errors.New("requested provider is not supported by the EasyProxiesV2 compatibility layer")
-	errProxyCompatNoNodes             = errors.New("no effective EasyProxiesV2 nodes are currently available")
+	errProxyCompatUnsupportedProvider = errors.New("requested provider is not supported by the EasyProxy compatibility layer")
+	errProxyCompatNoNodes             = errors.New("no effective EasyProxy nodes are currently available")
 )
 
 func newProxyCompatState() *proxyCompatState {
@@ -262,9 +263,9 @@ func (s *Server) handleProxyCatalog(w http.ResponseWriter, r *http.Request) {
 			ProviderGroups: []proxyCompatProviderGroup{
 				{
 					Key:              "easy-proxies",
-					DisplayName:      "EasyProxies",
+					DisplayName:      "EasyProxy",
 					ProviderTypeKeys: []string{"easy-proxies"},
-					Description:      "EasyProxiesV2 managed runtime pool",
+					Description:      "EasyProxy managed runtime pool",
 				},
 				{
 					Key:              "manual",
@@ -277,14 +278,14 @@ func (s *Server) handleProxyCatalog(w http.ResponseWriter, r *http.Request) {
 				{
 					ID:                  "available-first",
 					DisplayName:         "Available First",
-					Description:         "Prefer any currently available EasyProxiesV2 node.",
+					Description:         "Prefer any currently available EasyProxy node.",
 					ProviderGroupOrder:  []string{"easy-proxies"},
 					FallbackStrategyKey: "health-first",
 				},
 				{
 					ID:                  "easy-proxies-first",
-					DisplayName:         "EasyProxies First",
-					Description:         "Directly use the EasyProxiesV2 compatibility pool.",
+					DisplayName:         "EasyProxy First",
+					Description:         "Directly use the EasyProxy compatibility pool.",
 					ProviderGroupOrder:  []string{"easy-proxies"},
 					FallbackStrategyKey: "health-first",
 				},
@@ -410,11 +411,12 @@ func (s *Server) handleProxyReportUsage(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	record, err := s.compatState().recordUsage(report)
+	record, selectedNodeTag, hostID, err := s.compatState().recordUsage(report)
 	if err != nil {
 		writeProxyCompatError(w, http.StatusNotFound, "LEASE_NOT_FOUND", err.Error())
 		return
 	}
+	s.applyProxyCompatUsageFeedback(selectedNodeTag, hostID, report)
 	writeJSON(w, map[string]any{"record": record})
 }
 
@@ -559,13 +561,13 @@ func (state *proxyCompatState) releaseLease(leaseID string) error {
 	return nil
 }
 
-func (state *proxyCompatState) recordUsage(report proxyCompatUsageReport) (proxyCompatUsageRecord, error) {
+func (state *proxyCompatState) recordUsage(report proxyCompatUsageReport) (proxyCompatUsageRecord, string, string, error) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
 	leaseState, ok := state.leases[report.LeaseID]
 	if !ok {
-		return proxyCompatUsageRecord{}, fmt.Errorf("lease %q not found", report.LeaseID)
+		return proxyCompatUsageRecord{}, "", "", fmt.Errorf("lease %q not found", report.LeaseID)
 	}
 
 	reportedAt := time.Now().Format(time.RFC3339)
@@ -577,6 +579,7 @@ func (state *proxyCompatState) recordUsage(report proxyCompatUsageReport) (proxy
 		ID:                 mustGenerateCompatID("usage"),
 		LeaseID:            report.LeaseID,
 		ProviderInstanceID: leaseState.Lease.ProviderInstanceID,
+		SelectedNodeTag:    leaseState.SelectedNodeTag,
 		ReportedAt:         reportedAt,
 		Success:            report.Success,
 	}
@@ -591,7 +594,7 @@ func (state *proxyCompatState) recordUsage(report proxyCompatUsageReport) (proxy
 	if len(state.usageRecords) > 256 {
 		state.usageRecords = append([]proxyCompatUsageRecord(nil), state.usageRecords[len(state.usageRecords)-256:]...)
 	}
-	return record, nil
+	return record, leaseState.SelectedNodeTag, leaseState.Lease.HostID, nil
 }
 
 func (state *proxyCompatState) snapshot() ([]proxyCompatLease, []proxyCompatUsageRecord) {
@@ -698,6 +701,9 @@ func (s *Server) resolveProxyCompatCandidate(r *http.Request, request proxyCompa
 		if left.ReservationCount != right.ReservationCount {
 			return left.ReservationCount < right.ReservationCount
 		}
+		if left.Snapshot.AvailabilityScore != right.Snapshot.AvailabilityScore {
+			return left.Snapshot.AvailabilityScore > right.Snapshot.AvailabilityScore
+		}
 		if left.Snapshot.ActiveConnections != right.Snapshot.ActiveConnections {
 			return left.Snapshot.ActiveConnections < right.Snapshot.ActiveConnections
 		}
@@ -775,7 +781,7 @@ func (s *Server) buildProxyCompatInstance(r *http.Request, runtimeCfg proxyCompa
 		DisplayName:      runtimeCfg.ProviderDisplayName,
 		Status:           status,
 		RuntimeKind:      "external",
-		ConnectorKind:    "easy-proxies-v2-compat",
+		ConnectorKind:    "easy-proxy-compat",
 		Shared:           true,
 		CostTier:         "free",
 		HealthScore:      healthScore,
@@ -784,15 +790,16 @@ func (s *Server) buildProxyCompatInstance(r *http.Request, runtimeCfg proxyCompa
 		HostBindings:     []string{},
 		GroupKeys:        []string{"easy-proxies"},
 		Metadata: map[string]string{
-			"proxyHost":      runtimeCfg.SharedHost,
-			"proxyPort":      strconv.Itoa(runtimeCfg.SharedPort),
-			"proxyProtocol":  runtimeCfg.SharedProtocol,
-			"proxyUsername":  runtimeCfg.SharedUsername,
-			"proxyPassword":  runtimeCfg.SharedPassword,
-			"managementUrl":  runtimeCfg.ManagementURL,
-			"managementPort": strconv.Itoa(runtimeCfg.ManagementPort),
-			"availableNodes": strconv.Itoa(len(effectiveNodes)),
-			"allNodes":       strconv.Itoa(len(allNodes)),
+			"proxyHost":         runtimeCfg.SharedHost,
+			"proxyPort":         strconv.Itoa(runtimeCfg.SharedPort),
+			"proxyProtocol":     runtimeCfg.SharedProtocol,
+			"proxyUsername":     runtimeCfg.SharedUsername,
+			"proxyPassword":     runtimeCfg.SharedPassword,
+			"managementUrl":     runtimeCfg.ManagementURL,
+			"managementPort":    strconv.Itoa(runtimeCfg.ManagementPort),
+			"availableNodes":    strconv.Itoa(len(effectiveNodes)),
+			"allNodes":          strconv.Itoa(len(allNodes)),
+			"availabilityScore": strconv.Itoa(proxyCompatAverageAvailabilityScore(effectiveNodes)),
 		},
 		CreatedAt: runtimeCfg.CreatedAt,
 		UpdatedAt: runtimeCfg.UpdatedAt,
@@ -845,8 +852,8 @@ func (s *Server) buildProxyCompatBinding(hostID, instanceID, bindingMode string)
 func proxyCompatProviderTypeDefinition() proxyCompatProviderType {
 	return proxyCompatProviderType{
 		Key:                         "easy-proxies",
-		DisplayName:                 "EasyProxiesV2",
-		Description:                 "Local EasyProxiesV2 runtime compatibility provider.",
+		DisplayName:                 "EasyProxy",
+		Description:                 "Local EasyProxy runtime compatibility provider.",
 		SupportsDynamicProvisioning: false,
 		DefaultStrategyKey:          "health-first",
 		Tags:                        []string{"local-runtime", "compatibility"},
@@ -857,8 +864,8 @@ func proxyCompatStrategyProfileDefinition() proxyCompatStrategyProfile {
 	return proxyCompatStrategyProfile{
 		ID:          "easyproxies-default",
 		Key:         "health-first",
-		DisplayName: "EasyProxies Health First",
-		Description: "Prefer effective EasyProxiesV2 nodes ordered by reservations, active connections, and latency.",
+		DisplayName: "EasyProxy Health First",
+		Description: "Prefer effective EasyProxy nodes ordered by reservations, score, active connections, and latency.",
 		Metadata:    map[string]string{},
 	}
 }
@@ -873,8 +880,9 @@ func proxyCompatStrategyModeDefinition() *proxyCompatStrategyMode {
 		StrategyKey:            "health-first",
 		Warnings:               []string{},
 		Explain: []string{
-			"Using EasyProxiesV2 compatibility provider.",
+			"Using EasyProxy compatibility provider.",
 			"Only effective local runtime nodes are eligible.",
+			"External task reports reduce availability score for failing routes.",
 		},
 	}
 }
@@ -1005,9 +1013,9 @@ func (s *Server) resolveProxyCompatRuntime(r *http.Request) proxyCompatRuntime {
 
 	host := inferCompatRequestHost(r, s.cfg.ExternalIP)
 	scheme := inferCompatRequestScheme(r)
-	refScheme := "easy-proxies"
+	refScheme := "easy-proxy"
 	if scheme == "https" {
-		refScheme = "easy-proxies-ssl"
+		refScheme = "easy-proxy-ssl"
 	}
 	return proxyCompatRuntime{
 		SharedHost:          host,
@@ -1021,11 +1029,53 @@ func (s *Server) resolveProxyCompatRuntime(r *http.Request) proxyCompatRuntime {
 		ManagementPort:      managementPort,
 		ConnectionRef:       fmt.Sprintf("%s://%s:%d", refScheme, host, managementPort),
 		ManagementURL:       fmt.Sprintf("%s://%s:%d", scheme, host, managementPort),
-		ProviderInstanceID:  "easyproxiesv2-default",
-		ProviderDisplayName: "EasyProxiesV2 Default Instance",
+		ProviderInstanceID:  "easyproxy-default",
+		ProviderDisplayName: "EasyProxy Default Instance",
 		CreatedAt:           createdAt,
 		UpdatedAt:           time.Now().Format(time.RFC3339),
 	}
+}
+
+func (s *Server) applyProxyCompatUsageFeedback(selectedNodeTag, hostID string, report proxyCompatUsageReport) {
+	trimmedTag := strings.TrimSpace(selectedNodeTag)
+	if trimmedTag == "" {
+		return
+	}
+
+	nodeEntry, err := s.mgr.entry(trimmedTag)
+	if err != nil {
+		return
+	}
+
+	destination := strings.TrimSpace(hostID)
+	if destination == "" {
+		destination = "compat-report"
+	}
+
+	if report.Success {
+		nodeEntry.recordSuccess(destination)
+		nodeEntry.applyUsageReportSuccess()
+		return
+	}
+
+	errMessage := strings.TrimSpace(report.ErrorCode)
+	if errMessage == "" {
+		errMessage = "task reported proxy route failure"
+	}
+
+	nodeEntry.recordFailure(errors.New(errMessage), destination)
+	nodeEntry.applyUsageReportFailure()
+}
+
+func proxyCompatAverageAvailabilityScore(nodes []Snapshot) int {
+	if len(nodes) == 0 {
+		return 0
+	}
+	total := 0
+	for _, node := range nodes {
+		total += node.AvailabilityScore
+	}
+	return total / len(nodes)
 }
 
 func inferCompatRequestScheme(r *http.Request) string {

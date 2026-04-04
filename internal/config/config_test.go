@@ -31,4 +31,7 @@ func TestApplyDefaultsSetsCloudflareProbeTarget(t *testing.T) {
 	if cfg.Management.ProbeTarget != "https://www.google.com/generate_204" {
 		t.Fatalf("unexpected default probe target: %q", cfg.Management.ProbeTarget)
 	}
+	if cfg.Pool.Mode != "auto" {
+		t.Fatalf("unexpected default pool mode: %q", cfg.Pool.Mode)
+	}
 }

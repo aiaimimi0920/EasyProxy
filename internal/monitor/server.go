@@ -412,7 +412,7 @@ func (s *Server) updateAllSettings(req allSettingsRequest) error {
 	// Validate request before applying
 	if err := config.ValidateSettingsRequest(
 		req.Mode, req.ListenerPort, req.MultiPortBasePort,
-		req.ListenerProtocol, req.MultiPortProtocol,
+		req.ListenerProtocol, req.MultiPortProtocol, req.PoolMode,
 		req.PoolBlacklistDuration, req.SubRefreshInterval, req.SubRefreshTimeout,
 		req.SubRefreshHealthCheckTimeout, req.SubRefreshDrainTimeout,
 		req.SourceSyncRefreshInterval, req.SourceSyncRequestTimeout,
@@ -719,7 +719,10 @@ func (s *Server) handleDebug(w http.ResponseWriter, r *http.Request) {
 			"name":               snap.Name,
 			"mode":               snap.Mode,
 			"port":               snap.Port,
+			"availability_score": snap.AvailabilityScore,
 			"failure_count":      snap.FailureCount,
+			"reported_success":   snap.ReportedSuccessCount,
+			"reported_failure":   snap.ReportedFailureCount,
 			"success_count":      snap.SuccessCount,
 			"active_connections": snap.ActiveConnections,
 			"last_latency_ms":    snap.LastLatencyMs,

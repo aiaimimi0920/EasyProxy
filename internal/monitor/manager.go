@@ -54,23 +54,29 @@ const maxTimelineSize = 20
 // Snapshot is a runtime view of a proxy node.
 type Snapshot struct {
 	NodeInfo
-	FailureCount      int             `json:"failure_count"`
-	SuccessCount      int64           `json:"success_count"`
-	Blacklisted       bool            `json:"blacklisted"`
-	BlacklistedUntil  time.Time       `json:"blacklisted_until"`
-	ActiveConnections int32           `json:"active_connections"`
-	LastError         string          `json:"last_error,omitempty"`
-	LastFailure       time.Time       `json:"last_failure,omitempty"`
-	LastSuccess       time.Time       `json:"last_success,omitempty"`
-	LastProbeLatency  time.Duration   `json:"last_probe_latency,omitempty"`
-	LastLatencyMs     int64           `json:"last_latency_ms"`
-	Available         bool            `json:"available"`
-	InitialCheckDone  bool            `json:"initial_check_done"`
-	TotalUpload       int64           `json:"total_upload"`
-	TotalDownload     int64           `json:"total_download"`
-	UploadSpeed       int64           `json:"upload_speed"`   // bytes/sec
-	DownloadSpeed     int64           `json:"download_speed"` // bytes/sec
-	Timeline          []TimelineEvent `json:"timeline,omitempty"`
+	FailureCount              int             `json:"failure_count"`
+	SuccessCount              int64           `json:"success_count"`
+	Blacklisted               bool            `json:"blacklisted"`
+	BlacklistedUntil          time.Time       `json:"blacklisted_until"`
+	AvailabilityScore         int             `json:"availability_score"`
+	ReportedSuccessCount      int64           `json:"reported_success_count"`
+	ReportedFailureCount      int64           `json:"reported_failure_count"`
+	ConsecutiveReportFailures int             `json:"consecutive_report_failures"`
+	ActiveConnections         int32           `json:"active_connections"`
+	LastError                 string          `json:"last_error,omitempty"`
+	LastFailure               time.Time       `json:"last_failure,omitempty"`
+	LastSuccess               time.Time       `json:"last_success,omitempty"`
+	LastReportedAt            time.Time       `json:"last_reported_at,omitempty"`
+	LastReportedSuccess       bool            `json:"last_reported_success"`
+	LastProbeLatency          time.Duration   `json:"last_probe_latency,omitempty"`
+	LastLatencyMs             int64           `json:"last_latency_ms"`
+	Available                 bool            `json:"available"`
+	InitialCheckDone          bool            `json:"initial_check_done"`
+	TotalUpload               int64           `json:"total_upload"`
+	TotalDownload             int64           `json:"total_download"`
+	UploadSpeed               int64           `json:"upload_speed"`   // bytes/sec
+	DownloadSpeed             int64           `json:"download_speed"` // bytes/sec
+	Timeline                  []TimelineEvent `json:"timeline,omitempty"`
 }
 
 type NodeTrafficSpeed struct {
@@ -102,6 +108,12 @@ type entry struct {
 	info             NodeInfo
 	failure          int
 	success          int64
+	reportSuccess    int64
+	reportFailure    int64
+	reportFailures   int
+	feedbackPenalty  int
+	lastReportedAt   time.Time
+	lastReportOK     bool
 	timeline         []TimelineEvent
 	blacklist        bool
 	until            time.Time
@@ -683,25 +695,60 @@ func (e *entry) snapshot() Snapshot {
 	}
 
 	return Snapshot{
-		NodeInfo:          e.info,
-		FailureCount:      e.failure,
-		SuccessCount:      e.success,
-		Blacklisted:       e.blacklist,
-		BlacklistedUntil:  e.until,
-		ActiveConnections: e.active.Load(),
-		LastError:         e.lastError,
-		LastFailure:       e.lastFail,
-		LastSuccess:       e.lastOK,
-		LastProbeLatency:  e.lastProbe,
-		LastLatencyMs:     latencyMs,
-		Available:         e.available,
-		InitialCheckDone:  e.initialCheckDone,
-		TotalUpload:       e.totalUpload.Load(),
-		TotalDownload:     e.totalDownload.Load(),
-		UploadSpeed:       e.uploadSpeed,
-		DownloadSpeed:     e.downloadSpeed,
-		Timeline:          timelineCopy,
+		NodeInfo:                  e.info,
+		FailureCount:              e.failure,
+		SuccessCount:              e.success,
+		Blacklisted:               e.blacklist,
+		BlacklistedUntil:          e.until,
+		AvailabilityScore:         e.availabilityScoreLocked(),
+		ReportedSuccessCount:      e.reportSuccess,
+		ReportedFailureCount:      e.reportFailure,
+		ConsecutiveReportFailures: e.reportFailures,
+		ActiveConnections:         e.active.Load(),
+		LastError:                 e.lastError,
+		LastFailure:               e.lastFail,
+		LastSuccess:               e.lastOK,
+		LastReportedAt:            e.lastReportedAt,
+		LastReportedSuccess:       e.lastReportOK,
+		LastProbeLatency:          e.lastProbe,
+		LastLatencyMs:             latencyMs,
+		Available:                 e.available,
+		InitialCheckDone:          e.initialCheckDone,
+		TotalUpload:               e.totalUpload.Load(),
+		TotalDownload:             e.totalDownload.Load(),
+		UploadSpeed:               e.uploadSpeed,
+		DownloadSpeed:             e.downloadSpeed,
+		Timeline:                  timelineCopy,
 	}
+}
+
+func (e *entry) availabilityScoreLocked() int {
+	const (
+		baseScore            = 100
+		maxPenalty           = 80
+		unhealthyScoreCap    = 20
+		blacklistedScoreCap  = 5
+		minAvailabilityScore = 1
+	)
+
+	penalty := e.feedbackPenalty
+	if penalty < 0 {
+		penalty = 0
+	} else if penalty > maxPenalty {
+		penalty = maxPenalty
+	}
+
+	score := baseScore - penalty
+	if e.initialCheckDone && !e.available && score > unhealthyScoreCap {
+		score = unhealthyScoreCap
+	}
+	if e.blacklist && score > blacklistedScoreCap {
+		score = blacklistedScoreCap
+	}
+	if score < minAvailabilityScore {
+		score = minAvailabilityScore
+	}
+	return score
 }
 
 func (e *entry) recordFailure(err error, destination string) {
@@ -797,6 +844,35 @@ func (e *entry) recordProbeLatency(d time.Duration) {
 	e.mu.Lock()
 	e.lastProbe = d
 	e.mu.Unlock()
+}
+
+func (e *entry) applyUsageReportSuccess() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.reportSuccess++
+	e.reportFailures = 0
+	e.lastReportedAt = time.Now()
+	e.lastReportOK = true
+	if e.feedbackPenalty >= 5 {
+		e.feedbackPenalty -= 5
+	} else {
+		e.feedbackPenalty = 0
+	}
+}
+
+func (e *entry) applyUsageReportFailure() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.reportFailure++
+	e.reportFailures++
+	e.lastReportedAt = time.Now()
+	e.lastReportOK = false
+	e.feedbackPenalty += 15
+	if e.feedbackPenalty > 80 {
+		e.feedbackPenalty = 80
+	}
 }
 
 func (e *entry) updateTrafficSpeed(now time.Time) {
@@ -949,4 +1025,30 @@ func (h *EntryHandle) SetTraffic(upload, download int64) {
 	}
 	h.ref.totalUpload.Store(upload)
 	h.ref.totalDownload.Store(download)
+}
+
+// ApplyUsageReportSuccess updates the external task-feedback score after a
+// successful business request routed through this node.
+func (h *EntryHandle) ApplyUsageReportSuccess() {
+	if h == nil || h.ref == nil {
+		return
+	}
+	h.ref.applyUsageReportSuccess()
+}
+
+// ApplyUsageReportFailure updates the external task-feedback score after a
+// failed business request routed through this node.
+func (h *EntryHandle) ApplyUsageReportFailure() {
+	if h == nil || h.ref == nil {
+		return
+	}
+	h.ref.applyUsageReportFailure()
+}
+
+// Snapshot returns a point-in-time copy of the node state.
+func (h *EntryHandle) Snapshot() Snapshot {
+	if h == nil || h.ref == nil {
+		return Snapshot{}
+	}
+	return h.ref.snapshot()
 }
