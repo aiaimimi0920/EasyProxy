@@ -230,6 +230,8 @@ Without local Docker, you can publish from GitHub Actions in two ways:
    - `both`
    - `easyproxy`
    - `ech-workers`
+   - `linux/amd64`
+   - `linux/amd64,linux/arm64`
 
 The workflow publishes to:
 

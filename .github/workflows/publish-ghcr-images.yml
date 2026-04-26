@@ -24,7 +24,10 @@ name: Publish GHCR Images
         description: Target build platforms
         required: false
         default: linux/amd64
-        type: string
+        type: choice
+        options:
+          - linux/amd64
+          - linux/amd64,linux/arm64
 
 permissions:
   contents: read
@@ -96,6 +99,8 @@ jobs:
           push: true
           tags: ${{ steps.meta_service.outputs.tags }}
           labels: ${{ steps.meta_service.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Extract metadata for ech-workers image
         if: steps.prep.outputs.target == 'both' || steps.prep.outputs.target == 'ech-workers'
@@ -116,6 +121,8 @@ jobs:
           push: true
           tags: ${{ steps.meta_worker.outputs.tags }}
           labels: ${{ steps.meta_worker.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Job summary
         shell: bash

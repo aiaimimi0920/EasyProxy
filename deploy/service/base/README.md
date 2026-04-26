@@ -275,6 +275,7 @@ GitHub Actions workflow:
     - `v*`
   - manual dispatch:
     - target `both`, `easyproxy`, or `ech-workers`
+    - platforms `linux/amd64` or `linux/amd64,linux/arm64`
   - publishes the service image without requiring a local Docker daemon on the
     operator machine
 
