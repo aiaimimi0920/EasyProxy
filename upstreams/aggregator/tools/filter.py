@@ -230,13 +230,22 @@ def batch(func: typing.Callable, params: list) -> list:
     num = len(params) if len(params) <= cpu_count else cpu_count
 
     pool = multiprocessing.Pool(num)
-    if type(params[0]) == list or type(params[0]) == tuple:
-        results = pool.starmap(func, params)
-    else:
-        results = pool.map(func, params)
-    pool.close()
-
-    return results
+    try:
+        if type(params[0]) == list or type(params[0]) == tuple:
+            results = pool.starmap(func, params)
+        else:
+            results = pool.map(func, params)
+        pool.close()
+        pool.join()
+        return results
+    except KeyboardInterrupt:
+        pool.terminate()
+        pool.join()
+        raise
+    except Exception:
+        pool.terminate()
+        pool.join()
+        raise
 
 
 def process(

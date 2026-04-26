@@ -290,8 +290,7 @@ def load_mmdb(
 ) -> database.Reader:
     filepath = os.path.join(directory, filename)
     if update or not os.path.exists(filepath) or not os.path.isfile(filepath):
-        if not download_mmdb(repo, filename, directory):
-            return None
+        download_mmdb(repo, filename, directory)
 
     return database.Reader(filepath)
 

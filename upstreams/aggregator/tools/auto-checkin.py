@@ -231,9 +231,8 @@ def main():
     cpu_count = multiprocessing.cpu_count()
     num = len(params) if len(params) <= cpu_count else cpu_count
 
-    pool = multiprocessing.Pool(num)
-    pool.map(wrapper, params)
-    pool.close()
+    with multiprocessing.Pool(num, maxtasksperchild=100) as pool:
+        pool.map(wrapper, params)
 
 
 if __name__ == "__main__":

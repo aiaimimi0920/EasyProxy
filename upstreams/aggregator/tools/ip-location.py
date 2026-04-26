@@ -117,12 +117,13 @@ def download_mmdb(target: str, filepath: str, retry: int = 3):
         raise Exception("no download url found in github release")
 
     download(download_url, filepath, target, retry, 60)
+    return True
 
 
 def download(url: str, filepath: str, filename: str, retry: int = 3, timeout: int = 10) -> None:
     """Download file from url to filepath with filename"""
 
-    if retry < 0:
+    if retry <= 0:
         raise Exception("archieved max retry count for download")
 
     url = trim(url)
@@ -144,19 +145,26 @@ def download(url: str, filepath: str, filename: str, retry: int = 3, timeout: in
     if os.path.exists(fullpath) and os.path.isfile(fullpath):
         os.remove(fullpath)
 
-    # download target file from github release to fullpath
     timeout = max(timeout, 6)
-    try:
-        with requests.get(url, stream=True, timeout=timeout) as r:
-            r.raise_for_status()
-            with open(fullpath, "wb") as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    f.write(chunk)
-                    f.flush()
-    except Exception:
-        return download(url, filepath, filename, retry - 1, min(timeout * 2, 180))
+    last_error = None
+    for attempt in range(retry):
+        try:
+            # download target file from github release to fullpath
+            with requests.get(url, stream=True, timeout=timeout) as r:
+                r.raise_for_status()
+                with open(fullpath, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                        f.flush()
+            print(f"download file {filename} to {fullpath} success")
+            return
+        except Exception as error:
+            last_error = error
+            timeout = min(timeout * 2, 180)
+            if attempt >= retry - 1:
+                break
 
-    print(f"download file {filename} to {fullpath} success")
+    raise Exception(f"failed to download {filename} from {url}: {last_error}")
 
 
 def load_mmdb(directory: str, filename: str, update: bool = False) -> None:
