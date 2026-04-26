@@ -15,8 +15,6 @@ $content = Get-Content -LiteralPath $resolvedConfigPath -Raw -Encoding UTF8
 $bytes = [System.Text.Encoding]::UTF8.GetBytes($content)
 $encoded = [Convert]::ToBase64String($bytes)
 
-if ($NoNewline) {
-    Write-Host -NoNewline $encoded
-} else {
-    Write-Output $encoded
-}
+# Emit through the success pipeline so callers can safely capture the result
+# from the current PowerShell session as well as from a child process.
+Write-Output $encoded
