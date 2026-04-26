@@ -236,6 +236,8 @@ The workflow publishes to:
 - `ghcr.io/<repository-owner>/easy-proxy-monorepo-service:<release-tag>`
 - `ghcr.io/<repository-owner>/ech-workers-monorepo:<release-tag>`
 
+For local PowerShell publishing, set `ghcr.owner` in [config.example.yaml](/C:/Users/Public/nas_home/AI/GameEditor/EasyProxy/config.example.yaml) after copying it to `config.yaml`, or pass `-GhcrOwner` explicitly. The local publish script now fails closed when the config file is missing or the owner still uses a placeholder value.
+
 Supported `-Project` values:
 
 - `easyproxy`

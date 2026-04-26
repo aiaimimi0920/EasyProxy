@@ -281,6 +281,11 @@ GitHub Actions workflow:
 The publish helper now prefers the current machine Docker login state and only
 attempts an explicit `docker login` when credentials were supplied.
 
+The root GHCR publish wrapper now fails closed when:
+
+- `config.yaml` is missing and no explicit `-GhcrOwner` was provided
+- `ghcr.owner` still contains a placeholder value such as `your-github-owner`
+
 Local Docker API smoke:
 
 ```powershell

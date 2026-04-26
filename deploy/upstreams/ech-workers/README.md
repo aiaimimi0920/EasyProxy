@@ -53,3 +53,7 @@ GitHub-hosted publish path:
   - push tag `release-*` or `v*`
   - or run `Publish GHCR Images` manually from the Actions tab with target
     `ech-workers`
+
+The manual GitHub Actions workflow now initializes QEMU before Buildx, so the
+`platforms` input can safely be used for non-native targets such as
+`linux/arm64` or combined multi-platform publishes.

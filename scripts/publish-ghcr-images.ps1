@@ -20,7 +20,7 @@ $ErrorActionPreference = "Stop"
 Assert-EasyProxyCommand -Name "docker" -Hint "Install Docker Desktop or another Docker engine first."
 Assert-EasyProxyCommand -Name "git" -Hint "Install Git first."
 
-function Resolve-OptionalConfigPath {
+function Resolve-ConfigMetadata {
     param([Parameter(Mandatory = $true)][string]$PreferredPath)
 
     $repoRoot = Get-EasyProxyRepoRoot
@@ -31,16 +31,32 @@ function Resolve-OptionalConfigPath {
     }
 
     if (Test-Path -LiteralPath $preferredResolved) {
-        return (Resolve-Path -LiteralPath $preferredResolved).Path
+        return [pscustomobject]@{
+            Path   = (Resolve-Path -LiteralPath $preferredResolved).Path
+            Exists = $true
+        }
     }
 
-    $templatePath = Join-Path $repoRoot 'config.example.yaml'
-    if (Test-Path -LiteralPath $templatePath) {
-        Write-Host "Config file not found, using config.example.yaml defaults for GHCR publishing metadata." -ForegroundColor Yellow
-        return $templatePath
+    return [pscustomobject]@{
+        Path   = $preferredResolved
+        Exists = $false
+    }
+}
+
+function Assert-GhcrOwnerIsSafe {
+    param(
+        [Parameter(Mandatory = $true)][string]$Owner,
+        [string]$SourceDescription = "GHCR owner"
+    )
+
+    $normalized = $Owner.Trim()
+    if ([string]::IsNullOrWhiteSpace($normalized)) {
+        throw "$SourceDescription is empty. Set ghcr.owner in config.yaml or pass -GhcrOwner explicitly."
     }
 
-    throw "Neither $preferredResolved nor config.example.yaml exists."
+    if ($normalized -match '^(your-github-owner|change_me.*|.*placeholder.*)$') {
+        throw "$SourceDescription still uses a placeholder value: $normalized"
+    }
 }
 
 function New-DefaultReleaseTag {
@@ -52,13 +68,26 @@ function New-DefaultReleaseTag {
     return ("release-{0}-{1}" -f (Get-Date -Format 'yyyyMMdd-HHmmss'), $shortSha)
 }
 
-$resolvedConfigPath = Resolve-OptionalConfigPath -PreferredPath $ConfigPath
-$config = Read-EasyProxyConfig -ConfigPath $resolvedConfigPath
+$configMetadata = Resolve-ConfigMetadata -PreferredPath $ConfigPath
+$config = [pscustomobject]@{}
+
+if ($configMetadata.Exists) {
+    $config = Read-EasyProxyConfig -ConfigPath $configMetadata.Path
+}
+elseif ([string]::IsNullOrWhiteSpace($GhcrOwner)) {
+    throw "Config file not found: $($configMetadata.Path). Create config.yaml first or pass -GhcrOwner explicitly."
+}
+else {
+    Write-Host "Config file not found, using built-in GHCR defaults with the explicit -GhcrOwner value." -ForegroundColor Yellow
+}
+
 $ghcr = Get-EasyProxyConfigSection -Config $config -Name 'ghcr'
 
 if ([string]::IsNullOrWhiteSpace($GhcrOwner)) {
-    $GhcrOwner = [string](Get-EasyProxyConfigValue -Object $ghcr -Name 'owner' -Default 'aiaimimi0920')
+    $GhcrOwner = [string](Get-EasyProxyConfigValue -Object $ghcr -Name 'owner' -Default '')
 }
+
+Assert-GhcrOwnerIsSafe -Owner $GhcrOwner -SourceDescription "GHCR owner"
 
 if ([string]::IsNullOrWhiteSpace($Platform)) {
     $Platform = [string](Get-EasyProxyConfigValue -Object $ghcr -Name 'platform' -Default 'linux/amd64')
