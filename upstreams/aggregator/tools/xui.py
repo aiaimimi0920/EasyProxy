@@ -241,6 +241,7 @@ def download_mmdb(repo: str, target: str, filepath: str, retry: int = 3):
         raise Exception("no download url found in github release")
 
     download(download_url, filepath, target, retry)
+    return True
 
 
 def download(url: str, filepath: str, filename: str, retry: int = 3) -> None:
