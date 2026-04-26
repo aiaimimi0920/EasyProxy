@@ -28,6 +28,8 @@ Current deployed instance:
 - legacy direct-upload project `misub` deleted on `2026-03-26`
 - local deployment config file:
   - `upstreams/misub/wrangler.jsonc`
+- reference-only manual Pages sample:
+  - `upstreams/misub/wrangler-cf-pages.toml`
 
 Local Docker/VPS coexistence default in this monorepo:
 
@@ -112,6 +114,8 @@ Behavior notes:
   by the normal admin session
 - `/cron-dashboard` is a lightweight operator page that consumes the two
   authenticated `/api/cron/*` endpoints with the current browser session
+- the dashboard setup guide lives at:
+  - `upstreams/misub/docs/CRON_DASHBOARD_GUIDE.md`
 
 ## Docker / VPS Compatibility Path
 

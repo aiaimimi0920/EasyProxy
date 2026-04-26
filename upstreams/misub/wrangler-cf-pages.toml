@@ -1,0 +1,36 @@
+name = "misub"
+compatibility_date = "2026-03-25"
+pages_build_output_dir = "dist"
+
+# Reference-only Cloudflare Pages sample.
+# The monorepo deploy scripts use `upstreams/misub/wrangler.jsonc`.
+# Keep this file as a manual Pages setup example for public users.
+
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+MISUB_PUBLIC_URL = "https://your-domain.pages.dev"
+MISUB_CALLBACK_URL = "https://your-domain.pages.dev"
+
+[env.production.vars]
+ENVIRONMENT = "production"
+LOG_LEVEL = "info"
+
+# Optional cron runtime tuning. The actual secret stays in MiSub settings as
+# `cronSecret`, and external schedulers still call `/cron?secret=...`.
+CRON_TYPE = "secret-http-trigger"
+CRON_MAX_SYNC_COUNT = "50"
+CRON_SYNC_TIMEOUT = "30000"
+CRON_ENABLE_PARALLEL = "true"
+
+# Bind these in the Cloudflare Pages dashboard instead of hardcoding them:
+# - MISUB_DB
+# - MISUB_KV (optional)
+# - MANIFEST_TOKEN
+# - ADMIN_PASSWORD
+# - COOKIE_SECRET
+# - CORS_ORIGINS (optional)
+#
+# If you want native Pages Cron Triggers later, add them in the dashboard or
+# in a separate deployment-specific config. The current monorepo contract keeps
+# `/cron?secret=...` as the stable external scheduler entrypoint.
