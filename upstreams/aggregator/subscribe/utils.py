@@ -88,77 +88,86 @@ def http_get(
     timeout = max(1, timeout)
     length = None if max_size is None or max_size <= 0 else max_size
 
-    try:
-        url = encoding_url(url=url)
-        if params and isinstance(params, dict):
-            data = urllib.parse.urlencode(params)
-            if "?" in url:
-                url += f"&{data}"
-            else:
-                url += f"?{data}"
-
-        request = urllib.request.Request(url=url, headers=headers)
-        if proxy and (proxy.startswith("https://") or proxy.startswith("http://")):
-            host, protocal = "", ""
-            if proxy.startswith("https://"):
-                host, protocal = proxy[8:], "https"
-            else:
-                host, protocal = proxy[7:], "http"
-            request.set_proxy(host=host, type=protocal)
-
-        response = urllib.request.urlopen(request, timeout=timeout, context=CTX)
-        content = response.read(length)
-        status_code = response.getcode()
-        try:
-            content = str(content, encoding="utf8")
-        except:
-            content = gzip.decompress(content).decode("utf8")
-        if status_code != 200:
-            if trace:
-                logger.error(f"request failed, url: {hide(url)}, code: {status_code}, message: {content}")
-
-            return ""
-
-        return content
-    except urllib.error.URLError as e:
-        if isinstance(e.reason, (socket.timeout, ssl.SSLError)):
-            time.sleep(interval)
-            return http_get(
-                url=url,
-                headers=headers,
-                params=params,
-                retry=retry - 1,
-                proxy=proxy,
-                interval=interval,
-                timeout=timeout,
-                max_size=length,
-            )
+    url = encoding_url(url=url)
+    if params and isinstance(params, dict):
+        data = urllib.parse.urlencode(params)
+        if "?" in url:
+            url += f"&{data}"
         else:
-            return ""
-    except Exception as e:
-        if trace:
-            logger.error(f"request failed, url: {hide(url)}, message: \n{traceback.format_exc()}")
+            url += f"?{data}"
 
-        if isinstance(e, urllib.error.HTTPError):
+    def _decode_body(response_body: bytes, response_headers) -> str:
+        if response_body is None:
+            return ""
+
+        encoding = ""
+        try:
+            encoding = trim(response_headers.get("Content-Encoding", "")).lower()
+        except Exception:
+            encoding = ""
+
+        if "gzip" in encoding:
             try:
-                message = str(e.read(), encoding="utf8")
-            except:
+                return gzip.decompress(response_body).decode("utf8")
+            except Exception:
+                pass
+
+        try:
+            return response_body.decode("utf8")
+        except Exception:
+            try:
+                return gzip.decompress(response_body).decode("utf8")
+            except Exception:
+                return response_body.decode("utf8", errors="replace")
+
+    last_error = None
+    for attempt in range(retry):
+        try:
+            request = urllib.request.Request(url=url, headers=headers)
+            if proxy and (proxy.startswith("https://") or proxy.startswith("http://")):
+                host, protocal = "", ""
+                if proxy.startswith("https://"):
+                    host, protocal = proxy[8:], "https"
+                else:
+                    host, protocal = proxy[7:], "http"
+                request.set_proxy(host=host, type=protocal)
+
+            response = urllib.request.urlopen(request, timeout=timeout, context=CTX)
+            status_code = response.getcode()
+            content = _decode_body(response.read(length), response.headers)
+            if status_code != 200:
+                if trace:
+                    logger.error(f"request failed, url: {hide(url)}, code: {status_code}, message: {content}")
+                return ""
+
+            return content
+        except urllib.error.HTTPError as e:
+            last_error = e
+            if trace:
+                logger.error(f"request failed, url: {hide(url)}, code: {getattr(e, 'code', '')}, message: \n{traceback.format_exc()}")
+
+            try:
+                message = _decode_body(e.read(), e.headers)
+            except Exception:
                 message = "unknown error"
 
             if e.code != 503 or "token" in message:
                 return ""
+        except urllib.error.URLError as e:
+            last_error = e
+            if not isinstance(e.reason, (socket.timeout, ssl.SSLError)):
+                return ""
+        except Exception as e:
+            last_error = e
+            if trace:
+                logger.error(f"request failed, url: {hide(url)}, message: \n{traceback.format_exc()}")
 
-        time.sleep(interval)
-        return http_get(
-            url=url,
-            headers=headers,
-            params=params,
-            retry=retry - 1,
-            proxy=proxy,
-            interval=interval,
-            timeout=timeout,
-            max_size=length,
-        )
+        if attempt < retry - 1:
+            time.sleep(interval)
+
+    if trace and last_error is not None:
+        logger.error(f"request failed after retries, url: {hide(url)}, message: {last_error}")
+    return ""
 
 
 def extract_domain(url: str, include_protocal: bool = False) -> str:
@@ -419,7 +428,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 def http_post(
     url: str,
     headers: dict = None,
-    params: dict = {},
+    params: dict = None,
     retry: int = 3,
     timeout: float = 6,
     allow_redirects: bool = True,
@@ -427,29 +436,31 @@ def http_post(
     if params is None or type(params) != dict or retry <= 0:
         return None
 
-    timeout, retry = max(timeout, 1), retry - 1
+    timeout = max(timeout, 1)
     if not headers:
         headers = {
             "User-Agent": USER_AGENT,
             "Content-Type": "application/json",
         }
-    try:
-        data = json.dumps(params).encode(encoding="UTF8")
-        request = urllib.request.Request(url=url, data=data, headers=headers, method="POST")
-        if allow_redirects:
-            return urllib.request.urlopen(request, timeout=timeout, context=CTX)
+    data = json.dumps(params).encode(encoding="UTF8")
 
-        opener = urllib.request.build_opener(NoRedirect)
-        return opener.open(request, timeout=timeout)
-    except Exception:
-        time.sleep(random.random())
-        return http_post(
-            url=url,
-            headers=headers,
-            params=params,
-            retry=retry,
-            allow_redirects=allow_redirects,
-        )
+    last_error = None
+    for attempt in range(retry):
+        try:
+            request = urllib.request.Request(url=url, data=data, headers=headers, method="POST")
+            if allow_redirects:
+                return urllib.request.urlopen(request, timeout=timeout, context=CTX)
+
+            opener = urllib.request.build_opener(NoRedirect)
+            return opener.open(request, timeout=timeout)
+        except Exception as error:
+            last_error = error
+            if attempt < retry - 1:
+                time.sleep(random.random())
+
+    if last_error is not None:
+        logger.error(f"[HttpPost] failed after retries, url: {hide(url)}, message: {last_error}")
+    return None
 
 
 def verify_uuid(text: str) -> bool:
