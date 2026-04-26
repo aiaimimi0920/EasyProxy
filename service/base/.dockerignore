@@ -1,0 +1,15 @@
+.git
+.github
+.kilocode
+Dockerfile
+docker-compose.yml
+start.sh
+config.yaml
+config*.yml
+*.md
+data
+bin
+docs
+plans
+**/node_modules
+frontend/node_modules

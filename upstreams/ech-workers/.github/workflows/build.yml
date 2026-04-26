@@ -1,0 +1,152 @@
+name: Build Go Binary
+
+on:
+  push:
+    tags: ['v*'] 
+  workflow_dispatch:
+
+jobs:
+  build-cross:
+    runs-on: ubuntu-latest
+    # 条件执行：仅在标签发布或手工触发时运行
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    
+    strategy:
+      matrix:
+        include:
+          # Darwin (macOS)
+          - os: darwin
+            arch: amd64
+            output: ech-darwin-amd64
+          - os: darwin
+            arch: arm64
+            output: ech-darwin-arm64
+          
+          # Linux
+          - os: linux
+            arch: 386
+            output: ech-linux-386
+          - os: linux
+            arch: amd64
+            output: ech-linux-amd64
+          - os: linux
+            arch: arm64
+            output: ech-linux-arm64
+          - os: linux
+            arch: arm
+            arm_version: 5
+            output: ech-linux-armv5
+          - os: linux
+            arch: arm
+            arm_version: 6
+            output: ech-linux-armv6
+          - os: linux
+            arch: arm
+            arm_version: 7
+            output: ech-linux-armv7
+          - os: linux
+            arch: mips64
+            output: ech-linux-mips64
+          - os: linux
+            arch: mips64le
+            output: ech-linux-mips64le
+          - os: linux
+            arch: mips
+            mipsfloat: hardfloat
+            output: ech-linux-mips-hardfloat
+          - os: linux
+            arch: mipsle
+            mipsfloat: hardfloat
+            output: ech-linux-mipsle-hardfloat
+          - os: linux
+            arch: ppc64
+            output: ech-linux-ppc64
+          - os: linux
+            arch: ppc64le
+            output: ech-linux-ppc64le
+          - os: linux
+            arch: riscv64
+            output: ech-linux-riscv64
+          - os: linux
+            arch: s390x
+            output: ech-linux-s390x
+          
+          # Windows
+          - os: windows
+            arch: 386
+            output: ech-windows-386.exe
+          - os: windows
+            arch: amd64
+            output: ech-windows-amd64.exe
+          - os: windows
+            arch: arm
+            output: ech-windows-arm.exe
+          - os: windows
+            arch: arm64
+            output: ech-windows-arm64.exe
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+        cache: false
+
+    - name: Build binary
+      run: |
+        # 设置环境变量
+        export GOOS=${{ matrix.os }}
+        export GOARCH=${{ matrix.arch }}
+        
+        # 特殊处理 ARM 版本
+        if [[ "${{ matrix.os }}" == "linux" && "${{ matrix.arch }}" == "arm" ]]; then
+          export GOARM=${{ matrix.arm_version }}
+        fi
+        
+        # 特殊处理 MIPS 硬浮点
+        if [[ "${{ matrix.os }}" == "linux" && ("${{ matrix.arch }}" == "mips" || "${{ matrix.arch }}" == "mipsle") && "${{ matrix.mipsfloat }}" == "hardfloat" ]]; then
+          export GOMIPS=${{ matrix.mipsfloat }}
+        fi
+        
+        # 构建命令
+        echo "Building for $GOOS/$GOARCH -> ${{ matrix.output }}"
+        
+        if [[ "${{ matrix.os }}" == "windows" ]]; then
+          go build -trimpath -ldflags="-s -w" -o "${{ matrix.output }}" main.go
+        else
+          go build -trimpath -ldflags="-s -w" -o "${{ matrix.output }}" main.go
+          chmod +x "${{ matrix.output }}"
+        fi
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.output }}
+        path: ${{ matrix.output }}
+
+  release:
+    needs: [build-cross]
+    runs-on: ubuntu-latest
+    # 只在创建 v 开头的标签时创建发布
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - name: List downloaded files
+      run: find artifacts -type f
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          artifacts/**/*
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

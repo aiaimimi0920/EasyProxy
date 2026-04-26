@@ -1,0 +1,36 @@
+services:
+  easy-proxy-monorepo:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: easy-proxy-monorepo:latest
+    container_name: easy-proxy-monorepo
+    restart: unless-stopped
+    # 方式一：使用主机网络模式（推荐，支持端口自动重分配）
+    network_mode: host
+    # 方式二：手动映射端口（注释掉 network_mode，启用下面的 ports）
+    # ports:
+    #   # Pool 模式入口（pool/hybrid 模式使用）
+    #   - "22323:22323"
+    #   # Web 监控面板
+    #   - "29888:29888"
+    #   # Multi-port 端口范围（multi-port/hybrid 模式使用，根据节点数量调整）
+    #   - "25000-25500:25000-25500"
+    #
+    # 支持的运行模式（在 config.yaml 中配置）：
+    #   - pool: 单端口代理池，所有节点共享 22323 端口
+    #   - multi-port: 多端口模式，每个节点独立端口
+    #   - hybrid: 混合模式，同时启用 pool (22323) + multi-port (25000+)
+    #
+    # hybrid 模式说明：
+    #   - 代理池入口：http://0.0.0.0:22323（自动负载均衡）
+    #   - 独立节点入口：http://0.0.0.0:25000, 25001, ...（直连特定节点）
+    #   - 节点状态在两种入口间共享（黑名单同步）
+    #   - 端口冲突时自动重分配到下一个可用端口
+    volumes:
+      # 配置文件需要可写权限以支持 WebUI 设置保存
+      # 如遇权限问题，请在宿主机执行: chmod 666 config.yaml nodes.txt
+      - ./config.yaml:/etc/easy-proxy/config.yaml
+      - ./nodes.txt:/etc/easy-proxy/nodes.txt
+      # data 目录（存储 SQLite 数据库、节点数据、运行时统计、会话等）
+      - ./data:/etc/easy-proxy/data

@@ -1,0 +1,21 @@
+services:
+  misub-monorepo:
+    image: ghcr.io/imzyb/misub:latest
+    container_name: misub-monorepo
+    ports:
+      - "18080:8080"
+    env_file: .env
+    environment:
+      # 容器内部继续使用 8080，宿主机侧改用 18080，避免撞旧工作区
+      PORT: 8080
+      MISUB_DB_PATH: /app/data/misub.db
+      # CORS_ORIGINS: "https://example.com,http://localhost:5173"
+      ## ⚠️ 使用反向代理时必须设置此项，否则订阅转换的回调 URL 可能错误
+      # MISUB_PUBLIC_URL: "https://your-domain.com"
+      # MISUB_CALLBACK_URL: "https://your-domain.com"
+      ## Docker / VPS 兼容路径继续使用 SQLite；Cloudflare 主路径推荐使用 Pages + D1
+      ## 如需访问使用自签名 TLS 证书的订阅源，取消下行注释
+      # NODE_TLS_REJECT_UNAUTHORIZED: "0"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped

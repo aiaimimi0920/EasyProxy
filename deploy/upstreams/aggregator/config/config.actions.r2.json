@@ -1,0 +1,241 @@
+{
+    "domains": [
+        {
+            "name": "seed-sub",
+            "sub": ["https://bujidao.cc/sub?key=__KEY_PLACEHOLDER__&type=clash_verge"],
+            "domain": "",
+            "enable": false,
+            "rename": "",
+            "include": "",
+            "exclude": "",
+            "push_to": ["public"],
+            "ignorede": true,
+            "liveness": true,
+            "rate": 2.5,
+            "count": 2,
+            "coupon": "",
+            "secure": false,
+            "renew": {
+                "account": [
+                    {
+                        "email": "",
+                        "passwd": "",
+                        "ticket": {
+                            "enable": true,
+                            "autoreset": false,
+                            "subject": "",
+                            "message": "",
+                            "level": 1
+                        }
+                    }
+                ],
+                "plan_id": 3,
+                "package": "",
+                "method": 1,
+                "coupon_code": "",
+                "chatgpt": {
+                    "enable": true,
+                    "regex": "",
+                    "operate": "IN"
+                }
+            }
+        },
+        {
+            "name": "seed-sub-2",
+            "sub": ["https://bujidao.cc/sub?key=__KEY_PLACEHOLDER__&type=clash_verge"],
+            "domain": "",
+            "enable": false,
+            "rename": "",
+            "include": "",
+            "exclude": "",
+            "push_to": ["public"],
+            "ignorede": true,
+            "liveness": true,
+            "rate": 2.5,
+            "count": 2,
+            "coupon": "",
+            "secure": false,
+            "renew": {
+                "account": [
+                    {
+                        "email": "",
+                        "passwd": "",
+                        "ticket": {
+                            "enable": true,
+                            "autoreset": false,
+                            "subject": "",
+                            "message": "",
+                            "level": 1
+                        }
+                    }
+                ],
+                "plan_id": 3,
+                "package": "",
+                "method": 1,
+                "coupon_code": "",
+                "chatgpt": {
+                    "enable": true,
+                    "regex": "",
+                    "operate": "IN"
+                }
+            }
+        },
+        {
+            "name": "seed-sub-zrf-mihomo",
+            "sub": ["https://raw.githubusercontent.com/shaoyouvip/free/main/mihomo.yaml"],
+            "domain": "",
+            "enable": true,
+            "rename": "",
+            "include": "",
+            "exclude": "",
+            "push_to": ["public"],
+            "ignorede": true,
+            "liveness": true,
+            "rate": 2.5,
+            "count": 1,
+            "coupon": "",
+            "secure": false
+        },
+        {
+            "name": "seed-sub-issue91-shared",
+            "sub": ["https://raoku-pm.hf.space/api/v1/subscribe?token=__TOKEN_PLACEHOLDER__&target=clash&list=1"],
+            "domain": "",
+            "enable": true,
+            "rename": "",
+            "include": "",
+            "exclude": "",
+            "push_to": ["public"],
+            "ignorede": true,
+            "liveness": true,
+            "rate": 2.5,
+            "count": 1,
+            "coupon": "",
+            "secure": false
+        }
+    ],
+    "crawl": {
+        "enable": true,
+        "exclude": "",
+        "threshold": 5,
+        "singlelink": true,
+        "persist": {
+            "subs": "crawledsubs",
+            "proxies": "crawledproxies"
+        },
+        "config": {
+            "rename": "",
+            "include": "",
+            "exclude": "",
+            "push_to": ["public"]
+        },
+        "telegram": {
+            "enable": true,
+            "pages": 5,
+            "exclude": "广告|邀请|AFF|返利|机场推荐",
+            "users": {
+                "wxdy666": {
+                    "include": "订阅|subscription|clash|sing-box|singbox|vmess|vless|trojan|ss://|ssr://",
+                    "exclude": "付费|公告|教程|机场推荐",
+                    "config": {
+                        "rename": "TG-{name}"
+                    },
+                    "push_to": ["public"]
+                },
+                "changfengchannel": {
+                    "include": "节点转换|clash|订阅|subscription|vmess|vless|trojan|ss://|ssr://",
+                    "exclude": "付费|公告|教程|机场推荐",
+                    "config": {
+                        "rename": "TG-{name}"
+                    },
+                    "push_to": ["public"]
+                },
+                "wxbyg": {
+                    "include": "订阅|clash|vmess|vless|trojan|ss://|ssr://",
+                    "exclude": "付费|广告|机场推荐",
+                    "config": {
+                        "rename": "TG-{name}"
+                    },
+                    "push_to": ["public"]
+                }
+            }
+        },
+        "google": {
+            "enable": true,
+            "exclude": "",
+            "limits": 100,
+            "notinurl": [],
+            "push_to": ["public"]
+        },
+        "yandex": {
+            "enable": true,
+            "exclude": "",
+            "within": 3,
+            "pages": 5,
+            "notinurl": [],
+            "push_to": ["public"]
+        },
+        "github": {
+            "enable": true,
+            "pages": 3,
+            "push_to": ["public"],
+            "exclude": "测试|教程|备用网址|官网|授权|售后",
+            "spams": []
+        },
+        "twitter": {
+            "enable": false,
+            "users": {}
+        },
+        "repositories": [],
+        "pages": [],
+        "scripts": []
+    },
+    "groups": {
+        "public": {
+            "emoji": true,
+            "list": true,
+            "targets": {
+                "clash": "public-clash",
+                "singbox": "public-singbox",
+                "v2ray": "public-v2ray",
+                "mixed": "public-mixed"
+            },
+            "regularize": {
+                "enable": false,
+                "locate": true,
+                "residential": true,
+                "bits": 2
+            }
+        }
+    },
+    "storage": {
+        "engine": "r2",
+        "base": "",
+        "domain": "",
+        "items": {
+            "public-clash": {
+                "bucket": "aggregator",
+                "key": "subs/clash.yaml"
+            },
+            "public-singbox": {
+                "bucket": "aggregator",
+                "key": "subs/singbox.json"
+            },
+            "public-v2ray": {
+                "bucket": "aggregator",
+                "key": "subs/v2ray.txt"
+            },
+            "public-mixed": {
+                "bucket": "aggregator",
+                "key": "subs/mixed.txt"
+            },
+            "crawledsubs": {
+                "bucket": "aggregator",
+                "key": "internal/crawledsubs.json"
+            },
+            "crawledproxies": {
+                "bucket": "aggregator",
+                "key": "internal/crawledproxies.txt"
+            }
+        }
+    }
+}

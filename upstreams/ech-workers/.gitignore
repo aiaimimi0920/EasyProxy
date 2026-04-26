@@ -1,0 +1,44 @@
+# ========================
+# Go 项目标准 .gitignore
+# ========================
+
+# 二进制可执行文件
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.vbs
+
+# 测试二进制文件
+*.test
+
+# 输出目录
+/dist/
+/out/
+
+# 依赖目录
+/vendor/
+
+# Go 工作区文件
+go.work
+go.work.sum
+
+# Go 模块包缓存
+/pkg/mod/cache/
+
+# 本地配置文件
+.env
+.env.local
+.env.*.local
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
+
+# IDE 配置
+.vscode/
+.idea/
+*.swp
+*.swo
+*~

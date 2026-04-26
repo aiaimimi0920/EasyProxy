@@ -1,0 +1,34 @@
+@import "tailwindcss";
+@plugin "daisyui" {
+  themes: all;
+}
+
+/* Custom Scrollbar Styles */
+@layer utilities {
+  /* For Chrome, Edge, and Safari */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-base-content/10;
+    border-radius: 10px;
+    transition: background 0.2s ease-in-out;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-base-content/30;
+  }
+
+  /* For Firefox */
+  * {
+    scrollbar-width: thin;
+    /* First color is thumb, second is track. Cannot use Tailwind arbitrary opacity syntax in plain CSS easily here without var(), so we fallback to a neutral color, or rely on webkit-scrollbar for webkit browsers which covers most */
+    scrollbar-color: var(--fallback-bc, rgba(128, 128, 128, 0.3)) transparent;
+  }
+}

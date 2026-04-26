@@ -1,0 +1,101 @@
+# EasyProxy monorepo deployment template.
+# This template follows the current EasyProxy config schema.
+# The migrated real runtime config lives in config.yaml (git-ignored).
+# Default ports are intentionally shifted away from the legacy source
+# deployment so both stacks can run side-by-side during migration.
+
+mode: hybrid
+log_level: info
+skip_cert_verify: false
+database_path: /var/lib/easy-proxy/data/data.db
+
+listener:
+  address: 0.0.0.0
+  port: 22323
+  protocol: http
+  username: ""
+  password: ""
+
+pool:
+  mode: auto
+  failure_threshold: 3
+  blacklist_duration: 24h
+
+multi_port:
+  address: 0.0.0.0
+  base_port: 25000
+  protocol: http
+  username: ""
+  password: ""
+
+management:
+  enabled: true
+  listen: 0.0.0.0:29888
+  probe_targets:
+    - "tcp://www.google.com:443"
+    - "tcp://connectivitycheck.gstatic.com:443"
+    - "tcp://www.msftconnecttest.com:443"
+    - "tcp://cp.cloudflare.com:443"
+  password: ""
+
+subscription_refresh:
+  enabled: true
+  interval: 2h0m0s
+  timeout: 30s
+  health_check_timeout: 1m0s
+  drain_timeout: 30s
+  min_available_nodes: 1
+
+source_sync:
+  enabled: true
+  manifest_url: "https://your-misub-domain.example.com/api/manifest/your-profile"
+  manifest_token: ""
+  refresh_interval: 5m0s
+  request_timeout: 15s
+  default_direct_proxy_scheme: http
+  fallback_subscriptions:
+    - "https://sub.aiaimimi.com/subs/clash.yaml"
+  connector_runtime:
+    enabled: true
+    binary_path: "/usr/local/bin/ech-workers"
+    working_directory: "/var/lib/easy-proxy/connectors"
+    listen_host: "127.0.0.1"
+    listen_start_port: 30000
+    startup_timeout: 10s
+    preferred_ip:
+      binary_path: "/usr/local/bin/cfst"
+      ip_file_path: "/usr/local/share/cfst/ip.txt"
+      working_directory: "/var/lib/easy-proxy/connectors/preferred-ip"
+      timeout: 5m0s
+
+connectors:
+  - name: "ECH Worker Template"
+    input: "https://your-ech-worker.example.com:443"
+    enabled: false
+    template_only: true
+    group: "ECH Connectors"
+    notes: "Local template for generating preferred Cloudflare entry IP connectors"
+    connector_type: "ech_worker"
+    connector_config:
+      local_protocol: "socks5"
+      access_token: ""
+
+subscriptions:
+  - "https://example.com/subscription-1"
+  - "https://example.com/subscription-2"
+
+# Notes:
+# - management.password is also accepted directly as an Authorization header
+#   by the management API for service-to-service calls.
+# - The real migrated runtime profile currently uses hybrid mode and an
+#   aggregator-backed subscription plus several external subscription URLs.
+# - source_sync only augments runtime sources; local subscriptions and manual
+#   direct proxies remain local-first and take precedence over manifest/fallback.
+# - connector_runtime controls local execution of manifest connectors such as
+#   `ech_worker`; these are materialized into local `http://` or `socks5://`
+#   upstreams at refresh time.
+# - local `connectors` are also supported now. They are managed at the local
+#   EasyProxy layer and can be refreshed into preferred-IP variants without
+#   writing back to MiSub.
+# - If you prefer file-based nodes, replace subscriptions with nodes_file and
+#   mount the corresponding file in docker-compose.yaml.

@@ -1,0 +1,17 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "misub-git",
+  "compatibility_date": "2026-03-25",
+  "pages_build_output_dir": "dist",
+  "vars": {
+    "MISUB_PUBLIC_URL": "https://misub.aiaimimi.com",
+    "MISUB_CALLBACK_URL": "https://misub.aiaimimi.com"
+  },
+  "d1_databases": [
+    {
+      "binding": "MISUB_DB",
+      "database_name": "misub",
+      "database_id": "4c3d8727-a5cb-45af-9e81-791c97bed830"
+    }
+  ]
+}

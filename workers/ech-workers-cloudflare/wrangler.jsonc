@@ -1,0 +1,19 @@
+{
+  "$schema": "https://raw.githubusercontent.com/cloudflare/workers-sdk/main/packages/wrangler/config-schema.json",
+  "name": "proxyservice-ech-workers",
+  "main": "src/index.js",
+  "compatibility_date": "2025-01-15",
+  // Keep workers.dev enabled as a rollback/debug entrypoint until the
+  // custom-domain path has been fully migrated in MiSub and revalidated
+  // through EasyProxy runtime checks.
+  "workers_dev": true,
+  "routes": [
+    {
+      "pattern": "proxyservice-ech-workers.aiaimimi.com",
+      "custom_domain": true
+    }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}

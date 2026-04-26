@@ -1,0 +1,370 @@
+import type {
+  AuthResponse,
+  NodesResponse,
+  DebugResponse,
+  SettingsData,
+  SettingsUpdateResponse,
+  ConfigNodesResponse,
+  ConfigNodePayload,
+  ConfigNodeMutationResponse,
+  SubscriptionStatus,
+  SourceSyncStatus,
+  ProbeSSEEvent,
+  TrafficStreamEvent,
+} from '../types'
+
+// ---- Token management ----
+
+let authToken: string | null = localStorage.getItem('auth_token')
+
+export function getToken(): string | null {
+  return authToken
+}
+
+export function setToken(token: string | null) {
+  authToken = token
+  if (token) {
+    localStorage.setItem('auth_token', token)
+  } else {
+    localStorage.removeItem('auth_token')
+  }
+}
+
+export function clearToken() {
+  setToken(null)
+}
+
+// ---- Base request helper ----
+
+async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const headers: Record<string, string> = {
+    ...(options.headers as Record<string, string> || {}),
+  }
+
+  // Add auth header if we have a token
+  if (authToken) {
+    headers['Authorization'] = `Bearer ${authToken}`
+  }
+
+  // Set JSON content type for non-GET requests with body
+  if (options.body && typeof options.body === 'string') {
+    headers['Content-Type'] = 'application/json'
+  }
+
+  const res = await fetch(path, {
+    ...options,
+    headers,
+    credentials: 'include', // send cookies
+  })
+
+  if (res.status === 401) {
+    clearToken()
+    // Dispatch a custom event so App can react
+    window.dispatchEvent(new CustomEvent('auth:unauthorized'))
+    throw new ApiError('未授权，请重新登录', 401)
+  }
+
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`
+    try {
+      const body = await res.json()
+      if (body.error) msg = body.error
+    } catch { /* ignore parse errors */ }
+    throw new ApiError(msg, res.status)
+  }
+
+  // Handle empty responses
+  const text = await res.text()
+  if (!text) return {} as T
+  return JSON.parse(text) as T
+}
+
+export class ApiError extends Error {
+  status: number
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+  }
+}
+
+// ---- Auth API ----
+
+/** Check if password is required & login */
+export async function checkAuth(): Promise<AuthResponse> {
+  // Use GET-like behavior: /api/auth without POST returns password status
+  const res = await fetch('/api/auth', { credentials: 'include' })
+  return res.json()
+}
+
+export async function login(password: string): Promise<AuthResponse> {
+  const res = await fetch('/api/auth', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password }),
+    credentials: 'include',
+  })
+
+  if (!res.ok) {
+    const body = await res.json()
+    throw new ApiError(body.error || '登录失败', res.status)
+  }
+
+  const data: AuthResponse = await res.json()
+  if (data.token) {
+    setToken(data.token)
+  }
+  return data
+}
+
+export function logout() {
+  clearToken()
+}
+
+// ---- Nodes API ----
+
+export async function fetchNodes(): Promise<NodesResponse> {
+  return request<NodesResponse>('/api/nodes')
+}
+
+export async function probeNode(tag: string): Promise<{ message: string; latency_ms: number }> {
+  return request(`/api/nodes/${encodeURIComponent(tag)}/probe`, { method: 'POST' })
+}
+
+export async function releaseNode(tag: string): Promise<{ message: string }> {
+  return request(`/api/nodes/${encodeURIComponent(tag)}/release`, { method: 'POST' })
+}
+
+/** Probe all nodes with SSE progress updates */
+export function probeAllNodes(
+  onEvent: (event: ProbeSSEEvent) => void,
+  onError?: (error: Error) => void
+): AbortController {
+  const controller = new AbortController()
+
+  const doFetch = async () => {
+    try {
+      const headers: Record<string, string> = {}
+      if (authToken) {
+        headers['Authorization'] = `Bearer ${authToken}`
+      }
+
+      const res = await fetch('/api/nodes/probe-all', {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        signal: controller.signal,
+      })
+
+      if (!res.ok) {
+        throw new ApiError(`探测失败: HTTP ${res.status}`, res.status)
+      }
+
+      const reader = res.body?.getReader()
+      if (!reader) throw new Error('No response body')
+
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          const trimmed = line.trim()
+          if (trimmed.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(trimmed.slice(6)) as ProbeSSEEvent
+              onEvent(data)
+            } catch { /* skip malformed events */ }
+          }
+        }
+      }
+    } catch (err) {
+      if ((err as Error).name !== 'AbortError') {
+        onError?.(err as Error)
+      }
+    }
+  }
+
+  doFetch()
+  return controller
+}
+
+// ---- Traffic Stream API ----
+
+/** Subscribe real-time traffic speeds via SSE */
+export function streamTraffic(
+  onEvent: (event: TrafficStreamEvent) => void,
+  onError?: (error: Error) => void
+): AbortController {
+  const controller = new AbortController()
+
+  const doFetch = async () => {
+    try {
+      const headers: Record<string, string> = {}
+      if (authToken) {
+        headers['Authorization'] = `Bearer ${authToken}`
+      }
+
+      const res = await fetch('/api/nodes/traffic/stream', {
+        method: 'GET',
+        headers,
+        credentials: 'include',
+        signal: controller.signal,
+      })
+
+      if (!res.ok) {
+        throw new ApiError(`流量流订阅失败: HTTP ${res.status}`, res.status)
+      }
+
+      const reader = res.body?.getReader()
+      if (!reader) throw new Error('No response body')
+
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          const trimmed = line.trim()
+          if (trimmed.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(trimmed.slice(6)) as TrafficStreamEvent
+              if (data.type === 'traffic') {
+                onEvent(data)
+              }
+            } catch { /* skip malformed events */ }
+          }
+        }
+      }
+    } catch (err) {
+      if ((err as Error).name !== 'AbortError') {
+        onError?.(err as Error)
+      }
+    }
+  }
+
+  doFetch()
+  return controller
+}
+
+// ---- Debug API ----
+
+export async function fetchDebug(): Promise<DebugResponse> {
+  return request<DebugResponse>('/api/debug')
+}
+
+// ---- Settings API ----
+
+export async function fetchSettings(): Promise<SettingsData> {
+  return request<SettingsData>('/api/settings')
+}
+
+export async function updateSettings(settings: SettingsData): Promise<SettingsUpdateResponse> {
+  return request<SettingsUpdateResponse>('/api/settings', {
+    method: 'PUT',
+    body: JSON.stringify(settings),
+  })
+}
+
+// ---- Config Nodes CRUD API ----
+
+export async function fetchConfigNodes(): Promise<ConfigNodesResponse> {
+  return request<ConfigNodesResponse>('/api/nodes/config')
+}
+
+export async function createConfigNode(payload: ConfigNodePayload): Promise<ConfigNodeMutationResponse> {
+  return request<ConfigNodeMutationResponse>('/api/nodes/config', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function updateConfigNode(name: string, payload: ConfigNodePayload): Promise<ConfigNodeMutationResponse> {
+  return request<ConfigNodeMutationResponse>(`/api/nodes/config/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function deleteConfigNode(name: string): Promise<ConfigNodeMutationResponse> {
+  return request<ConfigNodeMutationResponse>(`/api/nodes/config/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+  })
+}
+
+export async function toggleConfigNode(name: string, enabled: boolean): Promise<ConfigNodeMutationResponse> {
+  return request<ConfigNodeMutationResponse>(`/api/nodes/config/${encodeURIComponent(name)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ enabled }),
+  })
+}
+
+export async function batchToggleConfigNodes(names: string[], enabled: boolean): Promise<{ message: string; success: number; total: number; errors?: string[] }> {
+  return request('/api/nodes/config/batch-toggle', {
+    method: 'POST',
+    body: JSON.stringify({ names, enabled }),
+  })
+}
+
+export async function batchDeleteConfigNodes(names: string[]): Promise<{ message: string; success: number; total: number; errors?: string[] }> {
+  return request('/api/nodes/config/batch-delete', {
+    method: 'POST',
+    body: JSON.stringify({ names }),
+  })
+}
+
+// ---- Reload API ----
+
+export async function triggerReload(): Promise<{ message: string }> {
+  return request('/api/reload', { method: 'POST' })
+}
+
+// ---- Subscription API ----
+
+export async function fetchSubscriptionStatus(): Promise<SubscriptionStatus> {
+  return request<SubscriptionStatus>('/api/subscription/status')
+}
+
+export async function refreshSubscription(): Promise<{ message: string; node_count: number }> {
+  return request('/api/subscription/refresh', { method: 'POST' })
+}
+
+export async function fetchSourceSyncStatus(): Promise<SourceSyncStatus> {
+  return request<SourceSyncStatus>('/api/source-sync/status')
+}
+
+// ---- Export API ----
+
+export async function exportProxies(): Promise<string> {
+  const headers: Record<string, string> = {}
+  if (authToken) {
+    headers['Authorization'] = `Bearer ${authToken}`
+  }
+  const res = await fetch('/api/export', {
+    headers,
+    credentials: 'include',
+  })
+  if (!res.ok) throw new ApiError('导出失败', res.status)
+  return res.text()
+}
+
+// ---- Import API ----
+
+export async function importNodes(content: string): Promise<{ message: string; imported: number; errors?: string[] }> {
+  return request('/api/import', {
+    method: 'POST',
+    body: JSON.stringify({ content }),
+  })
+}

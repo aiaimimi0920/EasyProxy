@@ -1,0 +1,46 @@
+# Binaries (only root-level build outputs)
+easy-proxies
+easy-proxies-*
+/easy_proxies
+/easy_proxies-*
+*.exe
+
+# Configuration (contains sensitive data)
+config.yaml
+nodes.txt
+
+# Data directory (SQLite database, etc.)
+data/
+plans/
+docs/
+.kilocode/
+
+# GeoIP database (auto-downloaded)
+*.mmdb
+GeoLite2-Country.mmdb
+
+# Logs
+*.log
+
+# IDE and editor
+.idea/
+.vscode/
+.serena/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Go
+vendor/
+
+# Test artifacts
+coverage.out
+coverage.html
+
+# Qodo
+.qodo/

@@ -1,0 +1,34 @@
+services:
+  easy-proxy-monorepo-service:
+    build:
+      context: ../../..
+      dockerfile: deploy/service/base/Dockerfile
+    image: easyproxy/easy-proxy-monorepo-service:local
+    container_name: easy-proxy-monorepo-service
+    restart: unless-stopped
+    cpus: 1.50
+    mem_limit: 512m
+    ports:
+      - "22323:22323"
+      - "29888:29888"
+      - "25000-25500:25000-25500"
+    volumes:
+      - ./config.yaml:/etc/easy-proxy/config.yaml
+      - ./data:/var/lib/easy-proxy
+    networks:
+      - easyproxy-monorepo
+
+    # Optional file-based node source:
+    # - ./nodes.txt:/etc/easy-proxy/nodes.txt
+
+    # Notes:
+    # - 22323: pool listener
+    # - 29888: management API and WebUI
+    # - 25000-25500: multi-port range for multi-port/hybrid mode
+    # - image also contains /usr/local/bin/ech-workers for connector runtime
+    # - image also contains /usr/local/bin/cfst + /usr/local/share/cfst/ip.txt
+    #   for local preferred Cloudflare entry-IP generation
+
+networks:
+  easyproxy-monorepo:
+    name: easyproxy-monorepo

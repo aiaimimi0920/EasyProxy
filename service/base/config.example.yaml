@@ -1,0 +1,170 @@
+# ═══════════════════════════════════════════════════════════════
+# Easy Proxies 完整配置文件
+# ═══════════════════════════════════════════════════════════════
+
+# ───────────────────────────────────────────────────────────────
+# 运行模式
+# ───────────────────────────────────────────────────────────────
+# pool: 单端口代理池，所有节点共享一个端口，自动负载均衡
+# multi-port: 多端口模式，每个节点独立端口
+# hybrid: 混合模式，同时启用 pool + multi-port
+mode: pool
+
+# 日志级别: debug, info, warn, error
+log_level: info
+
+# 全局跳过 SSL 证书验证（默认 false，不建议在生产环境启用）
+skip_cert_verify: false
+
+# 外部 IP 地址，用于导出配置时替换 0.0.0.0（可选）
+# external_ip: "your.public.ip"
+
+# SQLite 数据库文件路径（默认 data/data.db，相对于配置文件目录）
+# 用于存储节点数据、运行时统计、会话等
+# database_path: "data/data.db"
+
+# ───────────────────────────────────────────────────────────────
+# 监听配置（Pool 模式入口）
+# ───────────────────────────────────────────────────────────────
+listener:
+  address: 0.0.0.0      # 监听地址
+  port: 22323           # 监听端口（单仓迁移默认值，避开旧工作区）
+  protocol: http        # 监听协议: http | socks5 | mixed
+  username: username    # 代理认证用户名
+  password: password    # 代理认证密码
+
+# ───────────────────────────────────────────────────────────────
+# 代理池配置
+# ───────────────────────────────────────────────────────────────
+pool:
+  # 调度模式: auto（健康优先自动策略）, sequential（顺序轮询）, random（随机选择）, balance（最小连接数负载均衡）
+  mode: auto
+  # 连续失败多少次后加入黑名单
+  failure_threshold: 3
+  # 黑名单持续时间
+  blacklist_duration: 24h
+
+# ───────────────────────────────────────────────────────────────
+# 多端口模式配置（multi-port / hybrid 模式使用）
+# ───────────────────────────────────────────────────────────────
+multi_port:
+  address: 0.0.0.0      # 监听地址
+  base_port: 25000      # 起始端口号（单仓迁移默认值，避开旧工作区）
+  protocol: http        # 监听协议: http | socks5 | mixed
+  username: mpuser      # 默认认证用户名
+  password: mppass      # 默认认证密码
+
+# ───────────────────────────────────────────────────────────────
+# 管理面板配置
+# ───────────────────────────────────────────────────────────────
+management:
+  enabled: true                                      # 是否启用管理面板
+  listen: 0.0.0.0:29888                              # 监听地址（单仓迁移默认值，避开旧工作区）
+  probe_target: https://www.google.com/generate_204  # 健康检查目标
+  health_check_interval: 2h                          # 周期健康检查间隔（默认 2 小时）
+  password: "123456"                                # WebUI 访问密码；服务间也可直接作为 Authorization 头值调用管理 API
+
+# ───────────────────────────────────────────────────────────────
+# GeoIP 地域分区配置（可选）
+# ───────────────────────────────────────────────────────────────
+# 启用后，节点会按地域自动分组，可通过路径访问特定地域的代理池：
+#   http://127.0.0.1:22323/jp    - 日本节点
+#   http://127.0.0.1:22323/kr    - 韩国节点
+#   http://127.0.0.1:22323/us    - 美国节点
+#   http://127.0.0.1:22323/hk    - 香港节点
+#   http://127.0.0.1:22323/tw    - 台湾节点
+#   http://127.0.0.1:22323/sg    - 新加坡节点
+#   http://127.0.0.1:22323/other - 其他地域
+#   http://127.0.0.1:22323/      - 全部节点（默认）
+geoip:
+  enabled: false                                     # 是否启用 GeoIP 地域分区
+  database_path: "./GeoLite2-Country.mmdb"           # GeoIP 数据库路径（首次启动时自动下载）
+  auto_update_enabled: true                          # 是否启用自动更新数据库（推荐）
+  auto_update_interval: 24h                          # 自动更新间隔（默认 24 小时）
+  # listen: 0.0.0.0                                  # GeoIP 路由监听地址（默认使用 listener 配置）
+  # port: 22323                                      # GeoIP 路由监听端口（默认 22323）
+  # 注意：
+  #   - 首次启动会自动从 GitHub 下载 GeoIP 数据库（约 9MB）
+  #   - 启用 auto_update_enabled 后，数据库会定期自动更新，无需重启容器
+  #   - 更新过程采用热重载，不会中断现有连接
+
+# ───────────────────────────────────────────────────────────────
+# 订阅自动刷新配置（可选）
+# ───────────────────────────────────────────────────────────────
+# subscription_refresh:
+#   enabled: false              # 是否启用定时刷新
+#   interval: 1h                # 刷新间隔（默认 1 小时）
+#   timeout: 30s                # 获取订阅的超时时间
+#   health_check_timeout: 60s   # 新节点健康检查超时
+#   drain_timeout: 30s          # 旧实例排空超时时间
+#   min_available_nodes: 1      # 最少可用节点数，低于此值不切换
+
+# ───────────────────────────────────────────────────────────────
+# Source Sync（可选）
+# ───────────────────────────────────────────────────────────────
+# 用于从 MiSub 拉取统一 manifest，并在 manifest 不可用时启用 aggregator 回退订阅。
+# local 优先级最高：本地 subscriptions / nodes / WebUI 手动节点始终保留。
+# source_sync:
+#   enabled: false
+#   manifest_url: "https://misub.example.com/api/manifest/profile-id"
+#   manifest_token: "replace-with-manifest-token"
+#   refresh_interval: 5m
+#   request_timeout: 15s
+#   default_direct_proxy_scheme: http   # 裸 residential 输入默认补成 http://
+#   fallback_subscriptions:
+#     - "https://r2.example.com/fallback-profile.txt"
+#   connector_runtime:
+#     enabled: true
+#     binary_path: ""                   # 留空时自动从 PATH 查找 ech-workers / ech-win
+#     working_directory: ""             # 留空时默认使用 <config-dir>/data/connectors
+#     listen_host: 127.0.0.1
+#     listen_start_port: 30000
+#     startup_timeout: 10s
+
+# connector 说明：
+# - manifest 中 kind=connector、connector_type=ech_worker 的来源会被本地拉起为 ech-workers 进程
+# - 每个 connector 会被转换成本地 socks5://127.0.0.1:<port> 或 http://127.0.0.1:<port> 上游
+# - 这些上游属于运行时临时来源，不会写回持久化本地节点库
+
+# ═══════════════════════════════════════════════════════════════
+# 节点配置方式（三选一或混合使用）
+# ═══════════════════════════════════════════════════════════════
+
+# ───────────────────────────────────────────────────────────────
+# 方式 1: 订阅链接（推荐，自动获取并写入 nodes.txt）
+# ───────────────────────────────────────────────────────────────
+subscriptions:
+  - "https://example.com/subscribe?token=xxx"
+#   - "https://another.com/api/v1/client/subscribe?token=yyy"
+
+# ───────────────────────────────────────────────────────────────
+# 方式 2: 节点文件（每行一个代理 URI）
+# ───────────────────────────────────────────────────────────────
+# nodes_file: nodes.txt
+
+# ───────────────────────────────────────────────────────────────
+# 方式 3: 直接在配置文件中配置节点
+# ───────────────────────────────────────────────────────────────
+# nodes:
+  # 最简配置：只需 URI，名称从 # 后自动提取
+  # - uri: "vless://uuid@server:443?security=tls&type=ws&path=/path#节点名称"
+
+  # 完整配置：手动指定名称和端口
+  # - name: "自定义名称"
+  #   uri: "ss://base64@server:8388"
+  #   port: 24001              # 手动指定端口（multi-port/hybrid 模式）
+  #   username: "custom_user"  # 覆盖默认认证（可选）
+  #   password: "custom_pass"
+
+# ───────────────────────────────────────────────────────────────
+# 支持的代理协议
+# ───────────────────────────────────────────────────────────────
+# - VMess:    vmess://base64_encoded_json
+# - VLESS:    vless://uuid@server:port?params#name
+# - Trojan:   trojan://password@server:port?params#name
+# - SS:       ss://method:password@server:port#name
+#             ss://base64(method:password)@server:port#name
+# - SSR:      ssr://base64_encoded
+# - Hysteria2: hy2://password@server:port?params#name
+# - HTTP:     http://user:pass@server:port
+# - SOCKS5:   socks5://user:pass@server:port

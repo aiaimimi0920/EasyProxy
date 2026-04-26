@@ -1,0 +1,31 @@
+# Dependencies
+**/node_modules/
+
+# Build output
+**/dist/
+**/build/
+**/coverage/
+**/.wrangler/
+**/*.tsbuildinfo
+
+# Logs and temp
+**/*.log
+.tmp/
+tmp/
+logs/
+
+# Local secrets and environment
+AIRead/
+config.yaml
+**/.env
+**/.env.local
+**/.env.*.local
+**/.dev.vars
+deploy/service/base/config.yaml
+deploy/service/base/data/
+deploy/upstreams/misub/config.local.*
+workers/ech-workers-cloudflare/.dev.vars
+
+# OS/editor noise
+.DS_Store
+Thumbs.db

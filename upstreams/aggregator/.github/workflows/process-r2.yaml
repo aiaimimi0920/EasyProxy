@@ -1,0 +1,80 @@
+name: Process R2
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.repository }}-process-r2
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  TZ: Asia/Shanghai
+  GH_TOKEN: ${{ secrets.GH_TOKEN }}
+  R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+  SKIP_ALIVE_CHECK: ${{ vars.SKIP_ALIVE_CHECK }}
+  SKIP_REMARK: ${{ vars.SKIP_REMARK }}
+  REACHABLE: ${{ vars.REACHABLE }}
+  ENABLE_SPECIAL_PROTOCOLS: ${{ vars.ENABLE_SPECIAL_PROTOCOLS }}
+  LOG_LEVEL_DEBUG: ${{ vars.LOG_LEVEL_DEBUG }}
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Prepare
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+          architecture: "x64"
+          cache: "pip"
+
+      - name: Validate Secrets
+        env:
+          SUBSCRIBE_CONF_JSON_B64: ${{ secrets.SUBSCRIBE_CONF_JSON_B64 }}
+        run: |
+          test -n "$SUBSCRIBE_CONF_JSON_B64" || { echo "missing secret SUBSCRIBE_CONF_JSON_B64"; exit 1; }
+          test -n "$GH_TOKEN" || { echo "missing secret GH_TOKEN"; exit 1; }
+          test -n "$R2_ACCESS_KEY_ID" || { echo "missing secret R2_ACCESS_KEY_ID"; exit 1; }
+          test -n "$R2_SECRET_ACCESS_KEY" || { echo "missing secret R2_SECRET_ACCESS_KEY"; exit 1; }
+          test -n "$R2_ACCOUNT_ID" || { echo "missing secret R2_ACCOUNT_ID"; exit 1; }
+
+      - name: Materialize Config
+        env:
+          SUBSCRIBE_CONF_JSON_B64: ${{ secrets.SUBSCRIBE_CONF_JSON_B64 }}
+        run: |
+          python - <<'PY'
+          import base64
+          import json
+          import os
+          import pathlib
+
+          encoded = os.environ["SUBSCRIBE_CONF_JSON_B64"].strip()
+          raw = base64.b64decode(encoded)
+          data = json.loads(raw.decode("utf-8"))
+          path = pathlib.Path("subscribe/config/config.actions.runtime.json")
+          path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+          print(f"wrote {path}")
+          PY
+
+      - name: Install
+        run: pip3 install -r requirements.txt
+
+      - name: Process
+        run: python -u subscribe/process.py --overwrite -s subscribe/config/config.actions.runtime.json
+
+      - name: Timestamp
+        run: date

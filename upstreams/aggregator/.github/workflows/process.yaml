@@ -1,0 +1,39 @@
+name: Legacy Process (Disabled)
+on:
+  workflow_dispatch:
+
+env:
+  # time zone
+  TZ: Asia/Shanghai
+
+  # network proxy aggregate config
+  SUBSCRIBE_CONF: ${{ secrets.SUBSCRIBE_CONF }}
+
+  # token
+  PUSH_TOKEN: ${{ secrets.PUSH_TOKEN }}
+
+  # network reachable
+  REACHABLE: ${{ vars.REACHABLE }}
+
+  # not check connective
+  SKIP_ALIVE_CHECK: ${{ vars.SKIP_ALIVE_CHECK }}
+
+  # skip remark
+  SKIP_REMARK: ${{ vars.SKIP_REMARK }}
+
+  # workflow mode
+  WORKFLOW_MODE: ${{ vars.WORKFLOW_MODE }}
+
+  # include spwcial protocols, such vless hysteria2 and hysteria
+  ENABLE_SPECIAL_PROTOCOLS: ${{ vars.ENABLE_SPECIAL_PROTOCOLS }}
+
+jobs:
+  disabled:
+    if: ${{ false }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Retired
+        run: |
+          echo "Legacy process workflow is disabled in this fork."
+          echo "Use 'Process R2' for the active GitHub Actions batch runtime."
