@@ -70,7 +70,7 @@ def allow_single_link() -> bool:
 
 
 def multi_thread_crawl(func: typing.Callable, params: list) -> dict:
-    if not func or not params or type(params) != list:
+    if not func or not isinstance(params, list) or not params:
         return {}
 
     # concurrent run
@@ -91,7 +91,7 @@ def multi_thread_crawl(func: typing.Callable, params: list) -> dict:
             # merge proxies link
             if k.startswith(SINGLE_LINK_FLAG):
                 newproxies = v.pop("proxies", [])
-                if newproxies and type(newproxies) == list:
+                if isinstance(newproxies, list) and newproxies:
                     oldproxies = item.get("proxies", [])
                     oldproxies.extend(newproxies)
                     item["proxies"] = list(set(oldproxies))
@@ -216,7 +216,7 @@ def batch_crawl(conf: dict, num_threads: int = 50, display: bool = True) -> list
                 items = batch_call(scripts)
                 if items:
                     for item in items:
-                        if not item or type(item) != dict:
+                        if not item or not isinstance(item, dict):
                             continue
 
                         if item.get("saved", False):
@@ -226,9 +226,9 @@ def batch_crawl(conf: dict, num_threads: int = 50, display: bool = True) -> list
                         task = deepcopy(item)
                         subs = task.pop("sub", None)
                         checked = task.pop("checked", True)
-                        if type(subs) not in [str, list]:
+                        if not isinstance(subs, (str, list)):
                             continue
-                        if type(subs) == str:
+                        if isinstance(subs, str):
                             subs = [subs]
                         for sub in subs:
                             if utils.isblank(sub):
@@ -911,17 +911,21 @@ def extract_twitter_cookies(retry: int = 2) -> str:
         return ""
 
     headers = None
-    try:
-        request = urllib.request.Request(url="https://twitter.com/", headers=utils.DEFAULT_HTTP_HEADERS)
-        response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
-        headers = response.headers
-    except urllib.error.HTTPError as e:
-        if e.code != 302:
-            return extract_twitter_cookies(retry=retry - 1)
-
-        headers = e.headers
-    except (urllib.error.URLError, TimeoutError):
-        return extract_twitter_cookies(retry=retry - 1)
+    for attempt in range(retry):
+        try:
+            request = urllib.request.Request(url="https://twitter.com/", headers=utils.DEFAULT_HTTP_HEADERS)
+            response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
+            headers = response.headers
+            break
+        except urllib.error.HTTPError as e:
+            if e.code == 302:
+                headers = e.headers
+                break
+            if attempt >= retry - 1:
+                return ""
+        except (urllib.error.URLError, TimeoutError):
+            if attempt >= retry - 1:
+                return ""
 
     if not headers or "set-cookie" not in headers:
         return ""
@@ -1082,7 +1086,7 @@ def extract_subscribes(
     exclude: str = "",
     limits: int = sys.maxsize,
     source: str = Origin.OWNED.name,
-    config: dict = {},
+    config: dict | None = None,
     reversed: bool = False,
     nocache: bool = False,
 ) -> dict:
@@ -1212,7 +1216,7 @@ def validate(
     result = ValidateResult()
     if url.startswith(SINGLE_LINK_FLAG):
         proxies = params.get("proxies", [])
-        if proxies and type(proxies) == list:
+        if isinstance(proxies, list) and proxies:
             result.proxies = set(proxies)
 
         return result
@@ -1633,14 +1637,17 @@ def collect_airport(
             "Accept-Language": "zh-CN,zh;q=0.9",
         }
 
-        try:
-            request = urllib.request.Request(url=url, headers=headers, method="GET")
-            response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
+        for attempt in range(retry):
+            try:
+                request = urllib.request.Request(url=url, headers=headers, method="GET")
+                response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
+                return response.geturl()
+            except:
+                if attempt >= retry - 1:
+                    break
+                time.sleep(random.randint(1, 3))
 
-            return response.geturl()
-        except:
-            time.sleep(random.randint(1, 3))
-            return get_redirect_url(url=url, retry=retry - 1)
+        return ""
 
     def run_crawl(url: str, separator: str, address_regex: str, coupon_regex: str) -> dict:
         url = utils.trim(url)

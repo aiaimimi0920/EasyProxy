@@ -87,7 +87,7 @@ def query_forks(username: str, repository: str, page: int, peer: int = 100, sort
     try:
         data = json.loads(content)
         for fork in data:
-            if not fork or type(fork) != dict:
+            if not fork or not isinstance(fork, dict):
                 continue
 
             fullname = fork.get("full_name", "")
@@ -121,7 +121,7 @@ def collect_subs(params: dict) -> list[dict]:
 
         return f"{ghproxy}/{url}"
 
-    if not params or type(params) != dict:
+    if not params or not isinstance(params, dict):
         return []
 
     username = utils.trim(params.get("username", "wzdnzd"))
@@ -133,7 +133,7 @@ def collect_subs(params: dict) -> list[dict]:
 
     # used to store subscriptions
     storage = params.get("storage", {})
-    if not storage or type(storage) != dict:
+    if not storage or not isinstance(storage, dict):
         logger.error(f"[GithubFork] cannot fetch subscriptions due to invalid storage config")
         return []
 
@@ -211,11 +211,11 @@ def collect_subs(params: dict) -> list[dict]:
         remain, life = 0, 0
 
     for result in results:
-        if not result or type(result) != dict:
+        if not result or not isinstance(result, dict):
             continue
 
         for name, links in result.items():
-            if not links or type(links) != tuple:
+            if not links or not isinstance(links, tuple):
                 continue
 
             name = re.sub(r"/|_", "-", name, flags=re.I).lower()
