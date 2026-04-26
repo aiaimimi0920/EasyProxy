@@ -38,6 +38,14 @@ Local Docker/VPS coexistence default in this monorepo:
 - container port:
   - `8080`
 
+Root operator entrypoint:
+
+- `scripts/deploy-misub.ps1`
+  - default mode:
+    - Cloudflare Pages
+  - optional local mode:
+    - `-Mode docker`
+
 KV is no longer the recommended primary backend. Keep it only when you need:
 
 - legacy read compatibility

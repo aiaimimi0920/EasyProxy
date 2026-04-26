@@ -17,6 +17,10 @@ Operational rule:
 - manage worker URL and access token through:
   - local `EasyProxy` connector config
   - or `MiSub` manifest connector sources
+- optional standalone local image build:
+  - `scripts/build-ech-workers-image.ps1`
+  - Dockerfile:
+    - `deploy/upstreams/ech-workers/Dockerfile`
 
 Do not maintain a second, separate container contract for `ech-workers`
 unless the architecture changes explicitly.

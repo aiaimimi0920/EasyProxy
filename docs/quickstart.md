@@ -37,6 +37,25 @@ Read:
 - `deploy/upstreams/aggregator/README.md`
 - `deploy/workers/ech-workers-cloudflare/README.md`
 
+## Root Operator Entry Points
+
+Run these from the repository root:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build-easyproxy-image.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\build-ech-workers-image.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-misub.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-ech-workers-cloudflare.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-aggregator.ps1
+```
+
+Notes:
+
+- `deploy-misub.ps1` defaults to Cloudflare Pages mode. Use `-Mode docker`
+  if you explicitly want the Docker/VPS path.
+- `deploy-aggregator.ps1` targets the current GitHub Actions + R2 deployment
+  model rather than a local runtime.
+
 ## Private Config
 
 Do not commit live deployment values.

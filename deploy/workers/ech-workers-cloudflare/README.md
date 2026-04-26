@@ -12,6 +12,10 @@ Current deployed worker:
 - `proxyservice-ech-workers`
 - `https://proxyservice-ech-workers.vmjcv666.workers.dev`
 
+Root operator entrypoint:
+
+- `scripts/deploy-ech-workers-cloudflare.ps1`
+
 Current secret and deployment details are archived in:
 
 - the shared private `AIRead` archive for the EasyProxy stack

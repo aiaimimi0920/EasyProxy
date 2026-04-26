@@ -128,6 +128,22 @@ Read the module-specific deployment notes:
 - `docs/migration-plan.md`
 - `CONTRIBUTING.md`
 
+## Operator Scripts
+
+Root-level operator entrypoints live under `scripts/`:
+
+- `scripts/deploy-aggregator.ps1`
+  - updates the current `SUBSCRIBE_CONF_JSON_B64` GitHub secret and triggers
+    the active aggregator GitHub Actions workflow
+- `scripts/deploy-misub.ps1`
+  - deploys `upstreams/misub` either to Cloudflare Pages or through Docker
+- `scripts/deploy-ech-workers-cloudflare.ps1`
+  - deploys the Cloudflare Worker in `workers/ech-workers-cloudflare`
+- `scripts/build-easyproxy-image.ps1`
+  - builds the local EasyProxy monorepo image
+- `scripts/build-ech-workers-image.ps1`
+  - builds a standalone local image for `upstreams/ech-workers`
+
 ## Private Operator Material
 
 Private deployment notes, secrets, and runtime state do not belong in this

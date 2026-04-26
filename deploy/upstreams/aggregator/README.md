@@ -59,6 +59,13 @@ Current note:
 
 ## Operational Notes
 
+- Root operator entrypoint:
+  - `scripts/deploy-aggregator.ps1`
+  - default target repository:
+    - `aiaimimi0920/aggregator`
+  - behavior:
+    - refreshes `SUBSCRIBE_CONF_JSON_B64`
+    - triggers `process-r2.yaml`
 - GitHub repository secrets and variables are documented in
   the shared private `AIRead` archive for the EasyProxy stack.
 - GitHub Actions runtime and verification notes are documented in
