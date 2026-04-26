@@ -144,12 +144,10 @@ class RootSh(TemporaryMail):
         return re.findall(r'<li><a\s+href="javascript:;">([a-zA-Z0-9\.\-]+)</a></li>', content)
 
     def get_account(self, retry: int = 3) -> Account:
-        address = self.generate_address(random.randint(6, 12))
-        if not address or retry <= 0:
+        if retry <= 0:
             return None
 
         url = f"{self.api_address}/applymail"
-        params = {"mail": address}
         self.headers.update(
             {
                 "Accept": "application/json, text/javascript, */*; q=0.01",
@@ -159,26 +157,35 @@ class RootSh(TemporaryMail):
             }
         )
 
-        try:
-            data = urllib.parse.urlencode(params).encode(encoding="UTF8")
-            request = urllib.request.Request(url, data=data, headers=self.headers, method="POST")
+        for attempt in range(retry):
+            address = self.generate_address(random.randint(6, 12))
+            if not address:
+                continue
 
-            response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
-            if response.getcode() == 200:
-                success = json.loads(response.read()).get("success", "false")
-                if success == "true":
-                    return Account(address=address)
+            params = {"mail": address}
+            try:
+                data = urllib.parse.urlencode(params).encode(encoding="UTF8")
+                request = urllib.request.Request(url, data=data, headers=self.headers, method="POST")
 
-                return None
-            else:
+                response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
+                if response.getcode() == 200:
+                    success = json.loads(response.read()).get("success", "false")
+                    if success == "true":
+                        return Account(address=address)
+
+                    return None
+
                 logger.error(
                     "[MailTMError] cannot create email account, domain: {}\tmessage: {}".format(
                         self.api_address, response.read().decode("UTF8")
                     )
                 )
                 return None
-        except:
-            return self.get_account(retry=retry - 1)
+            except:
+                if attempt >= retry - 1:
+                    break
+
+        return None
 
     def get_messages(self, account: Account) -> list:
         if not account:
@@ -435,20 +442,24 @@ class MailTM(TemporaryMail):
         headers = {"Accept": "application/ld+json", "Content-Type": "application/json"}
 
         data = bytes(json.dumps(account), encoding="UTF8")
-        try:
-            request = urllib.request.Request(
-                url=f"{self.api_address}/{endpoint}",
-                data=data,
-                headers=headers,
-                method="POST",
-            )
-            response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
-            if not response or response.getcode() not in [200, 201]:
-                return {}
+        for attempt in range(retry):
+            try:
+                request = urllib.request.Request(
+                    url=f"{self.api_address}/{endpoint}",
+                    data=data,
+                    headers=headers,
+                    method="POST",
+                )
+                response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
+                if not response or response.getcode() not in [200, 201]:
+                    return {}
 
-            return json.loads(response.read())
-        except:
-            return self._make_account_request(endpoint=endpoint, address=address, password=password, retry=retry - 1)
+                return json.loads(response.read())
+            except:
+                if attempt >= retry - 1:
+                    break
+
+        return {}
 
     def _generate_jwt(self, address: str, password: str, retry: int = 3):
         jwt = self._make_account_request(endpoint="token", address=address, password=password, retry=retry)
@@ -585,23 +596,26 @@ class MOAKT(TemporaryMail):
         }
 
         data = bytes(json.dumps(payload), encoding="UTF8")
-        try:
-            # 禁止重定向
-            opener = urllib.request.build_opener(self.NoRedirect)
-            request = urllib.request.Request(
-                url=f"{self.api_address}/inbox",
-                data=data,
-                headers=self.headers,
-                method="POST",
-            )
-            response = opener.open(request, timeout=10)
-            if not response or response.getcode() not in [200, 302]:
-                return None
+        for attempt in range(retry):
+            try:
+                opener = urllib.request.build_opener(self.NoRedirect)
+                request = urllib.request.Request(
+                    url=f"{self.api_address}/inbox",
+                    data=data,
+                    headers=self.headers,
+                    method="POST",
+                )
+                response = opener.open(request, timeout=10)
+                if not response or response.getcode() not in [200, 302]:
+                    return None
 
-            self.headers["Cookie"] = response.getheader("Set-Cookie")
-            return Account(address=f"{username}@{domain}")
-        except:
-            return self._make_account_request(username=username, domain=domain, retry=retry - 1)
+                self.headers["Cookie"] = response.getheader("Set-Cookie")
+                return Account(address=f"{username}@{domain}")
+            except:
+                if attempt >= retry - 1:
+                    break
+
+        return None
 
     def get_account(self, retry: int = 3) -> Account:
         address = self.generate_address(bits=random.randint(6, 12))
@@ -679,41 +693,51 @@ class Emailnator(TemporaryMail):
         return cookies, xsrf_token
 
     def get_account(self, retry: int = 3) -> Account:
-        cookie, xsrf_token = self._get_xsrf_token(retry=3)
-        if retry <= 0 or not cookie or not xsrf_token:
+        if retry <= 0:
             logger.error(
                 f"[EmailnatorError] cannot create account because cannot get cookies or xsrf_token or archieved max retry, domain: {self.api_address}"
             )
             return None
 
-        self.headers["Cookie"] = cookie
-        self.headers["X-XSRF-TOKEN"] = xsrf_token
-
         url = f"{self.api_address}/generate-email"
         params = ["plusGmail", "dotGmail"] if self.only_gmail else ["domain", "plusGmail", "dotGmail", "googleMail"]
 
-        try:
-            data = bytes(json.dumps({"email": params}), "UTF8")
-            request = urllib.request.Request(url, data=data, headers=self.headers, method="POST")
-            response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
-            if response.getcode() == 200:
-                content = response.read()
-                try:
-                    content = str(content, encoding="utf8")
-                except:
-                    content = gzip.decompress(content).decode("utf8")
+        for attempt in range(retry):
+            cookie, xsrf_token = self._get_xsrf_token(retry=3)
+            if not cookie or not xsrf_token:
+                if attempt >= retry - 1:
+                    break
+                continue
 
-                emails = json.loads(content).get("email", [])
-                return Account(emails[0]) if emails else None
-            else:
+            self.headers["Cookie"] = cookie
+            self.headers["X-XSRF-TOKEN"] = xsrf_token
+
+            try:
+                data = bytes(json.dumps({"email": params}), "UTF8")
+                request = urllib.request.Request(url, data=data, headers=self.headers, method="POST")
+                response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
+                if response.getcode() == 200:
+                    content = response.read()
+                    try:
+                        content = str(content, encoding="utf8")
+                    except:
+                        content = gzip.decompress(content).decode("utf8")
+
+                    emails = json.loads(content).get("email", [])
+                    return Account(emails[0]) if emails else None
+
                 logger.error(
                     "[EmailnatorError] cannot create email account, domain: {}\tmessage: {}".format(
                         self.api_address, response.read().decode("UTF8")
                     )
                 )
                 return None
-        except:
-            return self.get_account(retry=retry - 1)
+            except:
+                if attempt >= retry - 1:
+                    break
+
+        logger.error(f"[EmailnatorError] cannot create email account after retries, domain: {self.api_address}")
+        return None
 
     def get_messages(self, account: Account) -> list:
         if not account:
@@ -756,21 +780,25 @@ class Emailnator(TemporaryMail):
         if not utils.isblank(messageid):
             params["messageID"] = messageid
 
-        try:
-            data = data = bytes(json.dumps(params), "UTF8")
-            request = urllib.request.Request(url, data=data, headers=self.headers, method="POST")
-            response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
-            content = ""
-            if response.getcode() == 200:
-                content = response.read()
-                try:
-                    content = str(content, encoding="utf8")
-                except:
-                    content = gzip.decompress(content).decode("utf8")
+        for attempt in range(retry):
+            try:
+                data = bytes(json.dumps(params), "UTF8")
+                request = urllib.request.Request(url, data=data, headers=self.headers, method="POST")
+                response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
+                content = ""
+                if response.getcode() == 200:
+                    content = response.read()
+                    try:
+                        content = str(content, encoding="utf8")
+                    except:
+                        content = gzip.decompress(content).decode("utf8")
 
-            return content
-        except:
-            return self._get_messages(address=address, messageid=messageid, retry=retry - 1)
+                return content
+            except:
+                if attempt >= retry - 1:
+                    break
+
+        return ""
 
     def delete_account(self, account: Account) -> bool:
         logger.info(f"[EmailnatorError] not support delete account, domain: {self.api_address}")

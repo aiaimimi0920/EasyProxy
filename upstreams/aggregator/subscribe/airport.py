@@ -259,15 +259,19 @@ class AirPort:
             headers["Content-Type"] = "application/json"
             data = json.dumps(params).encode(encoding="UTF8")
 
-        try:
-            request = urllib.request.Request(self.send_email, data=data, headers=headers, method="POST")
-            response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
-            if not response or response.getcode() != 200:
-                return False
+        for attempt in range(retry):
+            try:
+                request = urllib.request.Request(self.send_email, data=data, headers=headers, method="POST")
+                response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
+                if not response or response.getcode() != 200:
+                    return False
 
-            return json.loads(response.read()).get("data", False)
-        except:
-            return self.sen_email_verify(email=email, retry=retry - 1)
+                return json.loads(response.read()).get("data", False)
+            except:
+                if attempt >= retry - 1:
+                    break
+
+        return False
 
     def register(
         self, email: str, password: str, email_code: str = None, invite_code: str = None, retry: int = 3
@@ -294,49 +298,52 @@ class AirPort:
             headers["Content-Type"] = "application/json"
             data = json.dumps(params).encode(encoding="UTF8")
 
-        try:
-            request = urllib.request.Request(self.reg, data=data, headers=headers, method="POST")
-            response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
-            code = 400 if not response else response.getcode()
-            if code != 200:
-                logger.error(f"[RegisterError] request error when register, domain: {self.ref}, code={code}")
-                return "", ""
+        for attempt in range(retry):
+            try:
+                request = urllib.request.Request(self.reg, data=data, headers=headers, method="POST")
+                response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
+                code = 400 if not response else response.getcode()
+                if code != 200:
+                    logger.error(f"[RegisterError] request error when register, domain: {self.ref}, code={code}")
+                    return "", ""
 
-            self.username = email
-            self.password = password
+                self.username = email
+                self.password = password
 
-            cookies = utils.extract_cookie(response.getheader("Set-Cookie"))
-            data = json.loads(response.read()).get("data", {})
-            token, authorization = "", ""
-            if isinstance(data, dict):
-                token = data.get("token", "")
-                authorization = data.get("auth_data", "")
+                cookies = utils.extract_cookie(response.getheader("Set-Cookie"))
+                data = json.loads(response.read()).get("data", {})
+                token, authorization = "", ""
+                if isinstance(data, dict):
+                    token = data.get("token", "")
+                    authorization = data.get("auth_data", "")
 
-            # 先判断是否存在免费套餐，如果存在则购买
-            self.order_plan(
-                email=email,
-                password=password,
-                cookies=cookies,
-                authorization=authorization,
-            )
+                self.order_plan(
+                    email=email,
+                    password=password,
+                    cookies=cookies,
+                    authorization=authorization,
+                )
 
-            subscribe_info = renewal.get_subscribe_info(
-                domain=self.ref,
-                cookies=cookies,
-                authorization=authorization,
-                api_prefix=self.api_prefix,
-            )
-            if subscribe_info:
-                self.sub = subscribe_info.sub_url
-            if not self.sub:
-                if token:
-                    self.sub = f"{self.ref}/api/v1/client/subscribe?token={token}"
-                else:
-                    logger.error(f"[RegisterError] cannot get token when register, domain: {self.ref}")
+                subscribe_info = renewal.get_subscribe_info(
+                    domain=self.ref,
+                    cookies=cookies,
+                    authorization=authorization,
+                    api_prefix=self.api_prefix,
+                )
+                if subscribe_info:
+                    self.sub = subscribe_info.sub_url
+                if not self.sub:
+                    if token:
+                        self.sub = f"{self.ref}/api/v1/client/subscribe?token={token}"
+                    else:
+                        logger.error(f"[RegisterError] cannot get token when register, domain: {self.ref}")
 
-            return cookies, authorization
-        except:
-            return self.register(email, password, email_code, invite_code, retry - 1)
+                return cookies, authorization
+            except:
+                if attempt >= retry - 1:
+                    break
+
+        return "", ""
 
     def order_plan(
         self,
