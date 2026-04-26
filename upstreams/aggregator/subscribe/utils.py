@@ -194,20 +194,25 @@ def cmd(command: list, output: bool = False) -> tuple[bool, str]:
     if command is None or len(command) == 0:
         return False, ""
 
-    p = (
-        subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        if output
-        else subprocess.Popen(command)
-    )
-    p.wait()
+    try:
+        completed = subprocess.run(
+            command,
+            stdout=subprocess.PIPE if output else subprocess.DEVNULL,
+            stderr=subprocess.STDOUT if output else subprocess.DEVNULL,
+            check=False,
+        )
+    except OSError as e:
+        logger.error(f"failed to execute command: {command}, message: {e}")
+        return False, ""
 
-    success, content = p.returncode == 0, ""
+    content = ""
     if output:
         try:
-            content = p.stdout.read().decode("utf8")
+            content = (completed.stdout or b"").decode("utf8", errors="replace")
         except:
             content = ""
-    return success, content
+
+    return completed.returncode == 0, content
 
 
 def chmod(binfile: str) -> None:
@@ -539,25 +544,32 @@ def multi_process_run(func: typing.Callable, tasks: list) -> list:
         logger.error(f"skip execute due to tasks is empty or invalid")
         return []
 
+    funcname = getattr(func, "__name__", repr(func))
     cpu_count = multiprocessing.cpu_count()
-    num = len(tasks) if len(tasks) <= cpu_count else cpu_count
+    num = max(1, min(len(tasks), cpu_count))
 
     starttime, results = time.time(), []
+    pool = multiprocessing.Pool(num)
+    try:
+        if isinstance(tasks[0], (list, tuple)):
+            results = pool.starmap(func, tasks)
+        else:
+            results = pool.map(func, tasks)
+        pool.close()
+        pool.join()
+    except KeyboardInterrupt:
+        logger.error(f"[Concurrent] multi-process execute [{funcname}] cancelled by user")
+        pool.terminate()
+        pool.join()
+        raise
+    except Exception:
+        logger.error(
+            f"[Concurrent] multi-process execute [{funcname}] failed, message: \n{traceback.format_exc()}"
+        )
+        pool.terminate()
+        pool.join()
+        return []
 
-    # TODO: handle KeyboardInterrupt and exit program immediately
-    with multiprocessing.Pool(num) as pool:
-        try:
-            if isinstance(tasks[0], (list, tuple)):
-                results = pool.starmap(func, tasks)
-            else:
-                results = pool.map(func, tasks)
-        except KeyboardInterrupt:
-            logger.error(f"the tasks has been cancelled and the program will exit now")
-
-            pool.terminate()
-            pool.join()
-
-    funcname = getattr(func, "__name__", repr(func))
     logger.info(
         f"[Concurrent] multi-process concurrent execute [{funcname}] finished, count: {len(tasks)}, cost: {time.time()-starttime:.2f}s"
     )
@@ -577,11 +589,14 @@ def multi_thread_run(
 
     if num_threads is None or num_threads <= 0:
         num_threads = min(len(tasks), (os.cpu_count() or 1) * 2)
+    else:
+        num_threads = max(1, min(len(tasks), num_threads))
 
     funcname = getattr(func, "__name__", repr(func))
 
     results, starttime = [None] * len(tasks), time.time()
-    with futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
+    executor = futures.ThreadPoolExecutor(max_workers=num_threads)
+    try:
         if isinstance(tasks[0], (list, tuple)):
             collections = {executor.submit(func, *param): i for i, param in enumerate(tasks)}
         else:
@@ -601,6 +616,14 @@ def multi_thread_run(
                 results[index] = result
             except Exception as e:
                 logger.error(f"function {funcname} execution generated an exception: {e}")
+    except KeyboardInterrupt:
+        logger.error(f"[Concurrent] multi-threaded execute [{funcname}] cancelled by user")
+        for future in getattr(locals(), "collections", {}):
+            future.cancel()
+        executor.shutdown(wait=False, cancel_futures=True)
+        raise
+    finally:
+        executor.shutdown(wait=True, cancel_futures=False)
 
     logger.info(
         f"[Concurrent] multi-threaded execute [{funcname}] finished, count: {len(tasks)}, cost: {time.time()-starttime:.2f}s"
