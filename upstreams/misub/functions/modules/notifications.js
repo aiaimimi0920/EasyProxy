@@ -174,7 +174,7 @@ export async function checkAndNotify(sub, settings, env) {
  * @param {Object} env - Cloudflare环境
  * @returns {Promise<Response>}
  */
-export async function handleCronTrigger(env) {
+export async function handleCronTrigger(env, triggerType = 'cron') {
     const { StorageFactory } = await import('../storage-adapter.js');
     const { checkAndNotify } = await import('./notifications.js');
     const { runAggregatorSync } = await import('./aggregator-sync.js');
@@ -377,20 +377,36 @@ hasNodeCountUpdate = true;
         }
     }
 
-const duration = Date.now() - startTime;
-const summary = {
-success: true,
-summary: {
-total: httpSubscriptions.length,
-updated: updatedCount,
-failed: failedCount,
-changes: changesMade,
-duration: `${duration}ms`,
-failed_subscriptions: failedSubscriptions
-}
-};
+    const duration = Date.now() - startTime;
+    const summary = {
+        success: true,
+        summary: {
+            total: httpSubscriptions.length,
+            updated: updatedCount,
+            failed: failedCount,
+            changes: changesMade,
+            duration: `${duration}ms`,
+            failed_subscriptions: failedSubscriptions
+        }
+    };
 
-console.info(`[Cron] Completed in ${duration}ms:`, summary.summary);
+    console.info(`[Cron] Completed in ${duration}ms:`, summary.summary);
+
+    try {
+        const kv = StorageFactory.resolveKV(env);
+        if (kv) {
+            const executionStatus = {
+                type: triggerType,
+                timestamp: new Date().toISOString(),
+                result: summary.summary
+            };
+            await kv.put('cron_last_execution', JSON.stringify(executionStatus), {
+                expirationTtl: 86400
+            });
+        }
+    } catch (statusError) {
+        console.warn('[Cron] Failed to persist execution status:', statusError);
+    }
 
 // [新增] 检测并发送节点数量变化通知
 const nodeCountChanges = [];

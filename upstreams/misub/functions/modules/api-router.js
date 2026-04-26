@@ -8,6 +8,7 @@ import { createJsonResponse, createErrorResponse, getAuthDebugInfo } from './uti
 import { authMiddleware, handleLogin, handleLogout, getAuthSessionDiagnostic, getLoginPasswordDiagnostic } from './auth-middleware.js';
 import { handleDataRequest, handleMisubsSave, handleSettingsGet, handleSettingsSave, handlePublicProfilesRequest, handlePublicConfig, handleUpdatePassword } from './api-handler.js';
 import { handleCronTrigger } from './notifications.js';
+import { KV_KEY_SETTINGS } from './config.js';
 import {
     handleSubscriptionNodesRequest,
     handlePublicPreviewRequest
@@ -378,6 +379,18 @@ export async function handleApiRequest(request, env) {
         case '/settings/password':
             return await handleUpdatePassword(request, env);
 
+        case '/cron/status':
+            if (request.method === 'GET') {
+                return await handleCronStatusRequest(env);
+            }
+            return createErrorResponse('Method Not Allowed', 405);
+
+        case '/cron/trigger':
+            if (request.method === 'POST') {
+                return await handleCronTriggerRequest(env);
+            }
+            return createErrorResponse('Method Not Allowed', 405);
+
         case '/guestbook/manage':
             if (request.method === 'GET') {
                 return await handleGuestbookManageGet(env);
@@ -539,4 +552,61 @@ function encodeArrayBufferToBase64(buffer) {
     }
 
     return btoa(binary);
+}
+
+async function handleCronStatusRequest(env) {
+    try {
+        const storageType = await StorageFactory.getStorageType(env);
+        const storageAdapter = StorageFactory.createAdapter(env, storageType);
+        const settings = await storageAdapter.get(KV_KEY_SETTINGS) || {};
+
+        let lastExecution = null;
+        try {
+            const kv = StorageFactory.resolveKV(env);
+            if (kv) {
+                const statusData = await kv.get('cron_last_execution');
+                if (statusData) {
+                    lastExecution = JSON.parse(statusData);
+                }
+            }
+        } catch (error) {
+            console.warn('[Cron Status] Failed to fetch last execution:', error);
+        }
+
+        const cronType = env?.CRON_TYPE || 'secret-http-trigger';
+        const maxSyncCount = parseInt(env?.CRON_MAX_SYNC_COUNT, 10) || null;
+        const syncTimeout = parseInt(env?.CRON_SYNC_TIMEOUT, 10) || null;
+        const enableParallel = env?.CRON_ENABLE_PARALLEL ? env.CRON_ENABLE_PARALLEL !== 'false' : null;
+
+        return createJsonResponse({
+            enabled: !!String(settings?.cronSecret || '').trim(),
+            config: {
+                type: cronType,
+                maxSyncCount,
+                syncTimeout,
+                enableParallel,
+                requiresSecret: true,
+                aggregatorRunOnCron: settings?.aggregatorSync?.runOnCron !== false
+            },
+            totalSubscriptions: lastExecution?.result?.total || 0,
+            successfulSyncs: lastExecution?.result?.updated || 0,
+            failedSyncs: lastExecution?.result?.failed || 0,
+            lastSync: lastExecution?.timestamp || null,
+            details: lastExecution?.result?.failed_subscriptions || [],
+            lastExecution,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error('[Cron Status Error]', error);
+        return createErrorResponse(error, 500);
+    }
+}
+
+async function handleCronTriggerRequest(env) {
+    try {
+        return await handleCronTrigger(env, 'manual_trigger');
+    } catch (error) {
+        console.error('[Cron Trigger Error]', error);
+        return createErrorResponse(error, 500);
+    }
 }

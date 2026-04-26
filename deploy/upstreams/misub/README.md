@@ -90,6 +90,26 @@ Phase 1 output rules:
 - includes enabled `connector` metadata sources such as `ECH Worker`
 - connector emission does not imply local runtime execution
 
+## Operator Cron API
+
+External schedulers still hit:
+
+- `GET /cron?secret=<cronSecret>`
+
+Authenticated operators may also use:
+
+- `GET /api/cron/status`
+- `POST /api/cron/trigger`
+
+Behavior notes:
+
+- `/cron` remains the secret-protected execution entrypoint intended for
+  external uptime / scheduler services
+- `/api/cron/status` reads the latest persisted execution summary when KV is
+  available
+- `/api/cron/trigger` reuses the same cron execution pipeline but is protected
+  by the normal admin session
+
 ## Docker / VPS Compatibility Path
 
 Docker / VPS remains supported as a secondary runtime:
