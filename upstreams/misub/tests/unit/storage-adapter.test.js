@@ -45,4 +45,11 @@ describe('StorageFactory', () => {
 
         expect(adapter.constructor.name).toBe('D1StorageAdapter');
     });
+
+    it('fails closed when no storage bindings are available', async () => {
+        const adapter = StorageFactory.createAdapter({}, STORAGE_TYPES.D1);
+
+        await expect(adapter.put('worker_settings_v1', { mytoken: 'auto' })).rejects.toThrow('storage is unavailable');
+        await expect(adapter.delete('worker_settings_v1')).rejects.toThrow('storage is unavailable');
+    });
 });

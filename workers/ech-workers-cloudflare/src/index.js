@@ -5,6 +5,11 @@ const encoder = new TextEncoder();
 export default {
   async fetch(request, env) {
     try {
+      const expectedToken = String(env.ECH_TOKEN || "").trim();
+      if (!expectedToken) {
+        return new Response("ECH_TOKEN is not configured", { status: 503 });
+      }
+
       const upgradeHeader = request.headers.get("Upgrade");
       if (!upgradeHeader || upgradeHeader.trim().toLowerCase() !== "websocket") {
         return new URL(request.url).pathname === "/"
@@ -12,7 +17,6 @@ export default {
           : new Response("Expected WebSocket", { status: 426 });
       }
 
-      const expectedToken = String(env.ECH_TOKEN || "").trim();
       if (expectedToken && request.headers.get("Sec-WebSocket-Protocol") !== expectedToken) {
         return new Response("Unauthorized", { status: 401 });
       }
@@ -117,6 +121,18 @@ async function handleSession(webSocket) {
     };
   };
 
+  const base64ToBytes = (input) => {
+    if (!input) {
+      return new Uint8Array();
+    }
+    const binary = atob(input);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes;
+  };
+
   const isCFError = (err) => {
     const msg = String(err?.message || "").toLowerCase();
     return msg.includes("proxy request") || msg.includes("cannot connect") || msg.includes("cloudflare");
@@ -160,8 +176,8 @@ async function handleSession(webSocket) {
           remoteWriter = remoteSocket.writable.getWriter();
           remoteReader = remoteSocket.readable.getReader();
 
-          if (firstFrameData) {
-            await remoteWriter.write(encoder.encode(firstFrameData));
+          if (firstFrameData?.byteLength > 0) {
+            await remoteWriter.write(firstFrameData);
           }
 
           isConnecting = false;
@@ -201,15 +217,15 @@ async function handleSession(webSocket) {
     try {
       const data = event.data;
       if (typeof data === "string") {
-        if (data.startsWith("CONNECT:")) {
-          const parts = data.split("|");
-          const targetAddr = parts[0].substring(8);
-          // Decode base64-encoded first frame data
-          const rawFirstFrame = parts[1] || "";
-          const firstFrameData = rawFirstFrame ? atob(rawFirstFrame) : "";
-          const proxyIP = parts[2] || "";
-          if (!targetAddr) {
-            throw new Error("invalid target address");
+          if (data.startsWith("CONNECT:")) {
+            const parts = data.split("|");
+            const targetAddr = parts[0].substring(8);
+            // Decode base64-encoded first frame data
+            const rawFirstFrame = parts[1] || "";
+            const firstFrameData = rawFirstFrame ? base64ToBytes(rawFirstFrame) : new Uint8Array();
+            const proxyIP = parts[2] || "";
+            if (!targetAddr) {
+              throw new Error("invalid target address");
           }
           await connectToRemote(targetAddr, firstFrameData, proxyIP);
         } else if (data.startsWith("DATA:")) {

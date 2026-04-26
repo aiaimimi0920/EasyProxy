@@ -16,8 +16,8 @@ export const SESSION_DURATION = 8 * 60 * 60 * 1000; // 8 hours
 // Default settings
 export const DEFAULT_SETTINGS = {
     FileName: 'MiSub',
-    mytoken: 'auto',
-    profileToken: 'profiles',
+    mytoken: '',
+    profileToken: '',
     subConverter: 'url.v1.mk',
     subConfig: 'https://raw.githubusercontent.com/cmliu/ACL4SSR/refs/heads/main/Clash/config/ACL4SSR_Online_Full.ini',
     subConverterScv: false,

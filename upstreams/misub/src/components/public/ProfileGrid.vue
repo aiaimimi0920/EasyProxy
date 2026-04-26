@@ -14,7 +14,7 @@ const props = defineProps({
   },
   profileToken: {
     type: String,
-    default: 'profiles'
+    default: ''
   }
 });
 

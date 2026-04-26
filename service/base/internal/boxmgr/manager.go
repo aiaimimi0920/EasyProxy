@@ -606,10 +606,59 @@ func (m *Manager) applyConfigSettings(cfg *config.Config) {
 		m.drainTimeout = defaultDrainTimeout
 	}
 	m.minAvailableNodes = cfg.SubscriptionRefresh.MinAvailableNodes
+	m.monitorCfg.Enabled = cfg.ManagementEnabled()
+	m.monitorCfg.Listen = cfg.Management.Listen
+	m.monitorCfg.Password = cfg.Management.Password
+	m.monitorCfg.ExternalIP = cfg.ExternalIP
+	if cfg.Mode == "hybrid" || cfg.Mode == "multi-port" {
+		m.monitorCfg.ProxyUsername = cfg.MultiPort.Username
+		m.monitorCfg.ProxyPassword = cfg.MultiPort.Password
+	} else {
+		m.monitorCfg.ProxyUsername = cfg.Listener.Username
+		m.monitorCfg.ProxyPassword = cfg.Listener.Password
+	}
+	m.monitorCfg.ProbeTarget = cfg.Management.ProbeTarget
+	m.monitorCfg.ProbeTargets = append([]string(nil), cfg.Management.ProbeTargets...)
 	m.monitorCfg.SkipCertVerify = cfg.SkipCertVerify
 	if m.monitorMgr != nil {
 		m.monitorMgr.SetSkipCertVerify(cfg.SkipCertVerify)
+		if err := m.monitorMgr.UpdateProbeTargets(cfg.Management.ProbeTargets, cfg.Management.ProbeTarget); err != nil {
+			m.logger.Warnf("failed to update probe targets from config: %v", err)
+		}
 	}
+}
+
+func hasRuntimeSourceRefs(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	if len(cfg.Subscriptions) > 0 {
+		return true
+	}
+	for _, connector := range cfg.Connectors {
+		if connector.Enabled {
+			return true
+		}
+	}
+	if cfg.SourceSync.Enabled {
+		if strings.TrimSpace(cfg.SourceSync.ManifestURL) != "" || len(cfg.SourceSync.FallbackSubscriptions) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Manager) nodeIndexByRefLocked(ref string) int {
+	ref = strings.TrimSpace(ref)
+	if ref == "" || m.cfg == nil {
+		return -1
+	}
+	for idx, node := range m.cfg.Nodes {
+		if node.URI == ref || node.Name == ref {
+			return idx
+		}
+	}
+	return -1
 }
 
 // defaultLogger is the fallback logger using standard log.
@@ -754,14 +803,14 @@ func (m *Manager) CreateNode(ctx context.Context, node config.NodeConfig) (confi
 }
 
 // UpdateNode updates an existing node by name and persists to the Store.
-func (m *Manager) UpdateNode(ctx context.Context, name string, node config.NodeConfig) (config.NodeConfig, error) {
+func (m *Manager) UpdateNode(ctx context.Context, ref string, node config.NodeConfig) (config.NodeConfig, error) {
 	if ctx != nil {
 		if err := ctx.Err(); err != nil {
 			return config.NodeConfig{}, err
 		}
 	}
 
-	name = strings.TrimSpace(name)
+	ref = strings.TrimSpace(ref)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -769,51 +818,63 @@ func (m *Manager) UpdateNode(ctx context.Context, name string, node config.NodeC
 		return config.NodeConfig{}, errConfigUnavailable
 	}
 
-	idx := m.nodeIndexLocked(name)
-	if idx == -1 {
+	idx := m.nodeIndexByRefLocked(ref)
+	var existingStore *store.Node
+	var err error
+	if m.store != nil {
+		existingStore, err = m.lookupStoreNodeLocked(ctx, ref, idx)
+		if err != nil {
+			return config.NodeConfig{}, fmt.Errorf("lookup in store: %w", err)
+		}
+	}
+	if idx == -1 && existingStore == nil {
 		return config.NodeConfig{}, monitor.ErrNodeNotFound
 	}
 
-	normalized, err := m.prepareNodeLocked(node, name)
+	currentName := ""
+	if idx >= 0 {
+		currentName = m.cfg.Nodes[idx].Name
+	}
+	normalized, err := m.prepareNodeLocked(node, currentName)
 	if err != nil {
 		return config.NodeConfig{}, err
 	}
 
 	// Preserve the original source
-	normalized.Source = m.cfg.Nodes[idx].Source
+	if idx >= 0 {
+		normalized.Source = m.cfg.Nodes[idx].Source
+	}
 
 	// Persist to Store if available
-	if m.store != nil {
-		existing, err := m.store.GetNodeByName(ctx, name)
-		if err != nil {
-			return config.NodeConfig{}, fmt.Errorf("lookup in store: %w", err)
-		}
-		if existing != nil {
-			existing.URI = normalized.URI
-			existing.Name = normalized.Name
-			existing.Port = normalized.Port
-			existing.Username = normalized.Username
-			existing.Password = normalized.Password
-			if err := m.store.UpdateNode(ctx, existing); err != nil {
-				return config.NodeConfig{}, fmt.Errorf("update in store: %w", err)
-			}
+	if existingStore != nil {
+		existingStore.URI = normalized.URI
+		existingStore.Name = normalized.Name
+		existingStore.Port = normalized.Port
+		existingStore.Username = normalized.Username
+		existingStore.Password = normalized.Password
+		if err := m.store.UpdateNode(ctx, existingStore); err != nil {
+			return config.NodeConfig{}, fmt.Errorf("update in store: %w", err)
 		}
 	}
 
-	m.cfg.Nodes[idx] = normalized
+	if idx >= 0 {
+		m.cfg.Nodes[idx] = normalized
+	} else if existingStore != nil && existingStore.Enabled {
+		m.cfg.Nodes = append(m.cfg.Nodes, normalized)
+	}
 	return normalized, nil
 }
 
 // SetNodeEnabled enables or disables a node by name.
 // This only updates the store; a reload is needed for changes to take effect.
-func (m *Manager) SetNodeEnabled(ctx context.Context, name string, enabled bool) error {
+func (m *Manager) SetNodeEnabled(ctx context.Context, ref string, enabled bool) error {
 	if ctx != nil {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 	}
 
-	name = strings.TrimSpace(name)
+	ref = strings.TrimSpace(ref)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -822,29 +883,28 @@ func (m *Manager) SetNodeEnabled(ctx context.Context, name string, enabled bool)
 	}
 
 	// Update in Store
+	idx := m.nodeIndexByRefLocked(ref)
 	if m.store != nil {
-		existing, err := m.store.GetNodeByName(ctx, name)
+		existing, err := m.lookupStoreNodeLocked(ctx, ref, idx)
 		if err != nil {
 			return fmt.Errorf("lookup in store: %w", err)
 		}
-		if existing == nil {
+		if existing == nil && idx == -1 {
 			return monitor.ErrNodeNotFound
 		}
-		existing.Enabled = enabled
-		if err := m.store.UpdateNode(ctx, existing); err != nil {
-			return fmt.Errorf("update in store: %w", err)
+		if existing != nil {
+			existing.Enabled = enabled
+			if err := m.store.UpdateNode(ctx, existing); err != nil {
+				return fmt.Errorf("update in store: %w", err)
+			}
 		}
-	} else {
+	} else if idx == -1 {
 		// No store — just check the node exists in config
-		idx := m.nodeIndexLocked(name)
-		if idx == -1 {
-			return monitor.ErrNodeNotFound
-		}
+		return monitor.ErrNodeNotFound
 	}
 
 	// If disabling, remove from active config nodes
 	if !enabled {
-		idx := m.nodeIndexLocked(name)
 		if idx != -1 {
 			m.cfg.Nodes = append(m.cfg.Nodes[:idx], m.cfg.Nodes[idx+1:]...)
 		}
@@ -854,14 +914,14 @@ func (m *Manager) SetNodeEnabled(ctx context.Context, name string, enabled bool)
 }
 
 // DeleteNode removes a node by name and deletes it from the Store.
-func (m *Manager) DeleteNode(ctx context.Context, name string) error {
+func (m *Manager) DeleteNode(ctx context.Context, ref string) error {
 	if ctx != nil {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 	}
 
-	name = strings.TrimSpace(name)
+	ref = strings.TrimSpace(ref)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -869,26 +929,60 @@ func (m *Manager) DeleteNode(ctx context.Context, name string) error {
 		return errConfigUnavailable
 	}
 
-	idx := m.nodeIndexLocked(name)
-	if idx == -1 {
-		return monitor.ErrNodeNotFound
-	}
+	idx := m.nodeIndexByRefLocked(ref)
 
 	// Delete from Store if available
 	if m.store != nil {
-		existing, err := m.store.GetNodeByName(ctx, name)
+		existing, err := m.lookupStoreNodeLocked(ctx, ref, idx)
 		if err != nil {
 			return fmt.Errorf("lookup in store: %w", err)
+		}
+		if existing == nil && idx == -1 {
+			return monitor.ErrNodeNotFound
 		}
 		if existing != nil {
 			if err := m.store.DeleteNode(ctx, existing.ID); err != nil {
 				return fmt.Errorf("delete from store: %w", err)
 			}
 		}
+	} else if idx == -1 {
+		return monitor.ErrNodeNotFound
 	}
 
-	m.cfg.Nodes = append(m.cfg.Nodes[:idx], m.cfg.Nodes[idx+1:]...)
+	if idx != -1 {
+		m.cfg.Nodes = append(m.cfg.Nodes[:idx], m.cfg.Nodes[idx+1:]...)
+	}
 	return nil
+}
+
+func (m *Manager) lookupStoreNodeLocked(ctx context.Context, ref string, activeIdx int) (*store.Node, error) {
+	if m.store == nil {
+		return nil, nil
+	}
+
+	if activeIdx >= 0 && activeIdx < len(m.cfg.Nodes) {
+		activeURI := strings.TrimSpace(m.cfg.Nodes[activeIdx].URI)
+		if activeURI != "" {
+			node, err := m.store.GetNodeByURI(ctx, activeURI)
+			if err != nil {
+				return nil, err
+			}
+			if node != nil {
+				return node, nil
+			}
+		}
+	}
+
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return nil, nil
+	}
+	if node, err := m.store.GetNodeByURI(ctx, ref); err != nil {
+		return nil, err
+	} else if node != nil {
+		return node, nil
+	}
+	return m.store.GetNodeByName(ctx, ref)
 }
 
 // TriggerReload reloads the sing-box instance by re-reading config from disk
@@ -973,7 +1067,7 @@ func (m *Manager) TriggerReload(ctx context.Context) error {
 	m.mu.RLock()
 	ephemeralNodes := cloneNodes(m.ephemeralNodes)
 	m.mu.RUnlock()
-	if len(ephemeralNodes) > 0 {
+	if len(ephemeralNodes) > 0 && hasRuntimeSourceRefs(newCfg) {
 		existing := make(map[string]struct{}, len(newCfg.Nodes))
 		for _, node := range newCfg.Nodes {
 			existing[node.URI] = struct{}{}

@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"sort"
 	"strconv"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -43,9 +44,9 @@ type Session struct {
 type NodeManager interface {
 	ListConfigNodes(ctx context.Context) ([]config.NodeConfig, error)
 	CreateNode(ctx context.Context, node config.NodeConfig) (config.NodeConfig, error)
-	UpdateNode(ctx context.Context, name string, node config.NodeConfig) (config.NodeConfig, error)
-	DeleteNode(ctx context.Context, name string) error
-	SetNodeEnabled(ctx context.Context, name string, enabled bool) error
+	UpdateNode(ctx context.Context, ref string, node config.NodeConfig) (config.NodeConfig, error)
+	DeleteNode(ctx context.Context, ref string) error
+	SetNodeEnabled(ctx context.Context, ref string, enabled bool) error
 	TriggerReload(ctx context.Context) error
 }
 
@@ -218,12 +219,105 @@ func (s *Server) SetConfig(cfg *config.Config) {
 	s.cfgSrc = cfg
 	if cfg != nil {
 		cfg.RLock()
+		s.cfg.Enabled = cfg.ManagementEnabled()
+		s.cfg.Listen = cfg.Management.Listen
 		s.cfg.ExternalIP = cfg.ExternalIP
 		s.cfg.ProbeTarget = cfg.Management.ProbeTarget
 		s.cfg.ProbeTargets = append([]string(nil), cfg.Management.ProbeTargets...)
+		s.cfg.Password = cfg.Management.Password
+		if cfg.Mode == "hybrid" || cfg.Mode == "multi-port" {
+			s.cfg.ProxyUsername = cfg.MultiPort.Username
+			s.cfg.ProxyPassword = cfg.MultiPort.Password
+		} else {
+			s.cfg.ProxyUsername = cfg.Listener.Username
+			s.cfg.ProxyPassword = cfg.Listener.Password
+		}
 		s.cfg.SkipCertVerify = cfg.SkipCertVerify
 		cfg.RUnlock()
 	}
+}
+
+func settingsChangeRequiresReload(c *config.Config, req allSettingsRequest) bool {
+	if c == nil {
+		return true
+	}
+
+	normalizedListenerProtocol := req.ListenerProtocol
+	if p, err := config.NormalizeInboundProtocol(req.ListenerProtocol); err == nil {
+		normalizedListenerProtocol = p
+	}
+	normalizedMultiPortProtocol := req.MultiPortProtocol
+	if p, err := config.NormalizeInboundProtocol(req.MultiPortProtocol); err == nil {
+		normalizedMultiPortProtocol = p
+	}
+	probeTarget := strings.TrimSpace(req.ManagementProbeTarget)
+	sourceManifestURL := strings.TrimSpace(req.SourceSyncManifestURL)
+	sourceManifestToken := strings.TrimSpace(req.SourceSyncManifestToken)
+	defaultDirectProxyScheme := strings.TrimSpace(req.SourceSyncDefaultDirectProxyScheme)
+	if defaultDirectProxyScheme == "" {
+		defaultDirectProxyScheme = "http"
+	}
+
+	if c.Mode != req.Mode ||
+		c.Listener.Address != req.ListenerAddress ||
+		c.Listener.Port != req.ListenerPort ||
+		c.Listener.Protocol != normalizedListenerProtocol ||
+		c.Listener.Username != req.ListenerUsername ||
+		c.Listener.Password != req.ListenerPassword ||
+		c.MultiPort.Address != req.MultiPortAddress ||
+		c.MultiPort.BasePort != req.MultiPortBasePort ||
+		c.MultiPort.Protocol != normalizedMultiPortProtocol ||
+		c.MultiPort.Username != req.MultiPortUsername ||
+		c.MultiPort.Password != req.MultiPortPassword ||
+		c.Pool.Mode != req.PoolMode ||
+		c.Pool.FailureThreshold != req.PoolFailureThreshold ||
+		c.Management.Listen != req.ManagementListen ||
+		c.Management.Password != req.ManagementPassword ||
+		c.SourceSync.Enabled != req.SourceSyncEnabled ||
+		c.SourceSync.ManifestURL != sourceManifestURL ||
+		c.SourceSync.ManifestToken != sourceManifestToken ||
+		c.SourceSync.DefaultDirectProxyScheme != defaultDirectProxyScheme ||
+		!reflect.DeepEqual(c.SourceSync.FallbackSubscriptions, req.SourceSyncFallbackSubscriptions) ||
+		!reflect.DeepEqual(c.Subscriptions, req.Subscriptions) {
+		return true
+	}
+
+	if req.ManagementEnabled != nil {
+		currentEnabled := c.ManagementEnabled()
+		if currentEnabled != *req.ManagementEnabled {
+			return true
+		}
+	}
+
+	if c.Management.ProbeTarget != probeTarget {
+		return true
+	}
+
+	if d, err := time.ParseDuration(req.PoolBlacklistDuration); err == nil && d > 0 && c.Pool.BlacklistDuration != d {
+		return true
+	}
+	if d, err := time.ParseDuration(req.SubRefreshDrainTimeout); err == nil && d > 0 && c.SubscriptionRefresh.DrainTimeout != d {
+		return true
+	}
+	if d, err := time.ParseDuration(req.SubRefreshInterval); err == nil && d > 0 && c.SubscriptionRefresh.Interval != d {
+		return true
+	}
+	if d, err := time.ParseDuration(req.SubRefreshTimeout); err == nil && d > 0 && c.SubscriptionRefresh.Timeout != d {
+		return true
+	}
+	if d, err := time.ParseDuration(req.SubRefreshHealthCheckTimeout); err == nil && d > 0 && c.SubscriptionRefresh.HealthCheckTimeout != d {
+		return true
+	}
+	if d, err := time.ParseDuration(req.SourceSyncRefreshInterval); err == nil && d > 0 && c.SourceSync.RefreshInterval != d {
+		return true
+	}
+	if d, err := time.ParseDuration(req.SourceSyncRequestTimeout); err == nil && d > 0 && c.SourceSync.RequestTimeout != d {
+		return true
+	}
+	if d, err := time.ParseDuration(req.GeoIPAutoUpdateInterval); err == nil && d > 0 && c.GeoIP.AutoUpdateInterval != d {
+		return true
+	}
+	return false
 }
 
 // allSettingsResponse is the JSON structure for GET /api/settings.
@@ -1385,6 +1479,11 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		s.cfgMu.RLock()
+		current := s.cfgSrc
+		s.cfgMu.RUnlock()
+		needReload := settingsChangeRequiresReload(current, req)
+
 		if err := s.updateAllSettings(req); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			writeJSON(w, map[string]any{"error": err.Error()})
@@ -1393,7 +1492,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 
 		writeJSON(w, map[string]any{
 			"message":     "设置已保存",
-			"need_reload": false,
+			"need_reload": needReload,
 		})
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)

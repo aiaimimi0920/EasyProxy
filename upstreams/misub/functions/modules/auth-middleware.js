@@ -230,6 +230,11 @@ export async function getLoginPasswordDiagnostic(request, env) {
     result.input.normalizedLength = inputPassword.length;
     result.expected.normalizedLength = currentPassword.length;
 
+    if (!currentPassword) {
+        result.reason = 'missing_admin_password';
+        return result;
+    }
+
     if (!result.input.provided) {
         result.reason = 'missing_password';
         return result;
@@ -312,6 +317,10 @@ export async function handleLogin(request, env) {
         const { password } = payload || {};
         const inputPassword = normalizeSecret(password);
         const currentPassword = normalizeSecret(await getAdminPassword(env));
+
+        if (!currentPassword) {
+            return new Response(JSON.stringify({ error: '未配置管理员密码，请先在环境变量或 KV 中设置 ADMIN_PASSWORD' }), { status: 503 });
+        }
         const isPasswordMatched = inputPassword === currentPassword;
 
         if (isPasswordMatched) {

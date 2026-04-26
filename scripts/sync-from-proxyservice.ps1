@@ -80,8 +80,8 @@ $mappings = @(
     @{
         From = Join-Path $resolvedSource "repos\aggregator"
         To = Join-Path $resolvedTarget "upstreams\aggregator"
-        ExcludeDirs = @(".git")
-        ExcludeFiles = @()
+        ExcludeDirs = @(".git", "__pycache__", ".pytest_cache")
+        ExcludeFiles = @("cache.db", "workflow.log")
     },
     @{
         From = Join-Path $resolvedSource "repos\ech-workers"

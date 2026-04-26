@@ -138,12 +138,14 @@ export default function ManagePanel() {
   // Modal state
   const [modalOpen, setModalOpen] = useState(false)
   const [editingNode, setEditingNode] = useState<string | null>(null)
+  const [editingNodeLabel, setEditingNodeLabel] = useState<string | null>(null)
   const [form, setForm] = useState<ConfigNodePayload>(emptyPayload)
   const [formError, setFormError] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
   // Delete confirm
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
+  const [deleteTargetLabel, setDeleteTargetLabel] = useState<string | null>(null)
   const [deleting, setDeleting] = useState(false)
 
   // Toggle state
@@ -322,13 +324,15 @@ export default function ManagePanel() {
 
   const openCreateModal = () => {
     setEditingNode(null)
+    setEditingNodeLabel(null)
     setForm(emptyPayload)
     setFormError('')
     setModalOpen(true)
   }
 
   const openEditModal = (node: MergedNode) => {
-    setEditingNode(node.name)
+    setEditingNode(node.uri)
+    setEditingNodeLabel(node.name)
     setForm({
       name: node.name,
       uri: node.uri,
@@ -373,6 +377,7 @@ export default function ManagePanel() {
       setSuccess(res.message || '节点已删除')
       setNeedReload(true)
       setDeleteTarget(null)
+      setDeleteTargetLabel(null)
       await loadData()
     } catch (err) {
       setError(err instanceof Error ? err.message : '删除失败')
@@ -383,9 +388,9 @@ export default function ManagePanel() {
 
   const handleToggle = async (node: MergedNode) => {
     const newEnabled = !!node.disabled
-    setToggling(node.name)
+    setToggling(node.uri)
     try {
-      const res = await toggleConfigNode(node.name, newEnabled)
+      const res = await toggleConfigNode(node.uri, newEnabled)
       setSuccess(res.message || (newEnabled ? '节点已启用' : '节点已禁用'))
       await loadData()
     } catch (err) {
@@ -419,11 +424,11 @@ export default function ManagePanel() {
 
   // ---- Batch ----
 
-  const toggleSelectNode = (name: string) => {
+  const toggleSelectNode = (ref: string) => {
     setSelectedNodes(prev => {
       const next = new Set(prev)
-      if (next.has(name)) next.delete(name)
-      else next.add(name)
+      if (next.has(ref)) next.delete(ref)
+      else next.add(ref)
       return next
     })
   }
@@ -432,7 +437,7 @@ export default function ManagePanel() {
     if (selectedNodes.size === sortedNodes.length) {
       setSelectedNodes(new Set())
     } else {
-      setSelectedNodes(new Set(sortedNodes.map(n => n.name)))
+      setSelectedNodes(new Set(sortedNodes.map(n => n.uri)))
     }
   }
 
@@ -452,7 +457,7 @@ export default function ManagePanel() {
   }
 
   const handleBatchProbe = async () => {
-    const nodesToProbe = sortedNodes.filter(n => selectedNodes.has(n.name) && !n.disabled && n.tag)
+      const nodesToProbe = sortedNodes.filter(n => selectedNodes.has(n.uri) && !n.disabled && n.tag)
     if (nodesToProbe.length === 0) {
       setError('所选节点中没有可探测的节点（已禁用或无运行时标识的节点将被跳过）')
       return
@@ -835,20 +840,20 @@ export default function ManagePanel() {
               ) : (
                 sortedNodes.map((node) => (
                   <tr
-                    key={node.name}
+                    key={node.uri}
                     className={`
                       transition-colors border-b border-base-200/50 last:border-none group
                       ${node.runtimeStatus === 'disabled' ? 'opacity-50 grayscale-[0.5]' : ''}
                       ${node.runtimeStatus === 'blacklisted' ? 'opacity-80' : ''}
-                      ${selectedNodes.has(node.name) ? 'bg-primary/5' : 'hover:bg-base-200/40'}
+                      ${selectedNodes.has(node.uri) ? 'bg-primary/5' : 'hover:bg-base-200/40'}
                     `}
                   >
                     <td className="w-8">
                       <input
                         type="checkbox"
                         className="checkbox checkbox-sm"
-                        checked={selectedNodes.has(node.name)}
-                        onChange={() => toggleSelectNode(node.name)}
+                        checked={selectedNodes.has(node.uri)}
+                        onChange={() => toggleSelectNode(node.uri)}
                       />
                     </td>
                     <td>
@@ -899,10 +904,10 @@ export default function ManagePanel() {
                         <button
                           className={`btn btn-sm btn-square btn-ghost ${node.disabled ? 'text-success hover:bg-success/10' : 'text-warning hover:bg-warning/10'}`}
                           onClick={() => handleToggle(node)}
-                          disabled={toggling === node.name}
+                          disabled={toggling === node.uri}
                           title={node.disabled ? '启用该节点' : '禁用该节点'}
                         >
-                          {toggling === node.name
+                          {toggling === node.uri
                             ? <span className="loading loading-spinner loading-xs"></span>
                             : node.disabled
                                 ? <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" /></svg>
@@ -920,9 +925,9 @@ export default function ManagePanel() {
                         {/* Delete */}
                         <button
                           className="btn btn-sm btn-square btn-ghost text-error hover:bg-error/10"
-                          onClick={() => setDeleteTarget(node.name)}
-                          title="删除节点"
-                        >
+                            onClick={() => { setDeleteTarget(node.uri); setDeleteTargetLabel(node.name); }}
+                            title="删除节点"
+                          >
                           <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                         </button>
                       </div>
@@ -947,7 +952,7 @@ export default function ManagePanel() {
         <div className="modal modal-open">
           <div className="modal-box">
             <h3 className="font-bold text-xl mb-4">
-              {editingNode ? `编辑节点: ${editingNode}` : '添加节点'}
+              {editingNodeLabel ? `编辑节点: ${editingNodeLabel}` : '添加节点'}
             </h3>
             <form onSubmit={handleSubmit}>
               {formError && (
@@ -1076,16 +1081,16 @@ export default function ManagePanel() {
           <div className="modal-box max-w-sm">
             <h3 className="font-bold text-lg mb-2">确认删除</h3>
             <p className="text-base-content/70">
-              确定要删除节点 <strong>{deleteTarget}</strong> 吗？此操作不可撤销。
+              确定要删除节点 <strong>{deleteTargetLabel || deleteTarget}</strong> 吗？此操作不可撤销。
             </p>
             <div className="modal-action">
-              <button className="btn btn-ghost" onClick={() => setDeleteTarget(null)} disabled={deleting}>取消</button>
+              <button className="btn btn-ghost" onClick={() => { setDeleteTarget(null); setDeleteTargetLabel(null); }} disabled={deleting}>取消</button>
               <button className="btn btn-error" onClick={handleDelete} disabled={deleting}>
                 {deleting ? <span className="loading loading-spinner loading-xs"></span> : '删除'}
               </button>
             </div>
           </div>
-          <form method="dialog" className="modal-backdrop" onClick={() => !deleting && setDeleteTarget(null)}>
+          <form method="dialog" className="modal-backdrop" onClick={() => !deleting && (setDeleteTarget(null), setDeleteTargetLabel(null))}>
             <button>close</button>
           </form>
         </div>

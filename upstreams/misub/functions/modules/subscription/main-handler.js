@@ -1,5 +1,5 @@
 import { StorageFactory } from '../../storage-adapter.js';
-import { migrateConfigSettings, formatBytes, getCallbackToken, getPublicBaseUrl, migrateProfileIds } from '../utils.js';
+import { migrateConfigSettings, formatBytes, getCallbackToken, getPublicBaseUrl, migrateProfileIds, ensureStableSettingsTokens } from '../utils.js';
 import { generateCombinedNodeList } from '../../services/subscription-service.js';
 import { sendEnhancedTgNotification } from '../notifications.js';
 import { KV_KEY_SUBS, KV_KEY_PROFILES, KV_KEY_SETTINGS, DEFAULT_SETTINGS as defaultSettings } from '../config.js';
@@ -46,6 +46,7 @@ export async function handleMisubRequest(context) {
     const settings = settingsData || {};
     const allMisubs = normalizeSourceCollection(misubsData || []);
     const allProfiles = profilesData || [];
+    const secureSettings = await ensureStableSettingsTokens(storageAdapter, { ...defaultSettings, ...settings });
 
     // 自动迁移旧版 profile ID（去除 'profile_' 前缀）
     if (migrateProfileIds(allProfiles)) {
@@ -54,7 +55,7 @@ export async function handleMisubRequest(context) {
         );
     }
     // 关键：我们在这里定义了 `config`，后续都应该使用它
-    const config = migrateConfigSettings({ ...defaultSettings, ...settings });
+    const config = migrateConfigSettings({ ...defaultSettings, ...secureSettings });
 
 
 
@@ -97,7 +98,7 @@ export async function handleMisubRequest(context) {
             return new Response('Invalid Profile Token', { status: 403 });
         }
         const profile = allProfiles.find(p => (p.customId && p.customId === profileIdentifier) || p.id === profileIdentifier);
-        if (profile && profile.enabled) {
+        if (profile && profile.enabled && profile.isPublic) {
             // Check if the profile has an expiration date and if it's expired
             if (profile.expiresAt) {
                 const expiryDate = new Date(profile.expiresAt);

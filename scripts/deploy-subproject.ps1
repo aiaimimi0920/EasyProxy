@@ -61,42 +61,65 @@ function Ensure-ConfigReady {
     ) -FailureMessage "Failed to initialize config.yaml from config.example.yaml"
 }
 
-function Warn-WeakDefaults {
+function Assert-ProjectConfigReady {
     param(
+        [Parameter(Mandatory = $true)]
+        [string]$Project,
         [Parameter(Mandatory = $true)]
         [object]$Config
     )
 
-    $warnings = @()
+    $errors = @()
 
-    $serviceBase = Get-EasyProxyConfigSection -Config $Config -Name 'serviceBase'
-    $runtime = Get-EasyProxyConfigSection -Config $serviceBase -Name 'runtime'
-    $sourceSync = Get-EasyProxyConfigSection -Config $runtime -Name 'source_sync'
-    $manifestUrl = [string](Get-EasyProxyConfigValue -Object $sourceSync -Name 'manifest_url' -Default '')
-    if ($manifestUrl -match 'example\.com') {
-        $warnings += "serviceBase.runtime.source_sync.manifest_url still uses an example domain."
-    }
-
-    $misub = Get-EasyProxyConfigSection -Config $Config -Name 'misub'
-    $docker = Get-EasyProxyConfigSection -Config $misub -Name 'docker'
-    $env = Get-EasyProxyConfigSection -Config $docker -Name 'env'
-    $adminPassword = [string](Get-EasyProxyConfigValue -Object $env -Name 'ADMIN_PASSWORD' -Default '')
-    if ($adminPassword -like 'change_me*') {
-        $warnings += "misub.docker.env.ADMIN_PASSWORD still uses a placeholder value."
-    }
-
-    $worker = Get-EasyProxyConfigSection -Config $Config -Name 'echWorkersCloudflare'
-    $secrets = Get-EasyProxyConfigSection -Config $worker -Name 'secrets'
-    $echToken = [string](Get-EasyProxyConfigValue -Object $secrets -Name 'ECH_TOKEN' -Default '')
-    if ([string]::IsNullOrWhiteSpace($echToken)) {
-        $warnings += "echWorkersCloudflare.secrets.ECH_TOKEN is empty."
-    }
-
-    if ($warnings.Count -gt 0) {
-        Write-Host "Config warnings:" -ForegroundColor Yellow
-        foreach ($item in $warnings) {
-            Write-Host (" - {0}" -f $item) -ForegroundColor Yellow
+    switch ($Project) {
+        "easyproxy" {
+            $serviceBase = Get-EasyProxyConfigSection -Config $Config -Name 'serviceBase'
+            $runtime = Get-EasyProxyConfigSection -Config $serviceBase -Name 'runtime'
+            $sourceSync = Get-EasyProxyConfigSection -Config $runtime -Name 'source_sync'
+            $manifestUrl = [string](Get-EasyProxyConfigValue -Object $sourceSync -Name 'manifest_url' -Default '')
+            if ($manifestUrl -match 'example\.com') {
+                $errors += "serviceBase.runtime.source_sync.manifest_url still uses an example domain."
+            }
         }
+        "misub-pages" {
+            $misub = Get-EasyProxyConfigSection -Config $Config -Name 'misub'
+            $pages = Get-EasyProxyConfigSection -Config $misub -Name 'pages'
+            $env = Get-EasyProxyConfigSection -Config $pages -Name 'env'
+            $adminPassword = [string](Get-EasyProxyConfigValue -Object $env -Name 'ADMIN_PASSWORD' -Default '')
+            $cookieSecret = [string](Get-EasyProxyConfigValue -Object $env -Name 'COOKIE_SECRET' -Default '')
+            if ($adminPassword -like 'change_me*' -or [string]::IsNullOrWhiteSpace($adminPassword)) {
+                $errors += "misub.pages.env.ADMIN_PASSWORD must be set to a strong value."
+            }
+            if ($cookieSecret -like 'change_me*' -or [string]::IsNullOrWhiteSpace($cookieSecret)) {
+                $errors += "misub.pages.env.COOKIE_SECRET must be set to a stable random value."
+            }
+        }
+        "misub-docker" {
+            $misub = Get-EasyProxyConfigSection -Config $Config -Name 'misub'
+            $docker = Get-EasyProxyConfigSection -Config $misub -Name 'docker'
+            $env = Get-EasyProxyConfigSection -Config $docker -Name 'env'
+            $adminPassword = [string](Get-EasyProxyConfigValue -Object $env -Name 'ADMIN_PASSWORD' -Default '')
+            $cookieSecret = [string](Get-EasyProxyConfigValue -Object $env -Name 'COOKIE_SECRET' -Default '')
+            if ($adminPassword -like 'change_me*' -or [string]::IsNullOrWhiteSpace($adminPassword)) {
+                $errors += "misub.docker.env.ADMIN_PASSWORD must be set to a strong value."
+            }
+            if ($cookieSecret -like 'change_me*' -or [string]::IsNullOrWhiteSpace($cookieSecret)) {
+                $errors += "misub.docker.env.COOKIE_SECRET must be set to a stable random value."
+            }
+        }
+        "ech-workers-cloudflare" {
+            $worker = Get-EasyProxyConfigSection -Config $Config -Name 'echWorkersCloudflare'
+            $secrets = Get-EasyProxyConfigSection -Config $worker -Name 'secrets'
+            $echToken = [string](Get-EasyProxyConfigValue -Object $secrets -Name 'ECH_TOKEN' -Default '')
+            if ([string]::IsNullOrWhiteSpace($echToken)) {
+                $errors += "echWorkersCloudflare.secrets.ECH_TOKEN is empty."
+            }
+        }
+    }
+
+    if ($errors.Count -gt 0) {
+        $joined = ($errors | ForEach-Object { " - $_" }) -join [Environment]::NewLine
+        throw "Config validation failed for ${Project}:`n$joined"
     }
 }
 
@@ -108,7 +131,7 @@ $resolvedConfigPath = Resolve-ConfigPath -Path $ConfigPath
 Ensure-ConfigReady -Path $resolvedConfigPath -InitIfMissing:$InitConfig
 
 $config = Read-EasyProxyConfig -ConfigPath $resolvedConfigPath
-Warn-WeakDefaults -Config $config
+Assert-ProjectConfigReady -Project $Project -Config $config
 
 switch ($Project) {
     "easyproxy" {

@@ -328,9 +328,9 @@ func Load(path string) (*Config, error) {
 }
 
 // LoadForReload reads YAML config from disk for a reload operation.
-// Unlike Load, it does NOT re-fetch subscription URLs.
-// Only inline nodes from config.yaml are loaded; subscription and manual
-// nodes are loaded from the SQLite Store by the caller.
+// Unlike Load, it does NOT re-fetch remote subscription URLs.
+// Inline nodes and local file-backed nodes are loaded from disk; persisted
+// manual nodes are loaded from the SQLite Store by the caller.
 func LoadForReload(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -506,9 +506,20 @@ func (c *Config) normalizeInternal(skipSubscriptionFetch bool) error {
 
 	if skipSubscriptionFetch {
 		// ---- Reload mode ----
-		// Nodes will be loaded from SQLite Store by the caller (app.go / boxmgr).
-		// Only inline nodes from config.yaml are included here.
-		log.Printf("[config] reload mode: %d inline nodes from config.yaml", len(c.Nodes))
+		// Nodes persisted in SQLite are merged by the caller (app.go / boxmgr).
+		// Keep reload offline by skipping remote subscription fetches, but still
+		// re-read local nodes_file content so on-disk edits take effect.
+		if c.NodesFile != "" && len(c.Subscriptions) == 0 {
+			fileNodes, err := loadNodesFromFile(c.NodesFile)
+			if err != nil {
+				return fmt.Errorf("load nodes from file %q: %w", c.NodesFile, err)
+			}
+			for idx := range fileNodes {
+				fileNodes[idx].Source = NodeSourceFile
+			}
+			c.Nodes = append(c.Nodes, fileNodes...)
+		}
+		log.Printf("[config] reload mode: %d inline/file nodes from disk", len(c.Nodes))
 	} else {
 		// ---- Initial load mode ----
 

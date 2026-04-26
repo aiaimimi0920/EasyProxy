@@ -41,6 +41,15 @@ $effectiveConfigPath = if ([string]::IsNullOrWhiteSpace($ConfigPathOverride)) {
     Resolve-EasyProxyPath -Path $ConfigPathOverride
 }
 
+if (-not (Test-Path -LiteralPath $effectiveConfigPath)) {
+    throw "Aggregator source config not found: $effectiveConfigPath"
+}
+
+$configContent = Get-Content -LiteralPath $effectiveConfigPath -Raw
+if ($configContent -match '__KEY_PLACEHOLDER__' -or $configContent -match '__TOKEN_PLACEHOLDER__' -or $configContent -match 'PLACEHOLDER') {
+    throw "Aggregator source config still contains placeholder values. Update $effectiveConfigPath before deploying."
+}
+
 if (-not $SkipSecretUpdate) {
     Write-Host "Encoding aggregator Actions config..." -ForegroundColor Cyan
     $encoded = powershell -ExecutionPolicy Bypass -File $exportScript -ConfigPath $effectiveConfigPath -NoNewline

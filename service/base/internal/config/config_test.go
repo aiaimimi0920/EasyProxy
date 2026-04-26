@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -106,5 +108,32 @@ proxies:
 	}
 	if nodes[0].Name != "Delayed Clash" {
 		t.Fatalf("expected Clash proxy name to be preserved, got %q", nodes[0].Name)
+	}
+}
+
+func TestLoadForReloadIncludesNodesFile(t *testing.T) {
+	dir := t.TempDir()
+	nodesPath := filepath.Join(dir, "nodes.txt")
+	configPath := filepath.Join(dir, "config.yaml")
+
+	if err := os.WriteFile(nodesPath, []byte("http://alice:secret@example.com:8080/proxy\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(nodesPath) error = %v", err)
+	}
+	if err := os.WriteFile(configPath, []byte("nodes_file: nodes.txt\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(configPath) error = %v", err)
+	}
+
+	cfg, err := LoadForReload(configPath)
+	if err != nil {
+		t.Fatalf("LoadForReload() error = %v", err)
+	}
+	if len(cfg.Nodes) != 1 {
+		t.Fatalf("expected 1 node from nodes_file on reload, got %d", len(cfg.Nodes))
+	}
+	if cfg.Nodes[0].URI != "http://alice:secret@example.com:8080/proxy" {
+		t.Fatalf("unexpected nodes_file URI: %q", cfg.Nodes[0].URI)
+	}
+	if cfg.Nodes[0].Source != NodeSourceFile {
+		t.Fatalf("expected nodes_file source, got %q", cfg.Nodes[0].Source)
 	}
 }

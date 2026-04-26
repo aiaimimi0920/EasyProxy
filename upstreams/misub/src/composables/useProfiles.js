@@ -94,7 +94,7 @@ export function useProfiles(markDirty) {
 
   const copyProfileLink = (profileId) => {
     const token = settings.value?.profileToken;
-    if (!token || token === 'auto' || !token.trim()) {
+    if (!token || token === 'auto' || token === 'profiles' || !token.trim()) {
       showToast('请在设置中配置一个固定的"订阅组分享Token"', 'error');
       return;
     }
@@ -140,7 +140,7 @@ export function useProfiles(markDirty) {
   // Clash 专用链接复制（带 builtin 转换器参数）
   const copyClashLink = (profileId) => {
     const token = settings.value?.profileToken;
-    if (!token || token === 'auto' || !token.trim()) {
+    if (!token || token === 'auto' || token === 'profiles' || !token.trim()) {
       showToast('请在设置中配置一个固定的"订阅组分享Token"', 'error');
       return;
     }

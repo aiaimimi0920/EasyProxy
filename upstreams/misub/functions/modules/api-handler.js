@@ -4,7 +4,7 @@
  */
 
 import { StorageFactory, SettingsCache } from '../storage-adapter.js';
-import { getCookieSecret, getAdminPassword, setAdminPassword, isUsingDefaultPassword, createJsonResponse, createErrorResponse, migrateProfileIds } from './utils.js';
+import { getCookieSecret, getAdminPassword, setAdminPassword, isUsingDefaultPassword, createJsonResponse, createErrorResponse, migrateProfileIds, ensureStableSettingsTokens } from './utils.js';
 import { authMiddleware, handleLogin, handleLogout, createUnauthorizedResponse } from './auth-middleware.js';
 import { sendTgNotification, checkAndNotify } from './notifications.js';
 import { clearAllNodeCaches } from '../services/node-cache-service.js';
@@ -55,6 +55,7 @@ export async function handleDataRequest(env) {
             storageAdapter.get(KV_KEY_SETTINGS).then(res => res || {})
         ]);
         const normalizedMisubs = normalizeSourceCollection(misubs);
+        const secureSettings = await ensureStableSettingsTokens(storageAdapter, settings);
 
         if (JSON.stringify(normalizedMisubs) !== JSON.stringify(misubs)) {
             storageAdapter.put(KV_KEY_SUBS, normalizedMisubs).catch(err =>
@@ -70,9 +71,8 @@ export async function handleDataRequest(env) {
         }
         const config = {
             FileName: settings.FileName || 'MISUB',
-            mytoken: settings.mytoken || 'auto',
-
-            profileToken: settings.profileToken || 'profiles',
+            mytoken: secureSettings.mytoken,
+            profileToken: secureSettings.profileToken,
             isDefaultPassword: await isUsingDefaultPassword(env)
         };
         return createJsonResponse({ misubs: normalizedMisubs, profiles, config });
@@ -251,7 +251,8 @@ export async function handleSettingsGet(env) {
     try {
         const storageAdapter = await getStorageAdapter(env);
         const settings = await storageAdapter.get(KV_KEY_SETTINGS) || {};
-        return createJsonResponse({ ...defaultSettings, ...settings });
+        const secureSettings = await ensureStableSettingsTokens(storageAdapter, { ...defaultSettings, ...settings });
+        return createJsonResponse({ ...defaultSettings, ...secureSettings });
     } catch (e) {
         if (isStorageUnavailableError(e)) {
             return createJsonResponse({
@@ -335,8 +336,8 @@ export async function handlePublicProfilesRequest(env) {
             storageAdapter.get(KV_KEY_PROFILES).then(res => res || []),
             storageAdapter.get(KV_KEY_SETTINGS).then(res => res || {})
         ]);
-
-        const profileToken = settings.profileToken || 'profiles';
+        const secureSettings = await ensureStableSettingsTokens(storageAdapter, { ...defaultSettings, ...settings });
+        const profileToken = secureSettings.profileToken;
 
         // 获取公告配置（仅当启用时返回）
         const announcement = settings.announcement?.enabled ? {

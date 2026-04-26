@@ -352,6 +352,142 @@ func TestUpdateAllSettingsPropagatesSkipCertVerifyToManager(t *testing.T) {
 	}
 }
 
+func TestHandleSettingsReportsReloadRequirement(t *testing.T) {
+	makeServer := func(t *testing.T, initialMode string, initialSkip bool) (*Server, *config.Config) {
+		t.Helper()
+
+		cfg := &config.Config{}
+		cfg.Mode = initialMode
+		cfg.LogLevel = "info"
+		cfg.Listener.Address = "0.0.0.0"
+		cfg.Listener.Port = 8080
+		cfg.Listener.Protocol = "http"
+		cfg.MultiPort.Address = "0.0.0.0"
+		cfg.MultiPort.BasePort = 10000
+		cfg.MultiPort.Protocol = "http"
+		cfg.Pool.Mode = "auto"
+		cfg.Pool.BlacklistDuration = time.Minute
+		cfg.SubscriptionRefresh.Interval = time.Minute
+		cfg.SubscriptionRefresh.Timeout = 30 * time.Second
+		cfg.SubscriptionRefresh.HealthCheckTimeout = 30 * time.Second
+		cfg.SubscriptionRefresh.DrainTimeout = 10 * time.Second
+		cfg.SourceSync.Enabled = false
+		cfg.SourceSync.ManifestURL = ""
+		cfg.SourceSync.ManifestToken = ""
+		cfg.SourceSync.RefreshInterval = time.Minute
+		cfg.SourceSync.RequestTimeout = 30 * time.Second
+		cfg.SourceSync.DefaultDirectProxyScheme = "http"
+		cfg.GeoIP.AutoUpdateInterval = time.Hour
+		cfg.Management.HealthCheckInterval = time.Minute
+		cfg.Management.Listen = "0.0.0.0:9888"
+		cfg.Management.ProbeTarget = ""
+		cfg.Management.ProbeTargets = nil
+		cfg.Management.Password = ""
+		cfg.SkipCertVerify = initialSkip
+
+		configPath := filepath.Join(t.TempDir(), "config.yaml")
+		if err := os.WriteFile(configPath, []byte("{}\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+		cfg.SetFilePath(configPath)
+
+		mgr, err := NewManager(Config{})
+		if err != nil {
+			t.Fatalf("NewManager() error = %v", err)
+		}
+
+		s := &Server{
+			cfg:    Config{},
+			cfgSrc: cfg,
+			mgr:    mgr,
+			logger: log.New(io.Discard, "", 0),
+		}
+		return s, cfg
+	}
+
+	type testCase struct {
+		name        string
+		initialMode string
+		initialSkip bool
+		req         allSettingsRequest
+		wantReload  bool
+	}
+
+	baseReq := allSettingsRequest{
+		Mode:                          "pool",
+		LogLevel:                      "info",
+		ListenerAddress:               "0.0.0.0",
+		ListenerPort:                  8080,
+		ListenerProtocol:              "http",
+		MultiPortAddress:              "0.0.0.0",
+		MultiPortBasePort:             10000,
+		MultiPortProtocol:             "http",
+		PoolMode:                      "auto",
+		PoolBlacklistDuration:         "1m",
+		SubRefreshInterval:            "1m",
+		SubRefreshTimeout:             "30s",
+		SubRefreshHealthCheckTimeout:  "30s",
+		SubRefreshDrainTimeout:        "10s",
+		SourceSyncRefreshInterval:     "1m",
+		SourceSyncRequestTimeout:      "30s",
+		GeoIPAutoUpdateInterval:       "1h",
+		ManagementListen:              "0.0.0.0:9888",
+		ManagementHealthCheckInterval: "1m",
+	}
+
+	cases := []testCase{
+		{
+			name:        "skip cert verify only",
+			initialMode: "pool",
+			initialSkip: false,
+			req: func() allSettingsRequest {
+				r := baseReq
+				r.SkipCertVerify = true
+				return r
+			}(),
+			wantReload: false,
+		},
+		{
+			name:        "mode change",
+			initialMode: "pool",
+			initialSkip: false,
+			req: func() allSettingsRequest {
+				r := baseReq
+				r.Mode = "multi-port"
+				return r
+			}(),
+			wantReload: true,
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			s, _ := makeServer(t, tt.initialMode, tt.initialSkip)
+			body, err := json.Marshal(tt.req)
+			if err != nil {
+				t.Fatalf("Marshal() error = %v", err)
+			}
+
+			req := httptest.NewRequest(http.MethodPut, "/api/settings", bytes.NewReader(body))
+			rec := httptest.NewRecorder()
+
+			s.handleSettings(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+			}
+
+			var payload map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+				t.Fatalf("json.Unmarshal() error = %v", err)
+			}
+			if got := payload["need_reload"]; got != tt.wantReload {
+				t.Fatalf("expected need_reload=%v, got %v", tt.wantReload, got)
+			}
+		})
+	}
+}
+
 func TestProxyCompatCheckoutLifecycle(t *testing.T) {
 	mgr, err := NewManager(Config{})
 	if err != nil {

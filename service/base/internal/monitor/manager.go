@@ -788,13 +788,16 @@ func (m *Manager) UpdateProbeTargets(targets []string, single string) error {
 	if err != nil {
 		return err
 	}
-	if len(specs) == 0 {
-		return nil
-	}
 	m.mu.Lock()
-	m.probeSpecs = specs
-	m.probeDst = specs[0].Dst
-	m.probeReady = true
+	if len(specs) == 0 {
+		m.probeSpecs = nil
+		m.probeDst = M.Socksaddr{}
+		m.probeReady = false
+	} else {
+		m.probeSpecs = specs
+		m.probeDst = specs[0].Dst
+		m.probeReady = true
+	}
 	m.cfg.ProbeTargets = append([]string(nil), targets...)
 	m.cfg.ProbeTarget = strings.TrimSpace(single)
 	m.mu.Unlock()

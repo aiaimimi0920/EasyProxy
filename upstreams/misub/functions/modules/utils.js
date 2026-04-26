@@ -3,6 +3,18 @@
  * 包含各种通用的辅助函数
  */
 
+import { SettingsCache } from '../storage-adapter.js';
+import { KV_KEY_SETTINGS } from './config.js';
+
+const runtimeGeneratedSecrets = new Map();
+
+function getRuntimeGeneratedSecret(key) {
+    if (!runtimeGeneratedSecrets.has(key)) {
+        runtimeGeneratedSecrets.set(key, crypto.randomUUID().replace(/-/g, ''));
+    }
+    return runtimeGeneratedSecrets.get(key);
+}
+
 /**
  * 计算数据的简单哈希值，用于检测变更
  * @param {any} data - 要计算哈希的数据
@@ -179,12 +191,12 @@ export async function getCookieSecret(env) {
 
     // 无 KV：直接使用环境变量，无则生成临时密钥（重启后失效）
     if (runtimeCookieSecret) return runtimeCookieSecret;
-    return crypto.randomUUID();
+    return getRuntimeGeneratedSecret('cookie');
 }
 
 /**
  * 获取管理员密码
- * 优先顺序：环境变量 ADMIN_PASSWORD → KV → 默认值 'admin'
+ * 优先顺序：环境变量 ADMIN_PASSWORD → KV → 未配置时返回空字符串
  * @param {Object} env - 运行时环境对象（Cloudflare / EdgeOne）
  * @returns {Promise<string>} 密码
  */
@@ -200,7 +212,7 @@ export async function getAdminPassword(env) {
         if (kvPassword) return String(kvPassword).trim();
     }
 
-    return 'admin';
+    return '';
 }
 
 /**
@@ -222,7 +234,7 @@ export async function getAuthDebugInfo(env) {
         hasKvCookieSecret = !!(await safeKvGet(kv, 'SYSTEM_COOKIE_SECRET'));
     }
 
-    let adminPasswordSource = 'default';
+    let adminPasswordSource = 'missing';
     if (runtimeAdminPassword) {
         adminPasswordSource = 'env';
     } else if (hasKvAdminPassword) {
@@ -244,7 +256,7 @@ export async function getAuthDebugInfo(env) {
             source: adminPasswordSource,
             hasRuntime: !!runtimeAdminPassword,
             hasKvValue: hasKvAdminPassword,
-            isDefaultFallback: adminPasswordSource === 'default'
+            isDefaultFallback: false
         },
         cookieSecret: {
             source: cookieSecretSource,
@@ -260,7 +272,7 @@ export async function getAuthDebugInfo(env) {
 }
 
 /**
- * 检查是否正在使用默认密码
+ * 检查是否正在使用显式配置的默认口令值。
  * @param {Object} env
  * @returns {Promise<boolean>}
  */
@@ -515,12 +527,47 @@ export function log(level, message, data = null) {
  * @returns {Promise<string>} 回调令牌
  */
 export async function getCallbackToken(env) {
-    const secret = env.COOKIE_SECRET || 'default-callback-secret';
+    const secret = await getCookieSecret(env);
     const encoder = new TextEncoder();
     const keyData = encoder.encode(secret);
     const cryptoKey = await crypto.subtle.importKey('raw', keyData, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
     const signature = await crypto.subtle.sign('HMAC', cryptoKey, encoder.encode('callback-static-data'));
     return Array.from(new Uint8Array(signature)).map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
+}
+
+/**
+ * 确保会话与分享 Token 不再退化为可预测默认值。
+ * 有可用存储时会尽量持久化；没有持久化存储时仅保持当前运行时稳定。
+ * @param {Object} storageAdapter
+ * @param {Object} settings
+ * @returns {Promise<Object>}
+ */
+export async function ensureStableSettingsTokens(storageAdapter, settings) {
+    const next = { ...(settings || {}) };
+    let changed = false;
+
+    const mytoken = String(next.mytoken || '').trim();
+    if (!mytoken || mytoken === 'auto') {
+        next.mytoken = getRuntimeGeneratedSecret('mytoken');
+        changed = true;
+    }
+
+    const profileToken = String(next.profileToken || '').trim();
+    if (!profileToken || profileToken === 'profiles') {
+        next.profileToken = getRuntimeGeneratedSecret('profileToken');
+        changed = true;
+    }
+
+    if (changed && storageAdapter?.put) {
+        try {
+            await storageAdapter.put(KV_KEY_SETTINGS, next);
+            SettingsCache.clear();
+        } catch (error) {
+            console.warn('[Settings] Failed to persist generated tokens:', error?.message || error);
+        }
+    }
+
+    return next;
 }
 
 /**

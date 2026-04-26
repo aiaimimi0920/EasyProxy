@@ -249,3 +249,50 @@ func TestPrepareNodeLockedRejectsHybridPortConflicts(t *testing.T) {
 		t.Fatalf("expected hybrid port conflict, got %v", err)
 	}
 }
+
+func TestNodeOperationsAcceptURIRefs(t *testing.T) {
+	ctx := context.Background()
+	dataStore, err := store.Open(filepath.Join(t.TempDir(), "easyproxy.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer dataStore.Close()
+
+	node := &store.Node{
+		URI:     "ss://disabled-node#disabled-node",
+		Name:    "disabled-node",
+		Source:  store.NodeSourceManual,
+		Enabled: false,
+	}
+	if err := dataStore.CreateNode(ctx, node); err != nil {
+		t.Fatalf("CreateNode() error = %v", err)
+	}
+
+	manager := &Manager{
+		cfg: &config.Config{Nodes: []config.NodeConfig{}},
+		store: dataStore,
+		logger: defaultLogger{},
+	}
+
+	if err := manager.SetNodeEnabled(ctx, node.URI, true); err != nil {
+		t.Fatalf("SetNodeEnabled() error = %v", err)
+	}
+	updated, err := dataStore.GetNodeByURI(ctx, node.URI)
+	if err != nil {
+		t.Fatalf("GetNodeByURI() error = %v", err)
+	}
+	if updated == nil || !updated.Enabled {
+		t.Fatalf("expected node to be enabled by URI ref, got %+v", updated)
+	}
+
+	if err := manager.DeleteNode(ctx, node.URI); err != nil {
+		t.Fatalf("DeleteNode() error = %v", err)
+	}
+	removed, err := dataStore.GetNodeByURI(ctx, node.URI)
+	if err != nil {
+		t.Fatalf("GetNodeByURI(after delete) error = %v", err)
+	}
+	if removed != nil {
+		t.Fatalf("expected node to be deleted by URI ref, got %+v", removed)
+	}
+}

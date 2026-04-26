@@ -61,7 +61,11 @@ const fetchPublicProfiles = async () => {
 };
 
 const copyLink = async (profile) => {
-    const token = config.value.profileToken || 'profiles';
+    const token = config.value.profileToken;
+    if (!token) {
+        showToast('未配置订阅组 Token，无法生成链接', 'error');
+        return;
+    }
     const identifier = profile.customId || profile.id;
     const link = `${window.location.origin}/${token}/${identifier}`;
 
@@ -161,7 +165,11 @@ const toggleQRCode = async (profile) => {
         await nextTick();
         const canvas = qrCanvasRefs.value[profileId];
         if (canvas) {
-            const token = config.value.profileToken || 'profiles';
+            const token = config.value.profileToken;
+            if (!token) {
+                showToast('未配置订阅组 Token，无法生成二维码', 'error');
+                return;
+            }
             const identifier = profile.customId || profile.id;
             const link = `${window.location.origin}/${token}/${identifier}`;
             try {
@@ -301,7 +309,7 @@ onUnmounted(() => {
                 <!-- Profile Grid -->
                 <div v-else-if="publicProfiles.length > 0" class="animate-fade-in-up delay-300">
                     <ProfileGrid :profiles="publicProfiles" :is-qr-expanded="isQRExpanded"
-                        :profile-token="config.profileToken || 'profiles'" @quick-import="handleQuickImport"
+                        :profile-token="config.profileToken" @quick-import="handleQuickImport"
                         @toggle-qr="toggleQRCode" @preview="handlePreview" @copy-link="copyLink" @download-qr="downloadQRCode"
                         @register-canvas="registerQrCanvas" />
                 </div>
@@ -383,7 +391,7 @@ onUnmounted(() => {
         <GuestbookModal :show="showGuestbookModal" :config="guestbookConfig" @close="showGuestbookModal = false" />
 
         <QuickImportModal :show="showQuickImportModal" :profile="selectedProfileForImport" :clients="clients"
-            :profile-token="config.profileToken || 'profiles'" @close="showQuickImportModal = false" />
+            :profile-token="config.profileToken" @close="showQuickImportModal = false" />
     </div>
 </template>
 

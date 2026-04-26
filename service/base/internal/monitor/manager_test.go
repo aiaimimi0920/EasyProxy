@@ -426,3 +426,27 @@ func TestRecordSuccessWithLatencyClearsLastError(t *testing.T) {
 		t.Fatalf("expected successful probe to mark node available, got %+v", snap)
 	}
 }
+
+func TestUpdateProbeTargetsCanBeCleared(t *testing.T) {
+	manager, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	if err := manager.UpdateProbeTargets([]string{"https://platform.openai.com/login"}, ""); err != nil {
+		t.Fatalf("UpdateProbeTargets() error = %v", err)
+	}
+	if _, ok := manager.ProbeTargets(); !ok {
+		t.Fatal("expected probe targets to be ready before clear")
+	}
+
+	if err := manager.UpdateProbeTargets(nil, ""); err != nil {
+		t.Fatalf("UpdateProbeTargets(clear) error = %v", err)
+	}
+	if _, ok := manager.ProbeTargets(); ok {
+		t.Fatal("expected probe targets to be cleared")
+	}
+	if destination, ok := manager.DestinationForProbe(); ok || destination.Fqdn != "" {
+		t.Fatalf("expected probe destination to be cleared, got %+v", destination)
+	}
+}

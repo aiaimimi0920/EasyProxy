@@ -239,8 +239,8 @@ class D1StorageAdapter {
  */
 class NoopStorageAdapter {
     async get() { return null; }
-    async put() { return true; }
-    async delete() { return true; }
+    async put() { throw new Error('storage is unavailable'); }
+    async delete() { throw new Error('storage is unavailable'); }
     async list() { return []; }
 }
 

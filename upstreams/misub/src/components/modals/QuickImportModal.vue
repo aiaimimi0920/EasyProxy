@@ -47,7 +47,8 @@ const urlSchemeMap = {
 // 生成订阅链接
 const getSubscriptionUrl = () => {
     if (!props.profile) return '';
-    const token = props.profileToken || 'profiles';
+    const token = props.profileToken ? props.profileToken.trim() : '';
+    if (!token) return '';
     const identifier = props.profile.customId || props.profile.id;
     return `${window.location.origin}/${token}/${identifier}`;
 };
@@ -55,6 +56,7 @@ const getSubscriptionUrl = () => {
 // 生成深度链接
 const generateDeepLink = (client) => {
     const subUrl = getSubscriptionUrl();
+    if (!subUrl) return null;
     const scheme = urlSchemeMap[client.id];
 
     if (!scheme) return null;
