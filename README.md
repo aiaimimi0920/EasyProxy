@@ -163,6 +163,8 @@ Root-level operator entrypoints live under `scripts/`:
 - `scripts/render-derived-configs.ps1`
   - renders module-specific config files from the root `config.yaml`
 
+- `scripts/deploy-easyproxy.ps1`
+  - renders and deploys `service/base` through Docker Compose
 - `scripts/deploy-aggregator.ps1`
   - updates the current `SUBSCRIBE_CONF_JSON_B64` GitHub secret and triggers
     the active aggregator GitHub Actions workflow

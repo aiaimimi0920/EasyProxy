@@ -64,6 +64,7 @@ Run these from the repository root:
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\init-config.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\render-derived-configs.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-easyproxy.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\build-easyproxy-image.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\build-ech-workers-image.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\deploy-misub.ps1
@@ -74,6 +75,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\deploy-aggregator.ps1
 Notes:
 
 - root scripts now read defaults from `config.yaml`
+- `deploy-easyproxy.ps1` deploys `service/base` through the monorepo Docker
+  Compose contract and renders `deploy/service/base/config.yaml` first
 - `deploy-misub.ps1` defaults to Cloudflare Pages mode. Use `-Mode docker`
   if you explicitly want the Docker/VPS path.
 - `deploy-aggregator.ps1` targets the current GitHub Actions + R2 deployment

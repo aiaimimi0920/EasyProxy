@@ -11,6 +11,7 @@ tasks.
 - added shared script helpers in:
   - `scripts/lib/easyproxy-common.ps1`
 - added root entrypoints:
+  - `scripts/deploy-easyproxy.ps1`
   - `scripts/deploy-aggregator.ps1`
   - `scripts/deploy-misub.ps1`
   - `scripts/deploy-ech-workers-cloudflare.ps1`
