@@ -229,7 +229,7 @@ def batch(func: typing.Callable, params: list) -> list:
     cpu_count = multiprocessing.cpu_count()
     num = len(params) if len(params) <= cpu_count else cpu_count
 
-    pool = multiprocessing.Pool(num)
+    pool = multiprocessing.Pool(num, maxtasksperchild=100)
     try:
         if type(params[0]) == list or type(params[0]) == tuple:
             results = pool.starmap(func, params)

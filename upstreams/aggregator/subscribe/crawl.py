@@ -1908,13 +1908,16 @@ def call(script: str, params: dict, availables: ListProxy, semaphore: Semaphore)
             semaphore.release()
 
 
-def execute_script(script: str, params: dict = {}) -> list[dict]:
+def execute_script(script: str, params: dict = None) -> list[dict]:
     try:
         # format: a.b.c#function or a-b.c#_function or a#function and so on
         regex = r"^([a-zA-Z0-9_]+|([0-9a-zA-Z_]+([a-zA-Z0-9_\-]+)?\.)+)[a-zA-Z0-9_\-]+#[a-zA-Z_]+[0-9a-zA-Z_]+$"
         if not re.match(regex, script):
             logger.info(f"[ScriptError] script execute error because script: {script} is invalidate")
             return []
+
+        if params is None or type(params) != dict:
+            params = {}
 
         path, func_name = script.split("#", maxsplit=1)
         path = f"scripts.{path}"

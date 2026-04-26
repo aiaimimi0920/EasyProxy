@@ -582,7 +582,7 @@ def crawl_channel(channel: str, page_num: int, fun: typing.Callable) -> list:
         cpu_count = multiprocessing.cpu_count()
         num = len(urls) if len(urls) <= cpu_count else cpu_count
 
-        pool = multiprocessing.Pool(num)
+        pool = multiprocessing.Pool(num, maxtasksperchild=100)
         try:
             results = pool.map(fun, urls)
             pool.close()
@@ -777,7 +777,7 @@ if __name__ == "__main__":
         cpu_count = multiprocessing.cpu_count()
         num = len(tasks) if len(tasks) <= cpu_count else cpu_count
 
-        pool = multiprocessing.Pool(num)
+        pool = multiprocessing.Pool(num, maxtasksperchild=100)
         try:
             pool.starmap(scan, tasks)
             pool.close()

@@ -560,7 +560,7 @@ def multi_process_run(func: typing.Callable, tasks: list) -> list:
     num = max(1, min(len(tasks), cpu_count))
 
     starttime, results = time.time(), []
-    pool = multiprocessing.Pool(num)
+    pool = multiprocessing.Pool(num, maxtasksperchild=100)
     try:
         if isinstance(tasks[0], (list, tuple)):
             results = pool.starmap(func, tasks)
