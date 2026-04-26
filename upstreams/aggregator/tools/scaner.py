@@ -472,60 +472,58 @@ def http_get(
         }
 
     interval = max(0, interval)
-    try:
-        url = encoding_url(url=url)
-        if params and isinstance(params, dict):
-            data = urllib.parse.urlencode(params)
-            if "?" in url:
-                url += f"&{data}"
-            else:
-                url += f"?{data}"
+    url = encoding_url(url=url)
+    if params and isinstance(params, dict):
+        data = urllib.parse.urlencode(params)
+        if "?" in url:
+            url += f"&{data}"
+        else:
+            url += f"?{data}"
 
-        request = urllib.request.Request(url=url, headers=headers)
-        if proxy and (proxy.startswith("https://") or proxy.startswith("http://")):
-            host, protocal = "", ""
-            if proxy.startswith("https://"):
-                host, protocal = proxy[8:], "https"
-            else:
-                host, protocal = proxy[7:], "http"
-            request.set_proxy(host=host, type=protocal)
-
-        response = urllib.request.urlopen(request, timeout=10, context=CTX)
-        content = response.read()
-        status_code = response.getcode()
-        try:
-            content = str(content, encoding="utf8")
-        except:
-            content = gzip.decompress(content).decode("utf8")
-        if status_code != 200:
+    def decode_body(body: bytes) -> str:
+        if body is None:
             return ""
 
-        return content
-    except urllib.error.HTTPError as e:
-        message = str(e.read(), encoding="utf8")
-        if e.code == 503 and "token" not in message:
-            time.sleep(interval)
-            return http_get(
-                url=url,
-                headers=headers,
-                params=params,
-                retry=retry - 1,
-                proxy=proxy,
-                interval=interval,
-            )
-        return ""
-    except urllib.error.URLError as e:
-        return ""
-    except Exception as e:
-        time.sleep(interval)
-        return http_get(
-            url=url,
-            headers=headers,
-            params=params,
-            retry=retry - 1,
-            proxy=proxy,
-            interval=interval,
-        )
+        try:
+            return body.decode("utf8")
+        except UnicodeDecodeError:
+            try:
+                return gzip.decompress(body).decode("utf8")
+            except Exception:
+                return body.decode("utf8", errors="replace")
+
+    for attempt in range(max(1, retry)):
+        try:
+            request = urllib.request.Request(url=url, headers=headers)
+            if proxy and (proxy.startswith("https://") or proxy.startswith("http://")):
+                host, protocal = "", ""
+                if proxy.startswith("https://"):
+                    host, protocal = proxy[8:], "https"
+                else:
+                    host, protocal = proxy[7:], "http"
+                request.set_proxy(host=host, type=protocal)
+
+            response = urllib.request.urlopen(request, timeout=10, context=CTX)
+            content = decode_body(response.read())
+            if response.getcode() != 200:
+                return ""
+
+            return content
+        except urllib.error.HTTPError as e:
+            message = decode_body(e.read())
+            if e.code == 503 and "token" not in message and attempt < retry - 1:
+                time.sleep(interval)
+                continue
+            return ""
+        except urllib.error.URLError:
+            return ""
+        except Exception:
+            if attempt < retry - 1:
+                time.sleep(interval)
+                continue
+            return ""
+
+    return ""
 
 
 def get_telegram_pages(channel: str) -> int:
@@ -585,10 +583,19 @@ def crawl_channel(channel: str, page_num: int, fun: typing.Callable) -> list:
         num = len(urls) if len(urls) <= cpu_count else cpu_count
 
         pool = multiprocessing.Pool(num)
-        results = pool.map(fun, urls)
-        pool.close()
-
-        return list(itertools.chain.from_iterable(results))
+        try:
+            results = pool.map(fun, urls)
+            pool.close()
+            pool.join()
+            return list(itertools.chain.from_iterable(results))
+        except KeyboardInterrupt:
+            pool.terminate()
+            pool.join()
+            raise
+        except Exception:
+            pool.terminate()
+            pool.join()
+            raise
 
 
 def collect_airport(channel: str, page_num: int, thread_num: int = 50) -> list:
@@ -601,13 +608,28 @@ def collect_airport(channel: str, page_num: int, thread_num: int = 50) -> list:
         availables = manager.list()
         processes = []
         semaphore = multiprocessing.Semaphore(thread_num)
-        for domain in list(set(domains)):
-            semaphore.acquire()
-            p = multiprocessing.Process(target=validate_domain, args=(domain, availables, semaphore))
-            p.start()
-            processes.append(p)
-        for p in processes:
-            p.join()
+        try:
+            for domain in list(set(domains)):
+                semaphore.acquire()
+                p = multiprocessing.Process(target=validate_domain, args=(domain, availables, semaphore))
+                p.start()
+                processes.append(p)
+            for p in processes:
+                p.join()
+        except KeyboardInterrupt:
+            for p in processes:
+                if p.is_alive():
+                    p.terminate()
+            for p in processes:
+                p.join()
+            raise
+        except Exception:
+            for p in processes:
+                if p.is_alive():
+                    p.terminate()
+            for p in processes:
+                p.join()
+            raise
 
         domains = list(availables)
         print(

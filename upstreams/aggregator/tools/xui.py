@@ -40,29 +40,35 @@ USER_AGENT = (
 )
 
 
-def http_post(url: str, headers: dict = None, params: dict = {}, retry: int = 3, timeout: float = 6) -> HTTPResponse:
+def http_post(url: str, headers: dict = None, params: dict = None, retry: int = 3, timeout: float = 6) -> HTTPResponse:
     if params is None or type(params) != dict:
         return None
 
-    timeout, retry = max(timeout, 1), retry - 1
-    try:
-        data = b""
-        if params and isinstance(params, dict):
-            data = urllib.parse.urlencode(params).encode(encoding="utf8")
+    timeout = max(timeout, 1)
+    if not headers:
+        headers = {
+            "User-Agent": USER_AGENT,
+            "Content-Type": "application/json",
+        }
+    data = urllib.parse.urlencode(params).encode(encoding="utf8") if params else b""
 
-        request = urllib.request.Request(url=url, data=data, headers=headers, method="POST")
-        return urllib.request.urlopen(request, timeout=timeout, context=CTX)
-    except urllib.error.HTTPError as e:
-        if retry < 0 or e.code in [400, 401, 405]:
-            return None
+    for attempt in range(max(1, retry)):
+        try:
+            request = urllib.request.Request(url=url, data=data, headers=headers, method="POST")
+            return urllib.request.urlopen(request, timeout=timeout, context=CTX)
+        except urllib.error.HTTPError as e:
+            if e.code in [400, 401, 405]:
+                return None
+            if attempt >= retry - 1:
+                return None
+        except (TimeoutError, urllib.error.URLError):
+            if attempt >= retry - 1:
+                return None
+        except Exception:
+            if attempt >= retry - 1:
+                return None
 
-        return http_post(url=url, headers=headers, params=params, retry=retry, timeout=timeout)
-    except (TimeoutError, urllib.error.URLError) as e:
-        return None
-    except Exception:
-        if retry < 0:
-            return None
-        return http_post(url=url, headers=headers, params=params, retry=retry, timeout=timeout)
+    return None
 
 
 def read_response(response: HTTPResponse, expected: int = 200, deserialize: bool = False, key: str = "") -> typing.Any:
@@ -437,11 +443,14 @@ def multi_thread_run(
 
     if num_threads is None or num_threads <= 0:
         num_threads = min(len(tasks), (os.cpu_count() or 1) * 2)
+    else:
+        num_threads = min(len(tasks), max(1, num_threads))
 
     funcname = getattr(func, "__name__", repr(func))
 
     results, starttime = [None] * len(tasks), time.time()
-    with futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
+    executor = futures.ThreadPoolExecutor(max_workers=num_threads)
+    try:
         if isinstance(tasks[0], (list, tuple)):
             collections = {executor.submit(func, *param): i for i, param in enumerate(tasks)}
         else:
@@ -459,6 +468,13 @@ def multi_thread_run(
                 results[index] = result
             except:
                 print(f"function {funcname} execution generated an exception, message:\n{traceback.format_exc()}")
+    except KeyboardInterrupt:
+        for future in list(locals().get("collections", {}).keys()):
+            future.cancel()
+        executor.shutdown(wait=False, cancel_futures=True)
+        raise
+    finally:
+        executor.shutdown(wait=True, cancel_futures=False)
 
     print(f"[Concurrent] execute [{funcname}] finished, count: {len(tasks)}, cost: {time.time()-starttime:.2f}s")
     return results
