@@ -218,6 +218,15 @@ wrangler d1 execute misub --file=schema.sql --remote
 
 ### 4. 重新部署
 
+---
+
+## 📖 进阶文档
+
+- [项目结构说明](./docs/PROJECT_STRUCTURE.md)
+- [节点净化管道指南](./docs/OPERATOR_CHAIN_GUIDE.md)
+- [节点净化配置迁移指南](./docs/MIGRATION_GUIDE.md)
+- [Cron Dashboard 指南](./docs/CRON_DASHBOARD_GUIDE.md)
+
 完成配置后,在 `部署` 选项卡重新部署项目。
 
 ### 5. Manifest 机器接口
