@@ -3,7 +3,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$ReleaseTag,
     [string]$ImagePrefix = "ghcr.io/aiaimimi0920",
-    [string]$ImageName = "easy-proxy-monorepo-service",
+    [string]$ImageName = "ech-workers-monorepo",
     [string]$GhcrUsername = $env:GHCR_USERNAME,
     [string]$GhcrToken = $env:GHCR_TOKEN,
     [string]$Platform = "linux/amd64",
@@ -20,7 +20,8 @@ function Get-RepoRoot {
 
 $repoRoot = Get-RepoRoot
 . (Join-Path $repoRoot "scripts\lib\easyproxy-ghcr.ps1")
-$dockerfilePath = Join-Path $repoRoot "deploy\service\base\Dockerfile"
+
+$dockerfilePath = Join-Path $repoRoot "deploy\upstreams\ech-workers\Dockerfile"
 
 Invoke-EasyProxyGhcrBuildxPublish `
     -RepoRoot $repoRoot `

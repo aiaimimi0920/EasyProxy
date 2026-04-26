@@ -106,6 +106,12 @@ aggregator:
   secretName: SUBSCRIBE_CONF_JSON_B64
   configPath: deploy/upstreams/aggregator/config/config.actions.r2.json
 
+ghcr:
+  owner: your-github-owner
+  platform: linux/amd64
+  serviceImageName: easy-proxy-monorepo-service
+  echWorkersImageName: ech-workers-monorepo
+
 echWorkers:
   image: easyproxy/ech-workers-monorepo:local
   dockerfile: deploy/upstreams/ech-workers/Dockerfile

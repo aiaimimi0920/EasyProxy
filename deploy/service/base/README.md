@@ -253,6 +253,20 @@ powershell -ExecutionPolicy Bypass -File .\deploy\service\base\scripts\publish-g
   -ReleaseTag release-20260404-001
 ```
 
+Root one-click wrappers:
+
+```powershell
+# publish only the primary EasyProxy service image
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 `
+  -Project publish-easyproxy-image `
+  -ReleaseTag release-20260427-001
+
+# publish the primary service image plus the optional standalone ech-workers image
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 `
+  -Project publish-core-images `
+  -ReleaseTag release-20260427-001
+```
+
 The publish helper now prefers the current machine Docker login state and only
 attempts an explicit `docker login` when credentials were supplied.
 
@@ -275,10 +289,6 @@ powershell -ExecutionPolicy Bypass -File .\deploy\service\base\scripts\validate-
   -Image easyproxy/easy-proxy-monorepo-service:validation-20260426 `
   -KeepArtifacts
 ```
-
-GitHub Actions workflow:
-
-- `.github/workflows/publish-easy-proxy-service.yml`
 
 Repository preflight before any publish:
 

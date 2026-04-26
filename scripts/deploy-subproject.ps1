@@ -6,7 +6,10 @@ param(
         "aggregator",
         "ech-workers-cloudflare",
         "build-easyproxy-image",
-        "build-ech-workers-image"
+        "build-ech-workers-image",
+        "publish-easyproxy-image",
+        "publish-ech-workers-image",
+        "publish-core-images"
     )]
     [string]$Project,
     [string]$ConfigPath = (Join-Path $PSScriptRoot '..\config.yaml'),
@@ -19,7 +22,12 @@ param(
     [switch]$SkipSecretUpdate,
     [switch]$SkipWorkflowTrigger,
     [switch]$NoCache,
-    [switch]$Push
+    [switch]$Push,
+    [string]$ReleaseTag,
+    [string]$GhcrOwner,
+    [string]$GhcrUsername,
+    [string]$GhcrToken,
+    [switch]$LoadOnly
 )
 
 Set-StrictMode -Version Latest
@@ -124,14 +132,21 @@ function Assert-ProjectConfigReady {
 }
 
 if ([string]::IsNullOrWhiteSpace($Project)) {
-    throw "Missing -Project. Supported values: easyproxy, misub-pages, misub-docker, aggregator, ech-workers-cloudflare, build-easyproxy-image, build-ech-workers-image"
+    throw "Missing -Project. Supported values: easyproxy, misub-pages, misub-docker, aggregator, ech-workers-cloudflare, build-easyproxy-image, build-ech-workers-image, publish-easyproxy-image, publish-ech-workers-image, publish-core-images"
 }
 
 $resolvedConfigPath = Resolve-ConfigPath -Path $ConfigPath
-Ensure-ConfigReady -Path $resolvedConfigPath -InitIfMissing:$InitConfig
+$publishProjects = @("publish-easyproxy-image", "publish-ech-workers-image", "publish-core-images")
+$config = $null
 
-$config = Read-EasyProxyConfig -ConfigPath $resolvedConfigPath
-Assert-ProjectConfigReady -Project $Project -Config $config
+if ($Project -notin $publishProjects) {
+    Ensure-ConfigReady -Path $resolvedConfigPath -InitIfMissing:$InitConfig
+    $config = Read-EasyProxyConfig -ConfigPath $resolvedConfigPath
+    Assert-ProjectConfigReady -Project $Project -Config $config
+}
+elseif ((Test-Path -LiteralPath $resolvedConfigPath)) {
+    $config = Read-EasyProxyConfig -ConfigPath $resolvedConfigPath
+}
 
 switch ($Project) {
     "easyproxy" {
@@ -189,6 +204,42 @@ switch ($Project) {
         if ($NoCache) { $args += "-NoCache" }
         if ($Push) { $args += "-Push" }
         Invoke-EasyProxyExternalCommand -FilePath "powershell" -Arguments $args -FailureMessage "build ech-workers image failed"
+        break
+    }
+    "publish-easyproxy-image" {
+        $scriptPath = Join-Path $PSScriptRoot 'publish-ghcr-images.ps1'
+        $args = @("-ExecutionPolicy", "Bypass", "-File", $scriptPath, "-ConfigPath", $resolvedConfigPath, "-Target", "easyproxy")
+        if (-not [string]::IsNullOrWhiteSpace($ReleaseTag)) { $args += @("-ReleaseTag", $ReleaseTag) }
+        if (-not [string]::IsNullOrWhiteSpace($GhcrOwner)) { $args += @("-GhcrOwner", $GhcrOwner) }
+        if (-not [string]::IsNullOrWhiteSpace($GhcrUsername)) { $args += @("-GhcrUsername", $GhcrUsername) }
+        if (-not [string]::IsNullOrWhiteSpace($GhcrToken)) { $args += @("-GhcrToken", $GhcrToken) }
+        if ($NoCache) { $args += "-NoCache" }
+        if ($LoadOnly) { $args += "-LoadOnly" }
+        Invoke-EasyProxyExternalCommand -FilePath "powershell" -Arguments $args -FailureMessage "publish easyproxy image failed"
+        break
+    }
+    "publish-ech-workers-image" {
+        $scriptPath = Join-Path $PSScriptRoot 'publish-ghcr-images.ps1'
+        $args = @("-ExecutionPolicy", "Bypass", "-File", $scriptPath, "-ConfigPath", $resolvedConfigPath, "-Target", "ech-workers")
+        if (-not [string]::IsNullOrWhiteSpace($ReleaseTag)) { $args += @("-ReleaseTag", $ReleaseTag) }
+        if (-not [string]::IsNullOrWhiteSpace($GhcrOwner)) { $args += @("-GhcrOwner", $GhcrOwner) }
+        if (-not [string]::IsNullOrWhiteSpace($GhcrUsername)) { $args += @("-GhcrUsername", $GhcrUsername) }
+        if (-not [string]::IsNullOrWhiteSpace($GhcrToken)) { $args += @("-GhcrToken", $GhcrToken) }
+        if ($NoCache) { $args += "-NoCache" }
+        if ($LoadOnly) { $args += "-LoadOnly" }
+        Invoke-EasyProxyExternalCommand -FilePath "powershell" -Arguments $args -FailureMessage "publish ech-workers image failed"
+        break
+    }
+    "publish-core-images" {
+        $scriptPath = Join-Path $PSScriptRoot 'publish-ghcr-images.ps1'
+        $args = @("-ExecutionPolicy", "Bypass", "-File", $scriptPath, "-ConfigPath", $resolvedConfigPath, "-Target", "both")
+        if (-not [string]::IsNullOrWhiteSpace($ReleaseTag)) { $args += @("-ReleaseTag", $ReleaseTag) }
+        if (-not [string]::IsNullOrWhiteSpace($GhcrOwner)) { $args += @("-GhcrOwner", $GhcrOwner) }
+        if (-not [string]::IsNullOrWhiteSpace($GhcrUsername)) { $args += @("-GhcrUsername", $GhcrUsername) }
+        if (-not [string]::IsNullOrWhiteSpace($GhcrToken)) { $args += @("-GhcrToken", $GhcrToken) }
+        if ($NoCache) { $args += "-NoCache" }
+        if ($LoadOnly) { $args += "-LoadOnly" }
+        Invoke-EasyProxyExternalCommand -FilePath "powershell" -Arguments $args -FailureMessage "publish core images failed"
         break
     }
     default {

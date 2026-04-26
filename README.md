@@ -24,6 +24,8 @@ monorepo. It collects:
   - Cloudflare Pages defaults and Docker `.env` values
 - `aggregator`
   - GitHub repository / workflow / secret metadata
+- `ghcr`
+  - GHCR owner and published image names for the reusable container releases
 - `echWorkers`
   - standalone local image build metadata
 - `echWorkersCloudflare`
@@ -179,6 +181,9 @@ Root-level operator entrypoints live under `scripts/`:
   - builds the local EasyProxy monorepo image
 - `scripts/build-ech-workers-image.ps1`
   - builds a standalone local image for `upstreams/ech-workers`
+- `scripts/publish-ghcr-images.ps1`
+  - publishes the primary EasyProxy service image, the standalone
+    `ech-workers` image, or both to GHCR
 
 ### One-Click Deploy Examples
 
@@ -199,6 +204,15 @@ powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Projec
 
 # Aggregator workflow deploy
 powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project aggregator -InitConfig
+
+# Publish the primary EasyProxy GHCR image
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project publish-easyproxy-image -ReleaseTag release-20260427-001
+
+# Publish the standalone ech-workers GHCR image
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project publish-ech-workers-image -ReleaseTag release-20260427-001
+
+# Publish both core images with one command
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project publish-core-images -ReleaseTag release-20260427-001
 ```
 
 Supported `-Project` values:
@@ -210,6 +224,9 @@ Supported `-Project` values:
 - `ech-workers-cloudflare`
 - `build-easyproxy-image`
 - `build-ech-workers-image`
+- `publish-easyproxy-image`
+- `publish-ech-workers-image`
+- `publish-core-images`
 
 ## Private Operator Material
 
