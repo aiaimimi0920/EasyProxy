@@ -91,20 +91,25 @@ def http_get(url: str, headers: dict = None, retry: int = 3, timeout: int = 6) -
     timeout = max(timeout, 1)
     headers = DEFAULT_HTTP_HEADERS if not headers else headers
 
-    try:
-        request = urllib.request.Request(url=url, headers=headers)
-        response = urllib.request.urlopen(request, timeout=timeout, context=CTX)
-        status, content = response.getcode(), ""
-        if status == 200:
-            content = response.read()
-            try:
-                content = str(content, encoding="utf8")
-            except:
-                content = gzip.decompress(content).decode("utf8")
+    for _ in range(retry):
+        try:
+            request = urllib.request.Request(url=url, headers=headers)
+            response = urllib.request.urlopen(request, timeout=timeout, context=CTX)
+            status, content = response.getcode(), ""
+            if status == 200:
+                payload = response.read()
+                try:
+                    content = payload.decode("utf8")
+                except UnicodeDecodeError:
+                    content = gzip.decompress(payload).decode("utf8")
+                except:
+                    content = payload.decode("utf8", errors="replace")
 
-        return status, content
-    except:
-        return http_get(url=url, headers=headers, retry=retry - 1, timeout=timeout)
+            return status, content
+        except:
+            continue
+
+    return 400, ""
 
 
 def fetch_proxies(prefix: str, provider: str, headers: dict, retry: int = 3) -> list[dict]:

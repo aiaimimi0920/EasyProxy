@@ -105,116 +105,115 @@ def login(url: str, params: dict, headers: dict, retry: int = 3, jsonify: bool =
         logger.error("[RenewalError] cannot login because parameters is empty")
         return "", ""
 
-    try:
-        if jsonify:
-            headers["Content-Type"] = "application/json"
-            data = json.dumps(params).encode(encoding="UTF8")
-        else:
-            data = urllib.parse.urlencode(params).encode(encoding="UTF8")
+    for attempt in range(max(1, retry)):
+        try:
+            if jsonify:
+                headers["Content-Type"] = "application/json"
+                data = json.dumps(params).encode(encoding="UTF8")
+            else:
+                data = urllib.parse.urlencode(params).encode(encoding="UTF8")
 
-        request = urllib.request.Request(url, data=data, headers=headers, method="POST")
-        response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
+            request = urllib.request.Request(url, data=data, headers=headers, method="POST")
+            response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
 
-        cookies, authorization = "", ""
-        if response.getcode() == 200:
-            cookies = response.getheader("Set-Cookie")
-            try:
-                data = json.loads(response.read().decode("UTF8")).get("data", {})
-                authorization = data.get("auth_data", "")
-            except:
-                logger.error(response.read().decode("UTF8"))
-        else:
-            logger.info(response.read().decode("UTF8"))
+            cookies, authorization = "", ""
+            if response.getcode() == 200:
+                cookies = response.getheader("Set-Cookie")
+                content = response.read().decode("UTF8")
+                try:
+                    data = json.loads(content).get("data", {})
+                    authorization = data.get("auth_data", "")
+                except:
+                    logger.error(content)
+            else:
+                logger.info(response.read().decode("UTF8"))
 
-        return cookies, authorization
+            return cookies, authorization
+        except:
+            if attempt >= max(1, retry) - 1:
+                break
 
-    except:
-        retry -= 1
-        if retry > 0:
-            return login(url, params, headers, retry, jsonify)
-
-        logger.error("[LoginError] URL: {}".format(utils.extract_domain(url)))
-        return "", ""
+    logger.error("[LoginError] URL: {}".format(utils.extract_domain(url)))
+    return "", ""
 
 
 def order(url: str, params: dict, headers: dict, retry: int = 3, jsonify: bool = False) -> str:
-    try:
-        if jsonify:
-            headers["Content-Type"] = "application/json"
-            data = json.dumps(params).encode(encoding="UTF8")
-        else:
-            data = urllib.parse.urlencode(params).encode(encoding="UTF8")
+    for attempt in range(max(1, retry)):
+        try:
+            if jsonify:
+                headers["Content-Type"] = "application/json"
+                data = json.dumps(params).encode(encoding="UTF8")
+            else:
+                data = urllib.parse.urlencode(params).encode(encoding="UTF8")
 
-        request = urllib.request.Request(url, data=data, headers=headers, method="POST")
-        response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
+            request = urllib.request.Request(url, data=data, headers=headers, method="POST")
+            response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
 
-        trade_no = None
-        if response.getcode() == 200:
-            result = json.loads(response.read().decode("UTF8"))
-            trade_no = result.get("data", None)
-        else:
-            logger.error(response.read().decode("UTF8"))
+            trade_no = None
+            if response.getcode() == 200:
+                result = json.loads(response.read().decode("UTF8"))
+                trade_no = result.get("data", None)
+            else:
+                logger.error(response.read().decode("UTF8"))
 
-        return trade_no
+            return trade_no
+        except:
+            if attempt >= max(1, retry) - 1:
+                break
 
-    except:
-        retry -= 1
-        if retry > 0:
-            return order(url, params, headers, retry, jsonify)
-
-        logger.error("[OrderError] URL: {}".format(utils.extract_domain(url)))
+    logger.error("[OrderError] URL: {}".format(utils.extract_domain(url)))
+    return None
 
 
 def fetch(url: str, headers: dict, retry: int = 3) -> str:
-    try:
-        request = urllib.request.Request(url, headers=headers, method="GET")
-        response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
-        if response.getcode() != 200:
-            logger.info(response.read().decode("UTF8"))
+    for attempt in range(max(1, retry)):
+        try:
+            request = urllib.request.Request(url, headers=headers, method="GET")
+            response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
+            if response.getcode() != 200:
+                logger.info(response.read().decode("UTF8"))
+                return None
+
+            data = json.loads(response.read().decode("UTF8"))
+            # trade_nos = [x["trade_no"] for x in data if x["type"] == 2]
+            for item in data["data"]:
+                if item["status"] == 0:
+                    return item["trade_no"]
+
             return None
+        except:
+            if attempt >= max(1, retry) - 1:
+                break
 
-        data = json.loads(response.read().decode("UTF8"))
-        # trade_nos = [x["trade_no"] for x in data if x["type"] == 2]
-        for item in data["data"]:
-            if item["status"] == 0:
-                return item["trade_no"]
-
-        return None
-
-    except:
-        retry -= 1
-        if retry > 0:
-            return fetch(url, headers, retry)
-
-        logger.error("[FetchError] URL: {}".format(utils.extract_domain(url)))
+    logger.error("[FetchError] URL: {}".format(utils.extract_domain(url)))
+    return None
 
 
 def payment(url: str, params: dict, headers: dict, retry: int = 3, jsonify: bool = False) -> bool:
-    try:
-        data = urllib.parse.urlencode(params).encode(encoding="UTF8")
-        if jsonify:
-            headers["Content-Type"] = "application/json"
-            data = json.dumps(params).encode(encoding="UTF8")
+    for attempt in range(max(1, retry)):
+        try:
+            data = urllib.parse.urlencode(params).encode(encoding="UTF8")
+            if jsonify:
+                headers["Content-Type"] = "application/json"
+                data = json.dumps(params).encode(encoding="UTF8")
 
-        request = urllib.request.Request(url, data=data, headers=headers, method="POST")
-        response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
+            request = urllib.request.Request(url, data=data, headers=headers, method="POST")
+            response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
 
-        success = False
-        if response.getcode() == 200:
-            result = json.loads(response.read().decode("UTF8"))
-            success = result.get("data", False)
-        else:
-            logger.info(response.read().decode("UTF8"))
+            success = False
+            if response.getcode() == 200:
+                result = json.loads(response.read().decode("UTF8"))
+                success = result.get("data", False)
+            else:
+                logger.info(response.read().decode("UTF8"))
 
-        return success
+            return success
+        except:
+            if attempt >= max(1, retry) - 1:
+                break
 
-    except:
-        retry -= 1
-        if retry > 0:
-            return payment(url, params, headers, retry, jsonify)
-
-        logger.error("[PaymentError] URL: {}".format(utils.extract_domain(url)))
-        return False
+    logger.error("[PaymentError] URL: {}".format(utils.extract_domain(url)))
+    return False
 
 
 def checkout(
@@ -231,45 +230,36 @@ def checkout(
         return {}
 
     link = utils.get_subpath(api_prefix) + "user/coupon/check" if utils.isblank(link) else link
-    try:
-        url = f"{domain}{link}"
-        params = {"code": coupon}
-        if type(planid) == int and planid >= 0:
-            params["plan_id"] = planid
+    url = f"{domain}{link}"
+    params = {"code": coupon}
+    if type(planid) == int and planid >= 0:
+        params["plan_id"] = planid
 
-        if jsonify:
-            headers["Content-Type"] = "application/json"
-            payload = json.dumps(params).encode(encoding="UTF8")
-        else:
-            payload = urllib.parse.urlencode(params).encode(encoding="UTF8")
+    for attempt in range(max(1, retry)):
+        try:
+            if jsonify:
+                headers["Content-Type"] = "application/json"
+                payload = json.dumps(params).encode(encoding="UTF8")
+            else:
+                payload = urllib.parse.urlencode(params).encode(encoding="UTF8")
 
-        request = urllib.request.Request(url, data=payload, headers=headers, method="POST")
-        response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
+            request = urllib.request.Request(url, data=payload, headers=headers, method="POST")
+            response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
 
-        data = {}
-        if response.getcode() == 200:
-            result = json.loads(response.read().decode("UTF8"))
-            data = result.get("data", {})
-        else:
-            logger.info(response.read().decode("UTF8"))
+            data = {}
+            if response.getcode() == 200:
+                result = json.loads(response.read().decode("UTF8"))
+                data = result.get("data", {})
+            else:
+                logger.info(response.read().decode("UTF8"))
 
-        return data
-    except Exception:
-        retry -= 1
-        if retry > 0:
-            return checkout(
-                domain=domain,
-                coupon=coupon,
-                headers=headers,
-                planid=planid,
-                retry=retry,
-                link=link,
-                api_prefix=api_prefix,
-                jsonify=jsonify,
-            )
+            return data
+        except Exception:
+            if attempt >= max(1, retry) - 1:
+                break
 
-        logger.error("[CheckError] URL: {}".format(utils.extract_domain(url)))
-        return {}
+    logger.error("[CheckError] URL: {}".format(utils.extract_domain(url)))
+    return {}
 
 
 def get_payment_method(
@@ -323,37 +313,34 @@ def close_ticket(
 ) -> bool:
     if utils.isblank(domain) or tid < 0 or not headers or retry <= 0:
         logger.info(f"[TicketError] cannot close ticket because invalidate arguments, domain: {domain}, tid: {tid}")
+        return False
 
     url = domain + utils.get_subpath(api_prefix) + "user/ticket/close"
     params = {"id": tid}
 
-    try:
-        data = urllib.parse.urlencode(params).encode(encoding="UTF8")
-        if jsonify:
-            headers["Content-Type"] = "application/json"
-            data = json.dumps(params).encode(encoding="UTF8")
+    for attempt in range(retry):
+        try:
+            data = urllib.parse.urlencode(params).encode(encoding="UTF8")
+            if jsonify:
+                headers["Content-Type"] = "application/json"
+                data = json.dumps(params).encode(encoding="UTF8")
 
-        request = urllib.request.Request(url, data=data, headers=headers, method="POST")
-        response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
+            request = urllib.request.Request(url, data=data, headers=headers, method="POST")
+            response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
 
-        if response.getcode() == 200:
-            content = response.read().decode("UTF8")
-            try:
-                return json.loads(content).get("data", False)
-            except:
-                logger.error(f"[TicketError] failed submit ticket, domain: {domain}, message: {content}")
+            if response.getcode() == 200:
+                content = response.read().decode("UTF8")
+                try:
+                    return json.loads(content).get("data", False)
+                except:
+                    logger.error(f"[TicketError] failed submit ticket, domain: {domain}, message: {content}")
 
-        return False
+            return False
+        except:
+            if attempt >= retry - 1:
+                break
 
-    except:
-        return close_ticket(
-            domain=domain,
-            tid=tid,
-            headers=headers,
-            retry=retry - 1,
-            api_prefix=api_prefix,
-            jsonify=jsonify,
-        )
+    return False
 
 
 def submit_ticket(
@@ -412,35 +399,30 @@ def submit_ticket(
     url = domain + utils.get_subpath(api_prefix) + "user/ticket/save"
     params = {"subject": subject, "level": level, "message": message}
 
-    try:
-        if jsonify:
-            headers["Content-Type"] = "application/json"
-            data = json.dumps(params).encode(encoding="UTF8")
-        else:
-            data = urllib.parse.urlencode(params).encode(encoding="UTF8")
+    for attempt in range(retry):
+        try:
+            if jsonify:
+                headers["Content-Type"] = "application/json"
+                data = json.dumps(params).encode(encoding="UTF8")
+            else:
+                data = urllib.parse.urlencode(params).encode(encoding="UTF8")
 
-        request = urllib.request.Request(url, data=data, headers=headers, method="POST")
-        response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
+            request = urllib.request.Request(url, data=data, headers=headers, method="POST")
+            response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
 
-        if response.getcode() == 200:
-            content = response.read().decode("UTF8")
-            try:
-                return json.loads(content).get("data", False)
-            except:
-                logger.error(f"[TicketError] failed submit ticket, domain: {domain}, message: {content}")
+            if response.getcode() == 200:
+                content = response.read().decode("UTF8")
+                try:
+                    return json.loads(content).get("data", False)
+                except:
+                    logger.error(f"[TicketError] failed submit ticket, domain: {domain}, message: {content}")
 
-        return False
+            return False
+        except:
+            if attempt >= retry - 1:
+                break
 
-    except:
-        return submit_ticket(
-            domain=domain,
-            cookies=cookies,
-            ticket=ticket,
-            authorization=authorization,
-            retry=retry - 1,
-            api_prefix=api_prefix,
-            jsonify=jsonify,
-        )
+    return False
 
 
 def get_free_plan(

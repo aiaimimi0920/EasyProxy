@@ -344,7 +344,7 @@ def download_mmdb(repo: str, target: str, filepath: str, retry: int = 3) -> bool
 def download(url: str, filepath: str, filename: str, retry: int = 3) -> bool:
     """Download file from url to filepath with filename"""
 
-    if retry < 0:
+    if retry <= 0:
         logger.error(f"archieved max retry count for download, url: {url}")
         return False
 
@@ -370,14 +370,19 @@ def download(url: str, filepath: str, filename: str, retry: int = 3) -> bool:
     if os.path.exists(fullpath) and os.path.isfile(fullpath):
         os.remove(fullpath)
 
-    # download target file from github release to fullpath
-    try:
-        urllib.request.urlretrieve(url=url, filename=fullpath)
-    except Exception:
-        return download(url, filepath, filename, retry - 1)
+    last_error = None
+    for attempt in range(retry):
+        try:
+            urllib.request.urlretrieve(url=url, filename=fullpath)
+            logger.info(f"download file {filename} to {fullpath} success")
+            return True
+        except Exception as error:
+            last_error = error
+            if attempt >= retry - 1:
+                break
 
-    logger.info(f"download file {filename} to {fullpath} success")
-    return True
+    logger.error(f"failed to download {filename} from {url}: {last_error}")
+    return False
 
 
 def load_mmdb(
