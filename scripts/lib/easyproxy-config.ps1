@@ -2,10 +2,30 @@ Set-StrictMode -Version Latest
 
 . (Join-Path $PSScriptRoot "easyproxy-common.ps1")
 
+function Assert-EasyProxyPythonYaml {
+    Assert-EasyProxyCommand -Name "python" -Hint "Install Python 3 first."
+
+    $probe = @'
+import importlib.util
+import sys
+
+if importlib.util.find_spec("yaml") is None:
+    print("PyYAML package not found", file=sys.stderr)
+    raise SystemExit(2)
+'@
+
+    $null = $probe | python -
+    if ($LASTEXITCODE -ne 0) {
+        throw "Python package 'PyYAML' is required. Install it with: python -m pip install pyyaml"
+    }
+}
+
 function Read-EasyProxyConfig {
     param(
         [string]$ConfigPath = (Join-Path (Get-EasyProxyRepoRoot) 'config.yaml')
     )
+
+    Assert-EasyProxyPythonYaml
 
     $resolvedConfigPath = Resolve-EasyProxyPath -Path $ConfigPath
     if (-not (Test-Path -LiteralPath $resolvedConfigPath)) {

@@ -62,6 +62,7 @@ This renders:
 Run these from the repository root:
 
 ```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project easyproxy -InitConfig
 powershell -ExecutionPolicy Bypass -File .\scripts\init-config.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\render-derived-configs.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\deploy-easyproxy.ps1
@@ -74,6 +75,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\deploy-aggregator.ps1
 
 Notes:
 
+- `deploy-subproject.ps1` is the recommended one-click entrypoint for
+  per-module deploy/build tasks. It can initialize `config.yaml` automatically
+  with `-InitConfig`.
 - root scripts now read defaults from `config.yaml`
 - `deploy-easyproxy.ps1` deploys `service/base` through the monorepo Docker
   Compose contract and renders `deploy/service/base/config.yaml` first
@@ -81,6 +85,16 @@ Notes:
   if you explicitly want the Docker/VPS path.
 - `deploy-aggregator.ps1` targets the current GitHub Actions + R2 deployment
   model rather than a local runtime.
+
+One-click examples:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project easyproxy -InitConfig
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project misub-pages -InitConfig
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project misub-docker -InitConfig
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project ech-workers-cloudflare -InitConfig
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project aggregator -InitConfig
+```
 
 ## Private Config
 

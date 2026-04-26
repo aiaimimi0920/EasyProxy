@@ -158,6 +158,9 @@ Read the module-specific deployment notes:
 
 Root-level operator entrypoints live under `scripts/`:
 
+- `scripts/deploy-subproject.ps1`
+  - one-click entrypoint for per-module deploy/build tasks
+  - auto-initializes `config.yaml` from template with `-InitConfig`
 - `scripts/init-config.ps1`
   - copies `config.example.yaml` to `config.yaml`
 - `scripts/render-derived-configs.ps1`
@@ -176,6 +179,37 @@ Root-level operator entrypoints live under `scripts/`:
   - builds the local EasyProxy monorepo image
 - `scripts/build-ech-workers-image.ps1`
   - builds a standalone local image for `upstreams/ech-workers`
+
+### One-Click Deploy Examples
+
+Run from repository root:
+
+```powershell
+# EasyProxy runtime deploy (Docker Compose)
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project easyproxy -InitConfig
+
+# MiSub Pages deploy
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project misub-pages -InitConfig
+
+# MiSub Docker deploy
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project misub-docker -InitConfig
+
+# Cloudflare worker deploy (with dry-run support)
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project ech-workers-cloudflare -InitConfig -DryRun
+
+# Aggregator workflow deploy
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project aggregator -InitConfig
+```
+
+Supported `-Project` values:
+
+- `easyproxy`
+- `misub-pages`
+- `misub-docker`
+- `aggregator`
+- `ech-workers-cloudflare`
+- `build-easyproxy-image`
+- `build-ech-workers-image`
 
 ## Private Operator Material
 
