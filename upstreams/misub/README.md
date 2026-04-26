@@ -196,8 +196,8 @@ wrangler d1 execute misub --file=schema.sql --remote
 | 变量名 | 说明 | 示例 |
 |--------|------|------|
 | `MANIFEST_TOKEN` | 机器消费 `GET /api/manifest/:profileId` 的专用 Bearer Token | `long_random_machine_token` |
-| `ADMIN_PASSWORD` | 管理员登录密码 | `your_secure_password` (未设置则默认为 `admin`) |
-| `COOKIE_SECRET` | Cookie 加密密钥 | `64位随机字符串` (推荐留空，系统自动生成) |
+| `ADMIN_PASSWORD` | 管理员登录密码 | `your_secure_password`，必须显式设置，禁止依赖默认值 |
+| `COOKIE_SECRET` | Cookie 加密密钥 | `64位随机字符串`，必须显式设置为稳定随机值 |
 
 **可选（按需设置）：**
 
@@ -218,16 +218,17 @@ wrangler d1 execute misub --file=schema.sql --remote
 
 ### 4. 重新部署
 
+完成配置后,在 `部署` 选项卡重新部署项目。
+
 ---
 
 ## 📖 进阶文档
 
 - [项目结构说明](./docs/PROJECT_STRUCTURE.md)
+- [技术细节](./docs/TECHNICAL_DETAILS.md)
 - [节点净化管道指南](./docs/OPERATOR_CHAIN_GUIDE.md)
 - [节点净化配置迁移指南](./docs/MIGRATION_GUIDE.md)
 - [Cron Dashboard 指南](./docs/CRON_DASHBOARD_GUIDE.md)
-
-完成配置后,在 `部署` 选项卡重新部署项目。
 
 ### 5. Manifest 机器接口
 
@@ -266,8 +267,8 @@ docker compose up -d --build
 在 `docker-compose.yml` 中配置：
 
 - `MANIFEST_TOKEN` 机器消费 `/api/manifest/:profileId` 的 Bearer Token
-- `ADMIN_PASSWORD` 管理员密码（可选，默认 `admin`）
-- `COOKIE_SECRET` Cookie 加密密钥（可选，推荐留空自动生成）
+- `ADMIN_PASSWORD` 管理员密码（必填，必须显式设置强密码）
+- `COOKIE_SECRET` Cookie 加密密钥（必填，必须显式设置稳定随机值）
 - `CORS_ORIGINS` 允许跨域访问的来源（可选）
 - `PORT` 服务端口（默认 8080）
 - `MISUB_DB_PATH` SQLite 数据库路径（默认 `/app/data/misub.db`）
@@ -339,8 +340,8 @@ http://<vps-ip>:8080
 
 | 变量名 | 说明 | 必填 |
 |--------|------|------|
-| `ADMIN_PASSWORD` | 管理员密码 | ❌ (默认 `admin`) |
-| `COOKIE_SECRET` | Cookie 加密密钥 | ❌ (自动生成) |
+| `ADMIN_PASSWORD` | 管理员密码 | ✅ |
+| `COOKIE_SECRET` | Cookie 加密密钥 | ✅ |
 | `MISUB_DB_PATH` | 数据库路径（建议 `/app/data/misub.db`） | ✅ |
 
 5. 绑定域名或使用 Zeabur 提供的 `.zeabur.app` 域名
@@ -360,8 +361,8 @@ http://<vps-ip>:8080
 1. 部署完成后，公开页面默认 **不开启**（访问域名会显示伪装页）。
 2. 请直接访问 `您的域名/login` 进入登录页面。
 3. 输入设置的 `ADMIN_PASSWORD` 即可进入管理后台。
-    - **注意**：如果未设置 `ADMIN_PASSWORD`，默认密码为 **`admin`**。
-    - **首次登录**：使用默认密码登录后，系统会提示您立即在「设置」->「基础设置」中修改密码。
+    - **注意**：请务必在部署前显式设置 `ADMIN_PASSWORD` 与 `COOKIE_SECRET`，不要依赖任何默认或自动回退行为。
+    - **建议**：首次部署后先验证登录、公开页访问策略和订阅 token 是否符合预期，再导入正式数据。
 
 ### 添加订阅
 
