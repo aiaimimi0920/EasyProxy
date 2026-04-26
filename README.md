@@ -10,6 +10,32 @@ deployment assets.
 This repository intentionally avoids root-level submodules. External
 contributors only need one repository and one pull request target.
 
+## Shared Config
+
+Copy `config.example.yaml` to `config.yaml` before using the root operator
+scripts.
+
+The root `config.yaml` is the single operator-facing config entrypoint for the
+monorepo. It collects:
+
+- `serviceBase`
+  - EasyProxy image/build metadata and runtime config overlay
+- `misub`
+  - Cloudflare Pages defaults and Docker `.env` values
+- `aggregator`
+  - GitHub repository / workflow / secret metadata
+- `echWorkers`
+  - standalone local image build metadata
+- `echWorkersCloudflare`
+  - Wrangler deploy metadata and local secret values
+
+Use `scripts/render-derived-configs.ps1` to generate module-specific files such
+as:
+
+- `deploy/service/base/config.yaml`
+- `upstreams/misub/.env`
+- `workers/ech-workers-cloudflare/.dev.vars`
+
 ## Repository Layout
 
 ```text
@@ -131,6 +157,11 @@ Read the module-specific deployment notes:
 ## Operator Scripts
 
 Root-level operator entrypoints live under `scripts/`:
+
+- `scripts/init-config.ps1`
+  - copies `config.example.yaml` to `config.yaml`
+- `scripts/render-derived-configs.ps1`
+  - renders module-specific config files from the root `config.yaml`
 
 - `scripts/deploy-aggregator.ps1`
   - updates the current `SUBSCRIBE_CONF_JSON_B64` GitHub secret and triggers

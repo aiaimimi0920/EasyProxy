@@ -37,11 +37,33 @@ Read:
 - `deploy/upstreams/aggregator/README.md`
 - `deploy/workers/ech-workers-cloudflare/README.md`
 
+## Root Config
+
+Initialize the operator config:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\init-config.ps1
+```
+
+Then render the module-specific config files from the root `config.yaml`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\render-derived-configs.ps1
+```
+
+This renders:
+
+- `deploy/service/base/config.yaml`
+- `upstreams/misub/.env`
+- `workers/ech-workers-cloudflare/.dev.vars`
+
 ## Root Operator Entry Points
 
 Run these from the repository root:
 
 ```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\init-config.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\render-derived-configs.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\build-easyproxy-image.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\build-ech-workers-image.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\deploy-misub.ps1
@@ -51,6 +73,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\deploy-aggregator.ps1
 
 Notes:
 
+- root scripts now read defaults from `config.yaml`
 - `deploy-misub.ps1` defaults to Cloudflare Pages mode. Use `-Mode docker`
   if you explicitly want the Docker/VPS path.
 - `deploy-aggregator.ps1` targets the current GitHub Actions + R2 deployment

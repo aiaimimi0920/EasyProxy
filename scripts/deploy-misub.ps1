@@ -1,18 +1,25 @@
 param(
+    [string]$ConfigPath = (Join-Path $PSScriptRoot '..\config.yaml'),
     [ValidateSet("pages", "docker")]
     [string]$Mode = "pages",
     [string]$ProjectName = "",
-    [string]$Branch = "main",
+    [string]$Branch = "",
     [switch]$NoInstall,
-    [switch]$NoBuild
+    [switch]$NoBuild,
+    [switch]$SkipRender
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "lib\easyproxy-common.ps1")
+. (Join-Path $PSScriptRoot "lib\easyproxy-config.ps1")
 
-$misubRoot = Resolve-EasyProxyPath -Path "upstreams/misub"
+$config = Read-EasyProxyConfig -ConfigPath $ConfigPath
+$misub = Get-EasyProxyConfigSection -Config $config -Name 'misub'
+$misubRoot = Resolve-EasyProxyPath -Path (Get-EasyProxyConfigValue -Object $misub -Name 'projectRoot' -Default 'upstreams/misub')
+$pages = Get-EasyProxyConfigSection -Config $misub -Name 'pages'
+$docker = Get-EasyProxyConfigSection -Config $misub -Name 'docker'
 
 if ($Mode -eq "pages") {
     Assert-EasyProxyCommand -Name "npm" -Hint "Install Node.js first."
@@ -28,6 +35,12 @@ if ($Mode -eq "pages") {
         Invoke-EasyProxyExternalCommand -FilePath "npm" -Arguments @("run", "build") -WorkingDirectory $misubRoot -FailureMessage "MiSub build failed"
     }
 
+    if ([string]::IsNullOrWhiteSpace($ProjectName)) {
+        $ProjectName = [string](Get-EasyProxyConfigValue -Object $pages -Name 'projectName' -Default '')
+    }
+    if ([string]::IsNullOrWhiteSpace($Branch)) {
+        $Branch = [string](Get-EasyProxyConfigValue -Object $pages -Name 'branch' -Default 'main')
+    }
     if ([string]::IsNullOrWhiteSpace($ProjectName)) {
         $wranglerConfig = Join-Path $misubRoot "wrangler.jsonc"
         Ensure-EasyProxyPathExists -Path $wranglerConfig -Message "Missing MiSub wrangler config: $wranglerConfig"
@@ -50,10 +63,20 @@ if ($Mode -eq "pages") {
 
 Assert-EasyProxyCommand -Name "docker" -Hint "Install Docker Desktop or another Docker engine first."
 
-$composeFile = Join-Path $misubRoot "docker-compose.yml"
-$envFile = Join-Path $misubRoot ".env"
+$composeFile = Resolve-EasyProxyPath -Path (Get-EasyProxyConfigValue -Object $docker -Name 'composeFile' -Default 'upstreams/misub/docker-compose.yml')
+$envFile = Resolve-EasyProxyPath -Path (Get-EasyProxyConfigValue -Object $docker -Name 'envOutput' -Default 'upstreams/misub/.env')
 Ensure-EasyProxyPathExists -Path $composeFile -Message "Missing MiSub docker compose file: $composeFile"
-Ensure-EasyProxyPathExists -Path $envFile -Message "Missing MiSub .env. Copy .env.example to .env and fill the runtime secrets first."
+if (-not $SkipRender) {
+    $render = Join-Path $PSScriptRoot 'render-derived-configs.ps1'
+    Invoke-EasyProxyExternalCommand -FilePath 'powershell' -Arguments @(
+        '-ExecutionPolicy', 'Bypass',
+        '-File', $render,
+        '-ConfigPath', (Resolve-EasyProxyPath -Path $ConfigPath),
+        '-MiSub',
+        '-MiSubEnvOutput', $envFile
+    ) -FailureMessage "Failed to render MiSub .env from root config"
+}
+Ensure-EasyProxyPathExists -Path $envFile -Message "Missing MiSub .env. Render it from config.yaml or copy .env.example to .env first."
 
 $args = @("compose", "-f", $composeFile, "up", "-d")
 if (-not $NoBuild) {
