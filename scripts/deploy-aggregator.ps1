@@ -52,7 +52,7 @@ if ($configContent -match '__KEY_PLACEHOLDER__' -or $configContent -match '__TOK
 
 if (-not $SkipSecretUpdate) {
     Write-Host "Encoding aggregator Actions config..." -ForegroundColor Cyan
-    $encoded = powershell -ExecutionPolicy Bypass -File $exportScript -ConfigPath $effectiveConfigPath -NoNewline
+    $encoded = & $exportScript -ConfigPath $effectiveConfigPath -NoNewline
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($encoded)) {
         throw "Failed to encode aggregator Actions config"
     }

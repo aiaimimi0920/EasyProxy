@@ -5,6 +5,7 @@
 
 import { SettingsCache } from '../storage-adapter.js';
 import { KV_KEY_SETTINGS } from './config.js';
+export { conditionalKVPut } from '../utils/data-utils.js';
 
 const runtimeGeneratedSecrets = new Map();
 
@@ -129,36 +130,6 @@ async function safeKvPut(kv, key, value) {
             return false;
         }
         throw error;
-    }
-}
-
-/**
- * 条件性写入KV存储，只在数据真正变更时写入
- * @param {Object} env - Cloudflare环境对象
- * @param {string} key - KV键名
- * @param {any} newData - 新数据
- * @param {any} oldData - 旧数据（可选）
- * @returns {Promise<boolean>} - 是否执行了写入操作
- */
-export async function conditionalKVPut(env, key, newData, oldData = null) {
-    const kv = getKV(env);
-    // 如果没有提供旧数据，先从KV读取
-    if (oldData === null) {
-        try {
-            oldData = await kv.get(key).then(r => r ? JSON.parse(r) : null);
-        } catch (error) {
-            // 读取失败时，为安全起见执行写入
-            await kv.put(key, JSON.stringify(newData));
-            return true;
-        }
-    }
-
-    // 检测数据是否变更
-    if (hasDataChanged(oldData, newData)) {
-        await kv.put(key, JSON.stringify(newData));
-        return true;
-    } else {
-        return false;
     }
 }
 

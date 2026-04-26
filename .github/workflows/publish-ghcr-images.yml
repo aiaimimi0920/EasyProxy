@@ -37,6 +37,9 @@ jobs:
   publish:
     name: Build and publish GHCR images
     runs-on: ubuntu-latest
+    concurrency:
+      group: ghcr-publish-${{ github.event_name }}-${{ github.ref_name }}-${{ github.event_name == 'workflow_dispatch' && inputs.target || 'both' }}
+      cancel-in-progress: false
 
     steps:
       - name: Checkout repository

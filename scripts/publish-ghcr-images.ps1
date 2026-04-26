@@ -6,6 +6,7 @@ param(
     [string]$GhcrOwner = "",
     [string]$GhcrUsername = $env:GHCR_USERNAME,
     [string]$GhcrToken = $env:GHCR_TOKEN,
+    [ValidateSet("linux/amd64", "linux/amd64,linux/arm64")]
     [string]$Platform = "",
     [switch]$LoadOnly,
     [switch]$NoCache

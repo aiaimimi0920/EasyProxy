@@ -47,6 +47,9 @@ export function hasDataChanged(oldData, newData) {
  */
 export async function conditionalKVPut(env, key, newData, oldData = null) {
     const kv = getKV(env);
+    if (!kv) {
+        throw new Error('KV storage is unavailable');
+    }
     // 如果没有提供旧数据，先从KV读取
     if (oldData === null) {
         try {
