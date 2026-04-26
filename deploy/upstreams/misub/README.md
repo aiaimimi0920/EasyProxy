@@ -100,6 +100,7 @@ Authenticated operators may also use:
 
 - `GET /api/cron/status`
 - `POST /api/cron/trigger`
+- `GET /cron-dashboard`
 
 Behavior notes:
 
@@ -109,6 +110,8 @@ Behavior notes:
   available
 - `/api/cron/trigger` reuses the same cron execution pipeline but is protected
   by the normal admin session
+- `/cron-dashboard` is a lightweight operator page that consumes the two
+  authenticated `/api/cron/*` endpoints with the current browser session
 
 ## Docker / VPS Compatibility Path
 
