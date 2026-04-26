@@ -350,13 +350,13 @@ def specified_cookie(items: Any, key: str, concat: bool = False) -> str:
     if not items or isblank(key):
         return value
 
-    if type(items) == cookiejar.CookieJar:
+    if isinstance(items, cookiejar.CookieJar):
         for cookie in items:
             if key == cookie.name:
                 value = cookie.value
                 break
 
-    elif type(items) == str:
+    elif isinstance(items, str):
         for cookie in items.split(";"):
             words = cookie.split("=", maxsplit=1)
             if len(words) != 2:
@@ -393,7 +393,7 @@ def add_or_replace(source: str, dest: str) -> str:
 
 
 def read(response: HTTPResponse) -> str:
-    if not response or type(response) != HTTPResponse:
+    if not response or not hasattr(response, "read"):
         return ""
     try:
         content = response.read()
@@ -444,7 +444,7 @@ def loadconf(filename: str = "") -> dict:
 
 
 def isblank(text: str) -> bool:
-    return not text or type(text) != str or not text.strip()
+    return not text or not isinstance(text, str) or not text.strip()
 
 
 def build_opener() -> tuple[OpenerDirector, cookiejar.CookieJar]:
@@ -460,9 +460,9 @@ def build_opener() -> tuple[OpenerDirector, cookiejar.CookieJar]:
 def checkconn(opener: OpenerDirector, cookies: cookiejar.CookieJar) -> bool:
     return (
         opener is None
-        or type(opener) != OpenerDirector
+        or not isinstance(opener, OpenerDirector)
         or cookies is None
-        or type(cookies) != cookiejar.CookieJar
+        or not isinstance(cookies, cookiejar.CookieJar)
     )
 
 
