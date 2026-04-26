@@ -202,6 +202,7 @@ func (m *Manager) Reload(newCfg *config.Config) error {
 	ctx := m.baseCtx
 	oldBox := m.currentBox
 	oldCfg := m.cfg
+	prevMonitorCfg := m.monitorCfg
 	m.currentBox = nil // Mark as reloading
 	m.mu.Unlock()
 
@@ -302,6 +303,7 @@ func (m *Manager) Reload(newCfg *config.Config) error {
 			return fmt.Errorf("reload health check failed: %w", err)
 		}
 	}
+	m.syncMonitorServerLifecycle(ctx, prevMonitorCfg, newCfg)
 	m.logger.Infof("reload completed successfully with %d nodes", len(newCfg.Nodes))
 	return nil
 }
@@ -626,6 +628,65 @@ func (m *Manager) applyConfigSettings(cfg *config.Config) {
 			m.logger.Warnf("failed to update probe targets from config: %v", err)
 		}
 	}
+}
+
+func (m *Manager) syncMonitorServerLifecycle(ctx context.Context, prev monitor.Config, activeCfg *config.Config) {
+	if activeCfg == nil {
+		return
+	}
+
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	m.mu.RLock()
+	currentCfg := m.monitorCfg
+	currentServer := m.monitorServer
+	currentMgr := m.monitorMgr
+	currentStore := m.store
+	m.mu.RUnlock()
+
+	if currentMgr == nil {
+		return
+	}
+
+	needsRestart := prev.Enabled != currentCfg.Enabled || prev.Listen != currentCfg.Listen
+
+	if !currentCfg.Enabled {
+		if currentServer != nil {
+			currentServer.Shutdown(context.Background())
+			m.mu.Lock()
+			if m.monitorServer == currentServer {
+				m.monitorServer = nil
+			}
+			m.mu.Unlock()
+		}
+		return
+	}
+
+	if currentServer != nil && !needsRestart {
+		currentServer.SetConfig(activeCfg)
+		return
+	}
+
+	if currentServer != nil {
+		currentServer.Shutdown(context.Background())
+	}
+
+	server := monitor.NewServer(currentCfg, currentMgr, log.Default())
+	if server == nil {
+		return
+	}
+	server.SetNodeManager(m)
+	server.SetStore(currentStore)
+	server.SetConfig(activeCfg)
+	server.Start(ctx)
+
+	m.mu.Lock()
+	if m.monitorServer == nil || m.monitorServer == currentServer {
+		m.monitorServer = server
+	}
+	m.mu.Unlock()
 }
 
 func hasRuntimeSourceRefs(cfg *config.Config) bool {

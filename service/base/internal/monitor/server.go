@@ -16,10 +16,10 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"reflect"
 	"runtime"
 	"sort"
 	"strconv"
-	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -626,6 +626,8 @@ func (s *Server) updateAllSettings(req allSettingsRequest) error {
 	c.Subscriptions = req.Subscriptions
 
 	// Sync ALL monitor-level config fields for runtime effect
+	s.cfg.Enabled = c.ManagementEnabled()
+	s.cfg.Listen = c.Management.Listen
 	s.cfg.ExternalIP = c.ExternalIP
 	s.cfg.ProbeTarget = c.Management.ProbeTarget
 	s.cfg.ProbeTargets = append([]string(nil), c.Management.ProbeTargets...)
