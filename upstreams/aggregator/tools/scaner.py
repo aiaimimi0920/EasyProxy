@@ -633,7 +633,7 @@ def collect_airport(channel: str, page_num: int, thread_num: int = 50) -> list:
 
         domains = list(availables)
         print(
-            f"[AirPortCollector] finished collect air port from telegram channel: {channel}, availables: {len(domain)}"
+            f"[AirPortCollector] finished collect air port from telegram channel: {channel}, availables: {len(domains)}"
         )
         return domains
 
@@ -778,8 +778,18 @@ if __name__ == "__main__":
         num = len(tasks) if len(tasks) <= cpu_count else cpu_count
 
         pool = multiprocessing.Pool(num)
-        pool.starmap(scan, tasks)
-        pool.close()
+        try:
+            pool.starmap(scan, tasks)
+            pool.close()
+            pool.join()
+        except KeyboardInterrupt:
+            pool.terminate()
+            pool.join()
+            raise
+        except Exception:
+            pool.terminate()
+            pool.join()
+            raise
     else:
         domain = extract_domain(args.address)
         if not domain:
