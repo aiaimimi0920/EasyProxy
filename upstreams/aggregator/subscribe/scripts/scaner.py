@@ -129,46 +129,50 @@ def parse_vmess(node: dict, uuid: str) -> dict:
 
 
 def login(url, params, headers, retry) -> str:
-    try:
-        data = urllib.parse.urlencode(params).encode(encoding="UTF8")
-        request = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    for attempt in range(max(1, retry)):
+        try:
+            data = urllib.parse.urlencode(params).encode(encoding="UTF8")
+            request = urllib.request.Request(url, data=data, headers=headers, method="POST")
 
-        response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
-        if response.getcode() == 200:
-            return response.getheader("Set-Cookie")
-        else:
+            response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
+            if response.getcode() == 200:
+                return response.getheader("Set-Cookie")
+
             logger.info(
                 "[ScanerLoginError] domain: {}, message: {}".format(url, response.read().decode("unicode_escape"))
             )
             return ""
-    except Exception as e:
-        logger.error("[ScanerLoginError] doamin: {}, message: {}".format(url, str(e)))
+        except Exception as e:
+            logger.error("[ScanerLoginError] doamin: {}, message: {}".format(url, str(e)))
+            if attempt >= max(1, retry) - 1:
+                break
 
-        retry -= 1
-        return login(url, params, headers, retry) if retry > 0 else ""
+    return ""
 
 
 def register(url: str, params: dict, retry: int) -> bool:
-    try:
-        data = urllib.parse.urlencode(params).encode(encoding="UTF8")
-        request = urllib.request.Request(url, data=data, method="POST", headers=HEADER)
+    for attempt in range(max(1, retry)):
+        try:
+            data = urllib.parse.urlencode(params).encode(encoding="UTF8")
+            request = urllib.request.Request(url, data=data, method="POST", headers=HEADER)
 
-        response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
-        if response.getcode() == 200:
-            content = response.read()
-            kv = json.loads(content)
-            if "ret" in kv and kv["ret"] == 1:
-                return True
+            response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
+            if response.getcode() == 200:
+                content = response.read()
+                kv = json.loads(content)
+                if "ret" in kv and kv["ret"] == 1:
+                    return True
 
-        logger.debug(
-            "[ScanerRegisterError] domain: {}, message: {}".format(url, response.read().decode("unicode_escape"))
-        )
-        return False
-    except Exception as e:
-        logger.error("[ScanerRegisterError] domain: {}, message: {}".format(url, str(e)))
+            logger.debug(
+                "[ScanerRegisterError] domain: {}, message: {}".format(url, response.read().decode("unicode_escape"))
+            )
+            return False
+        except Exception as e:
+            logger.error("[ScanerRegisterError] domain: {}, message: {}".format(url, str(e)))
+            if attempt >= max(1, retry) - 1:
+                break
 
-        retry -= 1
-        return register(url, params, retry) if retry > 0 else False
+    return False
 
 
 def get_cookie(text) -> str:

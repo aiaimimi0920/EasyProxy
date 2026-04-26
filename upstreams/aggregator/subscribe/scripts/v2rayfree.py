@@ -36,10 +36,13 @@ def fetch(email: str, retry: int = 2) -> str:
         "user-agent": utils.USER_AGENT,
     }
 
-    try:
-        request = urllib.request.Request(url=url, data=data, headers=headers, method="POST")
-        response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
-        if response.getcode() == 200:
+    for attempt in range(max(1, retry)):
+        try:
+            request = urllib.request.Request(url=url, data=data, headers=headers, method="POST")
+            response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
+            if response.getcode() != 200:
+                continue
+
             content = response.read()
             try:
                 content = gzip.decompress(content).decode("utf8")
@@ -61,10 +64,12 @@ def fetch(email: str, retry: int = 2) -> str:
 
             subscribe = str(base64.b64decode(groups[0]), encoding="UTF8")
             return subscribe
+        except:
+            if attempt >= max(1, retry) - 1:
+                break
+            time.sleep(random.random())
 
-    except:
-        time.sleep(random.random())
-        return fetch(email, retry - 1)
+    return ""
 
 
 def getrss(params: dict) -> list:
