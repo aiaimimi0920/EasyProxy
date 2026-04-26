@@ -267,6 +267,17 @@ powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 `
   -ReleaseTag release-20260427-001
 ```
 
+GitHub Actions workflow:
+
+- `.github/workflows/publish-ghcr-images.yml`
+  - tag push:
+    - `release-*`
+    - `v*`
+  - manual dispatch:
+    - target `both`, `easyproxy`, or `ech-workers`
+  - publishes the service image without requiring a local Docker daemon on the
+    operator machine
+
 The publish helper now prefers the current machine Docker login state and only
 attempts an explicit `docker login` when credentials were supplied.
 

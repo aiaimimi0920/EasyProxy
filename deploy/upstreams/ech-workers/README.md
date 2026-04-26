@@ -44,3 +44,12 @@ powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 `
   -Project publish-ech-workers-image `
   -ReleaseTag release-20260427-001
 ```
+
+GitHub-hosted publish path:
+
+- workflow:
+  - `.github/workflows/publish-ghcr-images.yml`
+- trigger:
+  - push tag `release-*` or `v*`
+  - or run `Publish GHCR Images` manually from the Actions tab with target
+    `ech-workers`

@@ -1,0 +1,132 @@
+name: Publish GHCR Images
+
+'on':
+  push:
+    tags:
+      - 'release-*'
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Which image set to publish
+        required: true
+        default: both
+        type: choice
+        options:
+          - both
+          - easyproxy
+          - ech-workers
+      release_tag:
+        description: Optional image tag override for manual runs
+        required: false
+        type: string
+      platforms:
+        description: Target build platforms
+        required: false
+        default: linux/amd64
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    name: Build and publish GHCR images
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Resolve publish inputs
+        id: prep
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            target="both"
+            release_tag="${GITHUB_REF_NAME}"
+            platforms="linux/amd64"
+          else
+            target="${{ inputs.target }}"
+            release_tag="${{ inputs.release_tag }}"
+            platforms="${{ inputs.platforms }}"
+            if [[ -z "${release_tag}" ]]; then
+              release_tag="release-${GITHUB_RUN_NUMBER}-${GITHUB_SHA::7}"
+            fi
+          fi
+
+          echo "owner_lc=${owner_lc}" >> "$GITHUB_OUTPUT"
+          echo "target=${target}" >> "$GITHUB_OUTPUT"
+          echo "release_tag=${release_tag}" >> "$GITHUB_OUTPUT"
+          echo "platforms=${platforms}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for EasyProxy service image
+        if: steps.prep.outputs.target == 'both' || steps.prep.outputs.target == 'easyproxy'
+        id: meta_service
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ steps.prep.outputs.owner_lc }}/easy-proxy-monorepo-service
+          tags: |
+            type=raw,value=${{ steps.prep.outputs.release_tag }}
+
+      - name: Build and push EasyProxy service image
+        if: steps.prep.outputs.target == 'both' || steps.prep.outputs.target == 'easyproxy'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deploy/service/base/Dockerfile
+          platforms: ${{ steps.prep.outputs.platforms }}
+          push: true
+          tags: ${{ steps.meta_service.outputs.tags }}
+          labels: ${{ steps.meta_service.outputs.labels }}
+
+      - name: Extract metadata for ech-workers image
+        if: steps.prep.outputs.target == 'both' || steps.prep.outputs.target == 'ech-workers'
+        id: meta_worker
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ steps.prep.outputs.owner_lc }}/ech-workers-monorepo
+          tags: |
+            type=raw,value=${{ steps.prep.outputs.release_tag }}
+
+      - name: Build and push ech-workers image
+        if: steps.prep.outputs.target == 'both' || steps.prep.outputs.target == 'ech-workers'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deploy/upstreams/ech-workers/Dockerfile
+          platforms: ${{ steps.prep.outputs.platforms }}
+          push: true
+          tags: ${{ steps.meta_worker.outputs.tags }}
+          labels: ${{ steps.meta_worker.outputs.labels }}
+
+      - name: Job summary
+        shell: bash
+        run: |
+          {
+            echo "## GHCR publish completed"
+            echo
+            echo "- target: \`${{ steps.prep.outputs.target }}\`"
+            echo "- release tag: \`${{ steps.prep.outputs.release_tag }}\`"
+            echo "- platforms: \`${{ steps.prep.outputs.platforms }}\`"
+            if [[ "${{ steps.prep.outputs.target }}" == "both" || "${{ steps.prep.outputs.target }}" == "easyproxy" ]]; then
+              echo "- service image: \`ghcr.io/${{ steps.prep.outputs.owner_lc }}/easy-proxy-monorepo-service:${{ steps.prep.outputs.release_tag }}\`"
+            fi
+            if [[ "${{ steps.prep.outputs.target }}" == "both" || "${{ steps.prep.outputs.target }}" == "ech-workers" ]]; then
+              echo "- worker image: \`ghcr.io/${{ steps.prep.outputs.owner_lc }}/ech-workers-monorepo:${{ steps.prep.outputs.release_tag }}\`"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

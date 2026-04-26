@@ -185,6 +185,12 @@ Root-level operator entrypoints live under `scripts/`:
   - publishes the primary EasyProxy service image, the standalone
     `ech-workers` image, or both to GHCR
 
+GitHub-hosted publish workflow:
+
+- `.github/workflows/publish-ghcr-images.yml`
+  - publishes GHCR images on tag push or manual workflow dispatch
+  - does not require local Docker on the operator machine
+
 ### One-Click Deploy Examples
 
 Run from repository root:
@@ -214,6 +220,21 @@ powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Projec
 # Publish both core images with one command
 powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project publish-core-images -ReleaseTag release-20260427-001
 ```
+
+### GitHub Actions Publish
+
+Without local Docker, you can publish from GitHub Actions in two ways:
+
+1. Push a tag named like `release-20260427-001` or `v1.0.0`.
+2. Open `Actions -> Publish GHCR Images -> Run workflow`, then choose:
+   - `both`
+   - `easyproxy`
+   - `ech-workers`
+
+The workflow publishes to:
+
+- `ghcr.io/<repository-owner>/easy-proxy-monorepo-service:<release-tag>`
+- `ghcr.io/<repository-owner>/ech-workers-monorepo:<release-tag>`
 
 Supported `-Project` values:
 
