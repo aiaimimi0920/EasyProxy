@@ -243,8 +243,9 @@ jobs:
         with:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+          workingDirectory: upstreams/misub
           command: >-
-            pages deploy upstreams/misub/dist
+            pages deploy dist
             --project-name=${{ steps.misub_resources.outputs.project_name }}
             --branch=${{ steps.misub_resources.outputs.branch_name }}
         env:

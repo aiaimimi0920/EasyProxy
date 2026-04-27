@@ -17,9 +17,33 @@ $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot 'lib\easyproxy-common.ps1')
 
+function Resolve-EasyProxyOutputPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        throw "Output path must not be empty."
+    }
+
+    if ([System.IO.Path]::IsPathRooted($Path)) {
+        return [System.IO.Path]::GetFullPath($Path)
+    }
+
+    return [System.IO.Path]::GetFullPath((Join-Path (Get-EasyProxyRepoRoot) $Path))
+}
+
 if (-not [string]::IsNullOrWhiteSpace($ImportCode)) {
     Assert-EasyProxyCommand -Name "python" -Hint "Install Python 3 first."
-    $tempPath = Join-Path $env:TEMP ("easyproxy-import-code-" + [Guid]::NewGuid().ToString('N') + ".json")
+    $tempRoot = [string]$env:TEMP
+    if ([string]::IsNullOrWhiteSpace($tempRoot)) {
+        $tempRoot = [System.IO.Path]::GetTempPath()
+    }
+    if ([string]::IsNullOrWhiteSpace($tempRoot)) {
+        throw "Unable to resolve a temporary directory for decoding the import code."
+    }
+    $tempPath = Join-Path $tempRoot ("easyproxy-import-code-" + [Guid]::NewGuid().ToString('N') + ".json")
     try {
         & python (Join-Path $PSScriptRoot 'easyproxy-import-code.py') inspect `
             --import-code $ImportCode `
@@ -90,7 +114,7 @@ if (-not [string]::IsNullOrWhiteSpace($ExpectedConfigSha256)) {
     $bootstrap.expectedConfigSha256 = $ExpectedConfigSha256
 }
 
-$resolvedOutputPath = Join-Path (Get-EasyProxyRepoRoot) $OutputPath
+$resolvedOutputPath = Resolve-EasyProxyOutputPath -Path $OutputPath
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $resolvedOutputPath) | Out-Null
 $bootstrap | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $resolvedOutputPath -Encoding UTF8
 Write-Host "Bootstrap file written: $resolvedOutputPath"
