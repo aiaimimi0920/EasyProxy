@@ -260,7 +260,7 @@ def batch_crawl(conf: dict, num_threads: int = 50, display: bool = True) -> list
                     for k, v in oldsubs.items():
                         merged = dict(list(v.items()) + list(records.get(k, {}).items()))
                         records[k] = merged
-            except:
+            except Exception:
                 logger.error("[CrawlError] load old subscriptions from remote error")
                 pass
 
@@ -325,7 +325,7 @@ def batch_crawl(conf: dict, num_threads: int = 50, display: bool = True) -> list
                         }
                         item.update(proxiesconf)
                         datasets.append(item)
-                except:
+                except Exception:
                     logger.error("[CrawlError] base64 encode error for proxies links")
 
         if len(unknowns) > 0:
@@ -347,9 +347,8 @@ def batch_crawl(conf: dict, num_threads: int = 50, display: bool = True) -> list
             if rest:
                 content = json.dumps(survivors)
                 pushtool.push_to(content=content, config=subspushconf, group="crawl")
-    except:
-        logger.error("[CrawlError] crawl from web error")
-        traceback.print_exc()
+    except Exception:
+        logger.exception("[CrawlError] crawl from web error")
 
     # only crawl if mode == 1
     if mode == 1:
@@ -468,8 +467,8 @@ def crawl_single_repo(username: str, repo: str, push_to: list | None = None, lim
                     )
                 )
         return collections
-    except:
-        logger.error(f"[GithubCrawl] crawl from github error, username: {username}\trepo: {repo}")
+    except Exception:
+        logger.exception(f"[GithubCrawl] crawl from github error, username: {username}\trepo: {repo}")
         return {}
 
 
@@ -538,7 +537,7 @@ def crawl_google(
                 if exclude and re.search(exclude, s):
                     continue
                 collections[s] = {"push_to": push_to, "origin": Origin.GOOGLE.name}
-            except:
+            except Exception:
                 continue
 
         # no more results
@@ -610,7 +609,7 @@ def crawl_yandex(
                     link = re.findall(regex, group, flags=re.I)[0]
                     if re.search(reject, link):
                         continue
-            except:
+            except Exception:
                 logger.error(f"[YandexCrawl] invalid regex pattern: {reject}")
                 continue
 
@@ -625,7 +624,7 @@ def crawl_yandex(
                         "push_to": push_to,
                         "origin": Origin.YANDEX.name,
                     }
-                except:
+                except Exception:
                     continue
 
         time.sleep(interval)
@@ -690,7 +689,7 @@ def search_github_issues(page: int, cookie: str) -> list[str]:
         links = list(set(groups))
         links = [f"https://github.com{x}" for x in links]
         return links
-    except:
+    except Exception:
         return []
 
 
@@ -717,9 +716,8 @@ def search_github_issues_byapi(token: str, peer_page: int = 50, page: int = 1) -
             links.add(link)
 
         return list(links)
-    except:
-        logger.error("[GithubIssuesCrawl] occur error when search issues from github")
-        traceback.print_exc()
+    except Exception:
+        logger.exception("[GithubIssuesCrawl] occur error when search issues from github")
         return []
 
 
@@ -756,7 +754,7 @@ def search_github_code_byapi(token: str, peer_page: int = 50, page: int = 1, exc
                 links.add(link)
 
         return list(links)
-    except:
+    except Exception:
         return []
 
 
@@ -776,7 +774,7 @@ def search_github_code(page: int, cookie: str, excludes: list | None = None) -> 
                 links.add(f"https://github.com{uri}")
 
         return list(links)
-    except:
+    except Exception:
         return []
 
 
@@ -788,7 +786,7 @@ def intercept(text: str, excludes: list | None = None) -> bool:
         try:
             if re.search(regex, text, flags=re.I):
                 return True
-        except:
+        except Exception:
             logger.error(f"[GithubRepoIntercept] invalid regex pattern: {regex}")
     return False
 
@@ -999,7 +997,7 @@ def username_to_id(username: str, headers: dict) -> str:
 
         data = json.loads(content).get("data", {}).get("user", {}).get("result", "")
         return data.get("rest_id", "")
-    except:
+    except Exception:
         logger.error(f"[TwitterCrawl] cannot query uid by username=[{username}]")
         return ""
 
@@ -1086,7 +1084,7 @@ def crawl_twitter(tasks: dict) -> dict:
 
 def extract_subscribes(
     content: str,
-    push_to: list = [],
+    push_to: list | None = None,
     include: str = "",
     exclude: str = "",
     limits: int = sys.maxsize,
@@ -1097,6 +1095,7 @@ def extract_subscribes(
 ) -> dict:
     if not content:
         return {}
+    push_to = [] if push_to is None else push_to
     try:
         limits, collections, proxies = max(1, limits), {}, []
         sub_regex = r"https?://(?:[a-zA-Z0-9\u4e00-\u9fa5\-]+\.)+[a-zA-Z0-9\u4e00-\u9fa5\-]+(?::\d+)?(?:(?:(?:/index.php)?/api/v1/client/subscribe\?token=[a-zA-Z0-9]{16,32})|(?:/link/[a-zA-Z0-9]+\?(?:sub|mu|clash)=\d)|(?:/(?:s|sub)/[a-zA-Z0-9]{32}))|https://jmssub\.net/members/getsub\.php\?service=\d+&id=[a-zA-Z0-9\-]{36}(?:\S+)?"
@@ -1115,7 +1114,7 @@ def extract_subscribes(
                     pattern = f"{regex}{include}"
 
                 subscribes = re.findall(pattern, content, flags=re.I)
-            except:
+            except Exception:
                 logger.error(f"[ExtractError] maybe pattern 'include' exists some problems, include: {include}")
                 subscribes = re.findall(regex, content)
         else:
@@ -1127,7 +1126,7 @@ def extract_subscribes(
             )
             if parts:
                 subscribes.extend([utils.trim(p) for p in parts])
-        except:
+        except Exception:
             pass
 
         # 去重会打乱原本按日期排序的特性一致无法优先选择离当前时间较近的元素
@@ -1165,7 +1164,7 @@ def extract_subscribes(
 
                     if exclude and re.search(exclude, s):
                         continue
-                except:
+                except Exception:
                     logger.error(
                         f"[ExtractError] maybe pattern 'include' or 'exclude' exists some problems, include: {include}\texclude: {exclude}"
                     )
@@ -1193,12 +1192,12 @@ def extract_subscribes(
                     if config:
                         params.update(config)
                     collections[SINGLE_LINK_FLAG] = params
-            except:
+            except Exception:
                 logger.error(f"[ExtractError] failed to extract single proxy")
 
         return collections
-    except:
-        logger.error("[ExtractError] extract subscribe error")
+    except Exception:
+        logger.exception("[ExtractError] extract subscribe error")
         return {}
 
 
@@ -1328,7 +1327,7 @@ def check_status(
     except urllib.error.HTTPError as e:
         try:
             message = str(e.read(), encoding="utf8")
-        except:
+        except Exception:
             message = ""
 
         expired = e.code == 404 or "token is error" in message
@@ -1398,7 +1397,7 @@ def is_expired(header: str, remain: float = 0, spare_time: float = 0, tolerance:
         )
         expired = False if flag else (expire is not None and (expire + tolerance * 3600) <= time.time())
         return flag, expired
-    except:
+    except Exception:
         return True, False
 
 
@@ -1423,7 +1422,7 @@ def get_telegram_pages(channel: str) -> int:
         regex = rf'<link\s+rel="canonical"\s+href="/s/{channel}\?before=(\d+)">'
         groups = re.findall(regex, content)
         before = int(groups[0]) if groups else before
-    except:
+    except Exception:
         logger.error(f"[CrawlError] cannot count page num, chanel: {channel}")
 
     return before
@@ -1443,7 +1442,7 @@ def extract_airport_site(url: str) -> list[str]:
         regex = r'href="(https?://(?:[a-zA-Z0-9\u4e00-\u9fa5\-]+\.)+[a-zA-Z0-9\u4e00-\u9fa5\-]+/?)"\s+target="_blank"\s+rel="noopener">'
         groups = re.findall(regex, content)
         return list(set(groups)) if groups else []
-    except:
+    except Exception:
         return []
 
 
@@ -1519,8 +1518,8 @@ def collect_airport(
 
                 coupon = candidates.get(x, "")
                 result[domain] = coupon
-        except:
-            logger.error(f"[AirPortCollector] occur error when crawl from [{url}], message: \n{traceback.format_exc()}")
+        except Exception:
+            logger.exception(f"[AirPortCollector] occur error when crawl from [{url}]")
 
         logger.info(f"[AirPortCollector] finished crawl from [{url}], found {len(result)} domains")
         return result
@@ -1627,8 +1626,8 @@ def collect_airport(
             logger.info(f"[AirPortCollector] finished crawl from [{url}], found {len(result)} domains")
 
             return result
-        except:
-            logger.error(f"[AirPortCollector] occur error when crawl from [{url}], message: \n{traceback.format_exc()}")
+        except Exception:
+            logger.exception(f"[AirPortCollector] occur error when crawl from [{url}]")
             return {}
 
     def get_redirect_url(url: str, retry: int = 3) -> str:
@@ -1647,7 +1646,7 @@ def collect_airport(
                 request = urllib.request.Request(url=url, headers=headers, method="GET")
                 response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
                 return response.geturl()
-            except:
+            except Exception:
                 if attempt >= retry - 1:
                     break
                 time.sleep(random.randint(1, 3))
@@ -1681,8 +1680,8 @@ def collect_airport(
 
                 domain = utils.extract_domain(url=address, include_protocal=True)
                 result[domain] = coupon
-        except:
-            logger.error(f"[AirPortCollector] occur error when crawl from [{url}], message: \n{traceback.format_exc()}")
+        except Exception:
+            logger.exception(f"[AirPortCollector] occur error when crawl from [{url}]")
 
         logger.info(f"[AirPortCollector] finished crawl from [{url}], found {len(result)} domains")
         return result
@@ -1707,7 +1706,7 @@ def collect_airport(
                     content = response.read()
                     try:
                         content = str(content, encoding="utf8")
-                    except:
+                    except Exception:
                         content = gzip.decompress(content).decode("utf8")
 
                     return False, content
@@ -1753,7 +1752,7 @@ def collect_airport(
                     link = utils.trim(data.get("apiUrl", ""))
 
                 return utils.extract_domain(url=link, include_protocal=True)
-            except:
+            except Exception:
                 return ""
 
         def attempt_buddy() -> str:
@@ -1878,7 +1877,7 @@ def validate_domain(url: str, rigid: bool = True, chuck: bool = False) -> tuple[
         rr = airport.AirPort.get_register_require(domain=url)
         flag = rr.invite or (chuck and rr.recaptcha) or (rigid and rr.whitelist and rr.verify)
         return not flag, rr.api_prefix
-    except:
+    except Exception:
         return False, ""
 
 
@@ -1902,8 +1901,8 @@ def batch_call(tasks: dict) -> list[dict]:
                 p.join()
 
             return list(availables)
-    except:
-        traceback.print_exc()
+    except Exception:
+        logger.exception("[ScriptError] batch call scripts error")
         return []
 
 
@@ -1955,6 +1954,6 @@ def execute_script(script: str, params: dict = None) -> list[dict]:
 
         subscribes = [s for s in subscribes if isinstance(s, dict) and s.get("push_to", [])]
         return subscribes
-    except:
-        logger.error(f"[ScriptError] occur error run script: {script}, message: \n{traceback.format_exc()}")
+    except Exception:
+        logger.exception(f"[ScriptError] occur error run script: {script}")
         return []
