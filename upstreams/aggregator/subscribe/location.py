@@ -321,7 +321,7 @@ def download_mmdb(repo: str, target: str, filepath: str, retry: int = 3) -> bool
     try:
         data = json.loads(content)
         assets = data.get("assets", [])
-    except:
+    except Exception:
         logger.error(f"failed download {target} due to cannot extract download url through Github API")
 
     if not assets or not isinstance(assets, list):
@@ -617,11 +617,11 @@ def check_single_port(port: int) -> bool:
             result = sock.connect_ex(("::1", port))
             sock.close()
             return result == 0
-        except:
+        except Exception:
             pass
 
         return False
-    except:
+    except Exception:
         # Assume port is not in use when an error occurs
         return False
 
@@ -1249,7 +1249,7 @@ def batch_query(
             try:
                 process.terminate()
                 process.wait(timeout=5)
-            except:
+            except Exception:
                 pass
 
 

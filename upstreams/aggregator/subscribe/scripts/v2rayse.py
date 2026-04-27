@@ -96,7 +96,7 @@ def detect(proxies: list, nopublic: bool, exclude: str, ignore: str, repeat: int
 
             if re.search(exclude, name, flags=re.I):
                 count += 1
-        except:
+        except Exception:
             logger.error(
                 f"[V2RaySE] invalid regex, ignore: {ignore}, exclude: {exclude}, message: \n{traceback.format_exc()}"
             )
@@ -163,11 +163,11 @@ def list_files(base: str, date: str, maxsize: int, last: datetime) -> list[str]:
                         modified = datetime.fromisoformat(updated_at[:-1]).replace(tzinfo=timezone.utc)
                         if modified < last:
                             continue
-                except:
+                except Exception:
                     logger.error(f"[V2RaySE] parse details of the file {name} error")
 
                 files.append(f"{base}/{name}")
-        except:
+        except Exception:
             logger.error(f"[V2RaySE] list files error, date: {date}, marker: {marker}")
 
     return files
@@ -200,7 +200,7 @@ def fetchone(
             )
             if parts:
                 subscriptions.extend([utils.trim(p) for p in parts])
-        except:
+        except Exception:
             pass
 
     if not noproxies:
@@ -235,10 +235,10 @@ def fetchone(
                         if outbound.get("type", "") == "tuic":
                             logger.info(f"[V2RaySE] found tuic outbound in url: {url}")
                             break
-                except:
+                except Exception:
                     pass
-        except:
-            logger.error(f"[V2RaySE] parse proxies failed, url: {url}, message: \n{traceback.format_exc()}")
+        except Exception:
+            logger.exception(f"[V2RaySE] parse proxies failed, url: {url}")
 
     return proxies, list(set(subscriptions)) if subscriptions else []
 

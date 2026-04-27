@@ -196,7 +196,7 @@ def load_configs(
                 try:
                     start = int(page.pop("start", 1))
                     end = int(page.pop("end", 1))
-                except:
+                except Exception:
                     pass
 
                 if start < 0 or end < start:
@@ -300,8 +300,8 @@ def load_configs(
             logger.error("parse configuration failed due to process abnormally exits")
 
         sys.exit(e.code)
-    except:
-        logger.error(f"occur error when load task config:\n{traceback.format_exc()}")
+    except Exception:
+        logger.exception("occur error when load task config")
         sys.exit(0)
 
     return ProcessConfig(
@@ -615,7 +615,7 @@ def aggregate(args: argparse.Namespace) -> None:
                 # close clash client
                 try:
                     process.terminate()
-                except:
+                except Exception:
                     logger.error(f"terminate clash process error, group: {k}")
 
                 availables = [checks[i] for i in range(len(checks)) if masks[i]]
@@ -642,7 +642,7 @@ def aggregate(args: argparse.Namespace) -> None:
             ip_library = regularize.get("library", "")
             try:
                 bits = max(1, int(regularize.get("bits", 2)))
-            except:
+            except Exception:
                 bits = 2
 
             nochecks = location.regularize(
