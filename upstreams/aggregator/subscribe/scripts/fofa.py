@@ -54,7 +54,7 @@ def search(exclude: str = "", maxsize: int = sys.maxsize, timesleep: float = 3, 
             try:
                 if url and (not exclude or not re.search(exclude, url, flags=re.I)):
                     items.add(url)
-            except:
+            except Exception:
                 logger.error(f"[FOFA] invalid pattern: {exclude}")
 
     return list(items)
@@ -84,7 +84,7 @@ def extract_one(url: str) -> list[str]:
             content = response.read()
             try:
                 content = str(content, encoding="utf8")
-            except:
+            except Exception:
                 content = gzip.decompress(content).decode("utf8")
         except urllib.error.URLError as e:
             if not isinstance(e.reason, (socket.gaierror, ssl.SSLError, socket.timeout)):

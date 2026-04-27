@@ -55,7 +55,7 @@ def query_forks_count(username: str, repository: str, retry: int = 3) -> int:
     try:
         data = json.loads(content)
         return data.get("forks_count", 0)
-    except:
+    except Exception:
         logger.error(f"[GithubFork] occur error when parse forks count, message: {content}")
         return -1
 
@@ -98,7 +98,7 @@ def query_forks(username: str, repository: str, page: int, peer: int = 100, sort
             subs = [f"{GITHUB_CONTENT_API}/{fullname}/{branch}/{s}" for s in SUBSCRIBE_FILES]
 
             subscriptions[fullname] = (links, subs)
-    except:
+    except Exception:
         logger.error(f"[GithubFork] cannot fetch forks for page: {page}, message: {content}")
 
     cost = "{:.2f}s".format(time.time() - starttime)
@@ -207,7 +207,7 @@ def collect_subs(params: dict) -> list[dict]:
     try:
         remain = max(params.get("remain", 0), 0)
         life = max(params.get("life", 0), 0)
-    except:
+    except Exception:
         logger.warning(f"[GithubFork] invalid remain or life, set to 0")
         remain, life = 0, 0
 

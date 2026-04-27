@@ -46,7 +46,7 @@ def fetch(email: str, retry: int = 2) -> str:
             content = response.read()
             try:
                 content = gzip.decompress(content).decode("utf8")
-            except:
+            except Exception:
                 content = str(content, encoding="utf8")
 
             fake_email, index = email, email.find("@")
@@ -64,7 +64,7 @@ def fetch(email: str, retry: int = 2) -> str:
 
             subscribe = str(base64.b64decode(groups[0]), encoding="UTF8")
             return subscribe
-        except:
+        except Exception:
             if attempt >= max(1, retry) - 1:
                 break
             time.sleep(random.random())
@@ -138,7 +138,7 @@ def load(config: push.PushConfig, persist: dict) -> dict:
         content = utils.http_get(url=url)
         data = json.loads(content)
         return filter(data=data)
-    except:
+    except Exception:
         return {}
 
 

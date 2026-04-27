@@ -218,7 +218,7 @@ def cmd(command: list, output: bool = False) -> tuple[bool, str]:
     if output:
         try:
             content = (completed.stdout or b"").decode("utf8", errors="replace")
-        except:
+        except Exception:
             content = ""
 
     return completed.returncode == 0, content
@@ -318,7 +318,7 @@ def write_file(filename: str, lines: list) -> bool:
             f.flush()
 
         return True
-    except:
+    except Exception:
         return False
 
 
@@ -407,7 +407,7 @@ def mask(url: str) -> str:
             if len(token) >= 6:
                 token = token[:3] + "***" + token[-3:]
             url = f"{parse_result.scheme}://{parse_result.netloc}{path}/{token}"
-    except:
+    except Exception:
         logger.error(f"invalid url: {url}")
 
     return url
