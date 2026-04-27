@@ -131,6 +131,43 @@ GitHub Actions equivalents:
 - [docs/service-base-config-distribution.md](/C:/Users/Public/nas_home/AI/GameEditor/EasyProxy/docs/service-base-config-distribution.md)
   - bootstrap/import-code path for long-lived `service/base` runtime config delivery
 
+## Import Code And Bootstrap
+
+Owner keypair generation:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\generate-import-code-keypair.ps1 `
+  -PublicKeyOutput .\tmp\easyproxy_import_code_owner_public.txt `
+  -PrivateKeyOutput .\tmp\easyproxy_import_code_owner_private.txt `
+  -BundleOutput .\tmp\easyproxy_import_code_owner_keypair.json
+```
+
+Decrypt a workflow artifact:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\decrypt-import-code.ps1 `
+  -EncryptedFilePath .\service-base-import-code.encrypted.json `
+  -PrivateKeyPath .\tmp\easyproxy_import_code_owner_private.txt `
+  -OutputPath .\tmp\service-base-import-code.decrypted.json
+```
+
+Write bootstrap JSON from a known import code:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\write-service-base-r2-bootstrap.ps1 `
+  -ImportCode "<easyproxy-import-v1...>" `
+  -OutputPath .\deploy\service\base\bootstrap\r2-bootstrap.json
+```
+
+The runtime image accepts either:
+
+- `EASY_PROXY_IMPORT_CODE`
+- or `/etc/easy-proxy/bootstrap/r2-bootstrap.json`
+
+Use the distribution guide for the full operator flow:
+
+- [docs/service-base-config-distribution.md](/C:/Users/Public/nas_home/AI/GameEditor/EasyProxy/docs/service-base-config-distribution.md)
+
 ## Private Config
 
 Do not commit live deployment values.

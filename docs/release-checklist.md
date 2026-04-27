@@ -44,6 +44,7 @@ CI workflows:
    - `v*`
 4. Confirm required GitHub repository secrets are present for any Cloudflare deploy you plan to run. See [docs/github-secrets.md](/C:/Users/Public/nas_home/AI/GameEditor/EasyProxy/docs/github-secrets.md).
 5. Confirm the service/base R2 distribution secrets are present before running `.github/workflows/publish-service-base-config.yml`.
+6. If owner-only import-code artifacts are part of the release process, confirm `EASYPROXY_IMPORT_CODE_OWNER_PUBLIC_KEY` is configured and that the matching private key is still available locally.
 
 ## Upstream-Carried Modules
 
@@ -63,3 +64,11 @@ If release behavior changed, update the corresponding docs:
 - `deploy/upstreams/misub/README.md`
 - `deploy/upstreams/aggregator/README.md`
 - `deploy/upstreams/ech-workers/README.md`
+- `docs/service-base-config-distribution.md`
+- `docs/release-notes-template.md`
+
+## GitHub Actions Compatibility
+
+1. Confirm workflows using JavaScript actions are still aligned with current GitHub runner requirements.
+2. `deploy-cloudflare.yml` currently opts into Node 24 execution for JavaScript actions and uses `actions/setup-node@v6`.
+3. If `cloudflare/wrangler-action` or other third-party actions publish a newer runtime-compatible major version, review and adopt it before a public release window.

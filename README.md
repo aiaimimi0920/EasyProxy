@@ -10,6 +10,22 @@ deployment assets.
 This repository intentionally avoids root-level submodules. External
 contributors only need one repository and one pull request target.
 
+## What Ships
+
+The public repository now owns the full operator surface:
+
+- native `aggregator` publishing to `https://sub.aiaimimi.com`
+- native `MiSub` deployment to Cloudflare Pages
+- native `ech-workers-cloudflare` deployment to Cloudflare Workers
+- GHCR publishing for:
+  - `service/base`
+  - local `ech-workers`
+- private `service/base` config distribution through Cloudflare R2
+- post-deploy verification for every publish/deploy workflow
+
+This is the same operating model we want external users and maintainers to see:
+one repository, one release surface, one CI/CD control plane.
+
 ## Shared Config
 
 Copy `config.example.yaml` to `config.yaml` before using the root operator
@@ -23,7 +39,7 @@ monorepo. It collects:
 - `misub`
   - Cloudflare Pages defaults and Docker `.env` values
 - `aggregator`
-  - GitHub repository / workflow / secret metadata
+  - native publish workflow inputs and public artifact metadata
 - `ghcr`
   - GHCR owner and published image names for the reusable container releases
 - `echWorkers`
@@ -154,6 +170,7 @@ Read the module-specific deployment notes:
 - `docs/architecture.md`
 - `docs/quickstart.md`
 - `docs/release-checklist.md`
+- `docs/release-notes-template.md`
 - `docs/service-base-config-distribution.md`
 - `docs/unified-source-architecture.md`
 - `docs/upstream-sync.md`
@@ -205,6 +222,21 @@ GitHub-hosted publish workflow:
 - `.github/workflows/deploy-aggregator.yml`
   - runs the native aggregator publish flow from this repository with artifact verification
 
+## Release Surface
+
+The repository now exposes five primary GitHub-hosted operational workflows:
+
+- `Validate`
+  - repository regression gate for scripts, Go runtime, and aggregator tests
+- `Deploy Aggregator`
+  - native crawler publish into the public R2-backed artifact surface
+- `Deploy Cloudflare Apps`
+  - MiSub Pages + `ech-workers-cloudflare`
+- `Publish GHCR Images`
+  - `service/base` + local `ech-workers`
+- `Publish Service Base Config`
+  - private config distribution manifest + optional encrypted import-code artifact
+
 ### One-Click Deploy Examples
 
 Run from repository root:
@@ -254,6 +286,46 @@ The workflow publishes to:
 
 - `ghcr.io/<repository-owner>/easy-proxy-monorepo-service:<release-tag>`
 - `ghcr.io/<repository-owner>/ech-workers-monorepo:<release-tag>`
+
+### Import Code And Bootstrap Examples
+
+Generate an owner keypair once:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\generate-import-code-keypair.ps1 `
+  -PublicKeyOutput .\tmp\easyproxy_import_code_owner_public.txt `
+  -PrivateKeyOutput .\tmp\easyproxy_import_code_owner_private.txt `
+  -BundleOutput .\tmp\easyproxy_import_code_owner_keypair.json
+```
+
+Decrypt an encrypted artifact emitted by `Publish Service Base Config`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\decrypt-import-code.ps1 `
+  -EncryptedFilePath .\service-base-import-code.encrypted.json `
+  -PrivateKeyPath .\tmp\easyproxy_import_code_owner_private.txt `
+  -OutputPath .\tmp\service-base-import-code.decrypted.json
+```
+
+Write a bootstrap JSON from an import code:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\write-service-base-r2-bootstrap.ps1 `
+  -ImportCode "<easyproxy-import-v1...>" `
+  -OutputPath .\deploy\service\base\bootstrap\r2-bootstrap.json
+```
+
+Run the released `service/base` image with an import code:
+
+```powershell
+docker run --rm `
+  -p 29888:29888 `
+  -e EASY_PROXY_IMPORT_CODE="<easyproxy-import-v1...>" `
+  ghcr.io/<repository-owner>/easy-proxy-monorepo-service:<release-tag>
+```
+
+Full details live in
+[service-base-config-distribution.md](/C:/Users/Public/nas_home/AI/GameEditor/EasyProxy/docs/service-base-config-distribution.md).
 
 For local PowerShell publishing, set `ghcr.owner` in [config.example.yaml](/C:/Users/Public/nas_home/AI/GameEditor/EasyProxy/config.example.yaml) after copying it to `config.yaml`, or pass `-GhcrOwner` explicitly. The local publish script now fails closed when the config file is missing or the owner still uses a placeholder value.
 
@@ -328,6 +400,9 @@ Before publishing a public release:
 5. If `upstreams/*` changed, note whether each change is an upstream sync import or a local carried patch.
 6. If deploy behavior changed, update the corresponding `deploy/*/README.md` notes.
 7. Publish via tag push or GitHub Actions only after validation is green.
+
+For release body drafting, start from
+[release-notes-template.md](/C:/Users/Public/nas_home/AI/GameEditor/EasyProxy/docs/release-notes-template.md).
 
 ## Private Operator Material
 

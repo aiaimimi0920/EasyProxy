@@ -76,6 +76,8 @@ For deployment changes:
 - if the change affects release or publish flow, check `docs/release-checklist.md`
 - if the change affects GitHub-hosted deployment or secret usage, update
   `docs/github-secrets.md`
+- if the change affects import-code/bootstrap flow, update
+  `docs/service-base-config-distribution.md`
 
 ## Commit Style
 
