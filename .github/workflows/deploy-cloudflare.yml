@@ -265,9 +265,9 @@ jobs:
           set -euo pipefail
           python -m pip install --upgrade pip
           python -m pip install requests
-          base_url="${{ steps.deploy_misub.outputs['deployment-url'] }}"
+          base_url="${{ steps.deploy_misub.outputs['pages-deployment-alias-url'] }}"
           if [[ -z "$base_url" ]]; then
-            base_url="${{ steps.deploy_misub.outputs['pages-deployment-alias-url'] }}"
+            base_url="${{ steps.deploy_misub.outputs['deployment-url'] }}"
           fi
           if [[ -z "$base_url" ]]; then
             base_url="${MISUB_PUBLIC_URL}"
