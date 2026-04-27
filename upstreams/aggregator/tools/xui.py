@@ -41,7 +41,7 @@ USER_AGENT = (
 
 
 def http_post(url: str, headers: dict = None, params: dict = None, retry: int = 3, timeout: float = 6) -> HTTPResponse:
-    if params is None or type(params) != dict:
+    if params is None or not isinstance(params, dict):
         return None
 
     timeout = max(timeout, 1)
@@ -104,7 +104,7 @@ def read_response(response: HTTPResponse, expected: int = 200, deserialize: bool
 
 
 def trim(text: str) -> str:
-    if not text or type(text) != str:
+    if not text or not isinstance(text, str):
         return ""
 
     return text.strip()

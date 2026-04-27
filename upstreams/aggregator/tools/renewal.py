@@ -49,134 +49,124 @@ def extract_domain(url) -> str:
 
 
 def login(url: str, params: dict, headers: dict, retry: int = 3) -> tuple[str, str]:
-    try:
-        data = urllib.parse.urlencode(params).encode(encoding="UTF8")
-        request = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    for attempt in range(max(1, retry)):
+        try:
+            data = urllib.parse.urlencode(params).encode(encoding="UTF8")
+            request = urllib.request.Request(url, data=data, headers=headers, method="POST")
 
-        response = urllib.request.urlopen(request, timeout=10, context=CTX)
-        cookies, authorization = "", ""
-        if response.getcode() == 200:
-            cookies = response.getheader("Set-Cookie")
-            try:
-                data = json.loads(response.read().decode("UTF8")).get("data", {})
-                authorization = data.get("auth_data", "")
-            except:
-                pass
+            response = urllib.request.urlopen(request, timeout=10, context=CTX)
+            cookies, authorization = "", ""
+            if response.getcode() == 200:
+                cookies = response.getheader("Set-Cookie")
+                try:
+                    data = json.loads(response.read().decode("UTF8")).get("data", {})
+                    authorization = data.get("auth_data", "")
+                except:
+                    pass
 
-        return cookies, authorization
+            return cookies, authorization
+        except:
+            if attempt >= max(1, retry) - 1:
+                break
 
-    except:
-        retry -= 1
-
-        if retry > 0:
-            return login(url, params, headers, retry)
-
-        return "", ""
+    return "", ""
 
 
 def order(url, params, headers, retry) -> str:
-    try:
-        data = urllib.parse.urlencode(params).encode(encoding="UTF8")
-        request = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    for attempt in range(max(1, retry)):
+        try:
+            data = urllib.parse.urlencode(params).encode(encoding="UTF8")
+            request = urllib.request.Request(url, data=data, headers=headers, method="POST")
 
-        response = urllib.request.urlopen(request, timeout=10, context=CTX)
-        trade_no = ""
-        if response.getcode() == 200:
-            result = json.loads(response.read().decode("UTF8"))
-            trade_no = result.get("data", "")
-        else:
-            print(response.read().decode("UTF8"))
+            response = urllib.request.urlopen(request, timeout=10, context=CTX)
+            trade_no = ""
+            if response.getcode() == 200:
+                result = json.loads(response.read().decode("UTF8"))
+                trade_no = result.get("data", "")
+            else:
+                print(response.read().decode("UTF8"))
 
-        return trade_no
+            return trade_no
+        except Exception as e:
+            print(str(e))
+            if attempt >= max(1, retry) - 1:
+                break
 
-    except Exception as e:
-        print(str(e))
-        retry -= 1
-
-        if retry > 0:
-            return order(url, params, headers, retry)
-
-        print("[OrderError] URL: {}".format(extract_domain(url)))
-        return ""
+    print("[OrderError] URL: {}".format(extract_domain(url)))
+    return ""
 
 
 def fetch(url, headers, retry) -> str:
-    try:
-        request = urllib.request.Request(url, headers=headers, method="GET")
-        response = urllib.request.urlopen(request, timeout=10, context=CTX)
-        if response.getcode() != 200:
-            print(response.read().decode("UTF8"))
+    for attempt in range(max(1, retry)):
+        try:
+            request = urllib.request.Request(url, headers=headers, method="GET")
+            response = urllib.request.urlopen(request, timeout=10, context=CTX)
+            if response.getcode() != 200:
+                print(response.read().decode("UTF8"))
+                return ""
+
+            data = json.loads(response.read().decode("UTF8"))
+            # trade_nos = [x["trade_no"] for x in data if x["type"] == 2]
+            for item in data["data"]:
+                if item["status"] == 0:
+                    return item["trade_no"]
+
             return ""
+        except Exception as e:
+            print(str(e))
+            if attempt >= max(1, retry) - 1:
+                break
 
-        data = json.loads(response.read().decode("UTF8"))
-        # trade_nos = [x["trade_no"] for x in data if x["type"] == 2]
-        for item in data["data"]:
-            if item["status"] == 0:
-                return item["trade_no"]
-
-        return ""
-
-    except Exception as e:
-        print(str(e))
-        retry -= 1
-
-        if retry > 0:
-            return fetch(url, headers, retry)
-
-        print("[FetchError] URL: {}".format(extract_domain(url)))
-        return ""
+    print("[FetchError] URL: {}".format(extract_domain(url)))
+    return ""
 
 
 def payment(url, params, headers, retry) -> bool:
-    try:
-        data = urllib.parse.urlencode(params).encode(encoding="UTF8")
-        request = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    for attempt in range(max(1, retry)):
+        try:
+            data = urllib.parse.urlencode(params).encode(encoding="UTF8")
+            request = urllib.request.Request(url, data=data, headers=headers, method="POST")
 
-        response = urllib.request.urlopen(request, timeout=10, context=CTX)
-        success = False
-        if response.getcode() == 200:
-            result = json.loads(response.read().decode("UTF8"))
-            success = result.get("data", False)
-        else:
-            print(response.read().decode("UTF8"))
+            response = urllib.request.urlopen(request, timeout=10, context=CTX)
+            success = False
+            if response.getcode() == 200:
+                result = json.loads(response.read().decode("UTF8"))
+                success = result.get("data", False)
+            else:
+                print(response.read().decode("UTF8"))
 
-        return success
+            return success
+        except Exception as e:
+            print(str(e))
+            if attempt >= max(1, retry) - 1:
+                break
 
-    except Exception as e:
-        print(str(e))
-        retry -= 1
-
-        if retry > 0:
-            return payment(url, params, headers, retry)
-
-        print("[PaymentError] URL: {}".format(extract_domain(url)))
-        return False
+    print("[PaymentError] URL: {}".format(extract_domain(url)))
+    return False
 
 
 def check(url, params, headers, retry) -> bool:
-    try:
-        data = urllib.parse.urlencode(params).encode(encoding="UTF8")
-        request = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    for attempt in range(max(1, retry)):
+        try:
+            data = urllib.parse.urlencode(params).encode(encoding="UTF8")
+            request = urllib.request.Request(url, data=data, headers=headers, method="POST")
 
-        response = urllib.request.urlopen(request, timeout=10, context=CTX)
-        success = False
-        if response.getcode() == 200:
-            result = json.loads(response.read().decode("UTF8"))
-            success = False if result.get("data", None) is None else True
-        else:
-            print(response.read().decode("UTF8"))
+            response = urllib.request.urlopen(request, timeout=10, context=CTX)
+            success = False
+            if response.getcode() == 200:
+                result = json.loads(response.read().decode("UTF8"))
+                success = False if result.get("data", None) is None else True
+            else:
+                print(response.read().decode("UTF8"))
 
-        return success
+            return success
+        except Exception as e:
+            print(str(e))
+            if attempt >= max(1, retry) - 1:
+                break
 
-    except Exception as e:
-        print(str(e))
-        retry -= 1
-
-        if retry > 0:
-            return check(url, params, headers, retry)
-
-        print("[CheckError] URL: {}".format(extract_domain(url)))
-        return False
+    print("[CheckError] URL: {}".format(extract_domain(url)))
+    return False
 
 
 def get_cookie(text) -> str:

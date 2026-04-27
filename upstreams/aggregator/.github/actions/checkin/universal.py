@@ -51,48 +51,45 @@ def extract_domain(url) -> str:
 
 
 def login(url, params, headers, retry) -> str:
-    try:
-        data = urllib.parse.urlencode(params).encode(encoding="UTF8")
+    for attempt in range(max(1, retry)):
+        try:
+            data = urllib.parse.urlencode(params).encode(encoding="UTF8")
 
-        request = urllib.request.Request(url, data=data, headers=headers, method="POST")
+            request = urllib.request.Request(url, data=data, headers=headers, method="POST")
 
-        response = urllib.request.urlopen(request, timeout=10, context=CTX)
-        print(response.read().decode("unicode_escape"))
+            response = urllib.request.urlopen(request, timeout=10, context=CTX)
+            print(response.read().decode("unicode_escape"))
 
-        if response.getcode() == 200:
-            return response.getheader("Set-Cookie")
+            if response.getcode() == 200:
+                return response.getheader("Set-Cookie")
 
-        return ""
+            return ""
+        except Exception as e:
+            print(str(e))
+            if attempt >= max(1, retry) - 1:
+                break
 
-    except Exception as e:
-        print(str(e))
-        retry -= 1
-
-        if retry > 0:
-            return login(url, params, headers, retry)
-
-        print("[LoginError] URL: {}".format(extract_domain(url)))
-        return ""
+    print("[LoginError] URL: {}".format(extract_domain(url)))
+    return ""
 
 
 def checkin(url, headers, retry) -> None:
-    try:
-        request = urllib.request.Request(url, headers=headers, method="POST")
+    for attempt in range(max(1, retry)):
+        try:
+            request = urllib.request.Request(url, headers=headers, method="POST")
 
-        response = urllib.request.urlopen(request, timeout=10, context=CTX)
-        data = response.read().decode("unicode_escape")
-        print(
-            "[CheckInFinished] URL: {}\t\tResult:{}".format(extract_domain(url), data)
-        )
+            response = urllib.request.urlopen(request, timeout=10, context=CTX)
+            data = response.read().decode("unicode_escape")
+            print(
+                "[CheckInFinished] URL: {}\t\tResult:{}".format(extract_domain(url), data)
+            )
+            return
+        except Exception as e:
+            print(str(e))
+            if attempt >= max(1, retry) - 1:
+                break
 
-    except Exception as e:
-        print(str(e))
-        retry -= 1
-
-        if retry > 0:
-            checkin(url, headers, retry)
-
-        print("[CheckInError] URL: {}".format(extract_domain(url)))
+    print("[CheckInError] URL: {}".format(extract_domain(url)))
 
 
 def get_cookie(text) -> str:

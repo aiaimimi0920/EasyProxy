@@ -17,7 +17,7 @@ DATA_DIR = os.path.abspath(os.path.dirname(__file__))
 
 
 def trim(text: str) -> str:
-    if not text or type(text) != str:
+    if not text or not isinstance(text, str):
         return ""
 
     return text.strip()

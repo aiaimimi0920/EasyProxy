@@ -188,7 +188,7 @@ def get_headers(secret: str = "") -> dict:
 
 
 def trim(text: str) -> str:
-    if not text or type(text) != str:
+    if not text or not isinstance(text, str):
         return ""
 
     return text.strip()
@@ -228,7 +228,7 @@ def running(name):
 
 
 def batch(func: typing.Callable, params: list) -> list:
-    if not func or not params or type(params) != list:
+    if not callable(func) or not isinstance(params, list) or not params:
         return []
 
     cpu_count = multiprocessing.cpu_count()
@@ -236,7 +236,7 @@ def batch(func: typing.Callable, params: list) -> list:
 
     pool = multiprocessing.Pool(num, maxtasksperchild=100)
     try:
-        if type(params[0]) == list or type(params[0]) == tuple:
+        if isinstance(params[0], (list, tuple)):
             results = pool.starmap(func, params)
         else:
             results = pool.map(func, params)

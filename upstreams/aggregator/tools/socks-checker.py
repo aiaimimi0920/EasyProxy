@@ -1264,7 +1264,7 @@ def read_proxies(filepath: str) -> List[str]:
             if not host or port is None:
                 return None
 
-            if not type(port) != int:
+            if not isinstance(port, int):
                 try:
                     port = int(str(port).strip())
                 except (TypeError, ValueError):

@@ -31,7 +31,7 @@ CTX.verify_mode = ssl.CERT_NONE
 
 
 def trim(text: str) -> str:
-    if not text or type(text) != str:
+    if not text or not isinstance(text, str):
         return ""
 
     return text.strip()

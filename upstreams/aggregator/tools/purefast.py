@@ -66,40 +66,44 @@ def login(
             "x-requested-with": "XMLHttpRequest",
         }
 
-    try:
-        successed, skip, count = False, False, 25
-        while not successed and count > 0 and time.time() < endtime:
-            count -= 1
-            data = urllib.parse.urlencode(params).encode(encoding="UTF8")
-            request = urllib.request.Request(url, data=data, headers=headers, method="POST")
-            response = opener.open(request, timeout=10)
-            cookie = response.getheader("Set-Cookie")
+    for attempt in range(max(1, retry)):
+        try:
+            successed, skip, count = False, False, 25
+            while not successed and count > 0 and time.time() < endtime:
+                count -= 1
+                data = urllib.parse.urlencode(params).encode(encoding="UTF8")
+                request = urllib.request.Request(url, data=data, headers=headers, method="POST")
+                response = opener.open(request, timeout=10)
+                cookie = response.getheader("Set-Cookie")
 
-            if response.getcode() == 200:
-                if not skip and not isblank(specified_cookie(cookie, "ge_ua_p", False)):
-                    skip, headers = bypass(
-                        url=url,
-                        opener=opener,
-                        cookies=cookies,
-                        endtime=endtime,
-                        content=read(response),
-                        headers=headers,
-                        retry=3,
-                        starttime=time.time(),
-                    )
-                    continue
+                if response.getcode() == 200:
+                    if not skip and not isblank(specified_cookie(cookie, "ge_ua_p", False)):
+                        skip, headers = bypass(
+                            url=url,
+                            opener=opener,
+                            cookies=cookies,
+                            endtime=endtime,
+                            content=read(response),
+                            headers=headers,
+                            retry=3,
+                            starttime=time.time(),
+                        )
+                        continue
 
-                cookie = get_cookie(cookie)
-                successed = not isblank(cookie)
-                if successed:
-                    cookie = add_or_replace(headers.get("cookie", ""), cookie)
-                    headers["cookie"] = cookie
-                    break
+                    cookie = get_cookie(cookie)
+                    successed = not isblank(cookie)
+                    if successed:
+                        cookie = add_or_replace(headers.get("cookie", ""), cookie)
+                        headers["cookie"] = cookie
+                        break
 
-            time.sleep(random.randint(5, 15) / 10)
-        return successed, headers
-    except:
-        return login(url, opener, cookies, params, headers, endtime, retry - 1)
+                time.sleep(random.randint(5, 15) / 10)
+            return successed, headers
+        except:
+            if attempt >= max(1, retry) - 1:
+                break
+
+    return False, headers
 
 
 def checkin(
@@ -113,48 +117,53 @@ def checkin(
     if isblank(url) or not headers or retry <= 0 or checkconn(opener, cookies):
         logging.error(f"[PFVPNError] cannot checkin, url: {url}, retry: {retry}")
         return False
-    try:
-        successed, skip, count = False, False, 25
-        while not skip and not successed and count > 0 and time.time() < endtime:
-            count -= 1
-            request = urllib.request.Request(url, headers=headers, method="POST")
-            response = opener.open(request, timeout=10)
+    for attempt in range(max(1, retry)):
+        try:
+            successed, skip, count = False, False, 25
+            while not skip and not successed and count > 0 and time.time() < endtime:
+                count -= 1
+                request = urllib.request.Request(url, headers=headers, method="POST")
+                response = opener.open(request, timeout=10)
 
-            if response.getcode() == 200:
-                if not isblank(specified_cookie(response.getheader("Set-Cookie"), "ge_ua_p", False)):
-                    skip, headers = bypass(
-                        url=url,
-                        opener=opener,
-                        cookies=cookies,
-                        endtime=endtime,
-                        content=read(response),
-                        headers=headers,
-                        retry=3,
-                        starttime=time.time(),
-                    )
-                    continue
+                if response.getcode() == 200:
+                    if not isblank(specified_cookie(response.getheader("Set-Cookie"), "ge_ua_p", False)):
+                        skip, headers = bypass(
+                            url=url,
+                            opener=opener,
+                            cookies=cookies,
+                            endtime=endtime,
+                            content=read(response),
+                            headers=headers,
+                            retry=3,
+                            starttime=time.time(),
+                        )
+                        continue
 
-                content = read(response)
-                try:
-                    data = json.loads(content)
-                    successed = data.get("ret", 0) == 1
-                    if successed:
-                        message = data.get("msg", "")
-                        logging.info(f"[PFVPN] checkin successed, message: {message}")
-                        break
-                except:
-                    logging.error(f"[PFVPNError] checkin failed, message: {content}")
+                    content = read(response)
+                    try:
+                        data = json.loads(content)
+                        successed = data.get("ret", 0) == 1
+                        if successed:
+                            message = data.get("msg", "")
+                            logging.info(f"[PFVPN] checkin successed, message: {message}")
+                            break
+                    except:
+                        logging.error(f"[PFVPNError] checkin failed, message: {content}")
 
-            time.sleep(random.randint(5, 15) / 10)
-        return successed
-    except HTTPError as e:
-        if e.status == 307:
-            cookie = specified_cookie(e.headers["Set-Cookie"], "WAF_VALIDATOR_ID", True)
-            headers["cookie"] = add_or_replace(source=headers.get("cookie", ""), dest=cookie)
-            headers["x-cache"] = "BYPASS"
-        return checkin(url, opener, cookies, headers, endtime, retry - 1)
-    except:
-        return checkin(url, opener, cookies, headers, endtime, retry - 1)
+                time.sleep(random.randint(5, 15) / 10)
+            return successed
+        except HTTPError as e:
+            if e.status == 307:
+                cookie = specified_cookie(e.headers["Set-Cookie"], "WAF_VALIDATOR_ID", True)
+                headers["cookie"] = add_or_replace(source=headers.get("cookie", ""), dest=cookie)
+                headers["x-cache"] = "BYPASS"
+            if attempt >= max(1, retry) - 1:
+                break
+        except:
+            if attempt >= max(1, retry) - 1:
+                break
+
+    return False
 
 
 def get_cookie(text: str) -> str:
@@ -257,71 +266,64 @@ def bypass(
             "x-requested-with": "XMLHttpRequest",
         }
 
-    try:
-        if isblank(content):
-            request = urllib.request.Request(url, headers=headers)
-            response = opener.open(request, timeout=10)
-            starttime = time.time()
-            if response.getcode() >= 400:
+    for attempt in range(max(1, retry)):
+        try:
+            if isblank(content):
+                request = urllib.request.Request(url, headers=headers)
+                response = opener.open(request, timeout=10)
+                starttime = time.time()
+                if response.getcode() >= 400:
+                    return False, headers
+                content = read(response)
+
+            groups = re.findall(r'var\s+cpk(?:\s+)?=(?:\s+)?"(.*)"', content, re.I)
+            cpkname = groups[0] if groups else "ge_ua_p"
+
+            groups = re.findall(r'var\s+step(?:\s+)?=(?:\s+)?"(.*)"', content, re.I)
+            step = groups[0] if groups else "prev"
+
+            groups = re.findall(r"var\s+nonce(?:\s+)?=(?:\s+)?(\d+);", content, re.I)
+            nonce = int(groups[0]) if groups else -1
+
+            cpkvalue = specified_cookie(cookies, cpkname, False)
+            if isblank(cpkvalue) or isblank(step) or nonce < 0:
                 return False, headers
-            content = read(response)
 
-        groups = re.findall(r'var\s+cpk(?:\s+)?=(?:\s+)?"(.*)"', content, re.I)
-        cpkname = groups[0] if groups else "ge_ua_p"
+            time.sleep(max(5 - (time.time() - starttime), 0))
+            sumval = calsum(cpk=cpkvalue, nonce=nonce)
+            data = urllib.parse.urlencode({"sum": sumval, "nonce": nonce}).encode(encoding="UTF8")
+            headers["x-ge-ua-step"] = step
+            headers["cookie"] = add_or_replace(source=headers.get("cookie", ""), dest=f"{cpkname}={cpkvalue}")
+            request = urllib.request.Request(url, data=data, headers=headers, method="POST")
 
-        groups = re.findall(r'var\s+step(?:\s+)?=(?:\s+)?"(.*)"', content, re.I)
-        step = groups[0] if groups else "prev"
+            successed, count = False, 20
+            while not successed and count > 0 and time.time() < endtime:
+                count -= 1
 
-        groups = re.findall(r"var\s+nonce(?:\s+)?=(?:\s+)?(\d+);", content, re.I)
-        nonce = int(groups[0]) if groups else -1
+                response = opener.open(request, timeout=10)
+                if response.getcode() == 200:
+                    text = read(response)
+                    if not isblank(text):
+                        successed = json.loads(text).get("ok", False)
+                        if successed:
+                            break
 
-        cpkvalue = specified_cookie(cookies, cpkname, False)
-        if isblank(cpkvalue) or isblank(step) or nonce < 0:
-            return False, headers
+                time.sleep(random.randint(3, 8) / 10)
 
-        time.sleep(max(5 - (time.time() - starttime), 0))
-        sumval = calsum(cpk=cpkvalue, nonce=nonce)
-        data = urllib.parse.urlencode({"sum": sumval, "nonce": nonce}).encode(encoding="UTF8")
-        headers["x-ge-ua-step"] = step
-        headers["cookie"] = add_or_replace(source=headers.get("cookie", ""), dest=f"{cpkname}={cpkvalue}")
-        request = urllib.request.Request(url, data=data, headers=headers, method="POST")
-
-        successed, count = False, 20
-        while not successed and count > 0 and time.time() < endtime:
-            count -= 1
-
-            response = opener.open(request, timeout=10)
-            if response.getcode() == 200:
-                text = read(response)
-                if not isblank(text):
-                    successed = json.loads(text).get("ok", False)
-                    if successed:
-                        break
-
-            time.sleep(random.randint(3, 8) / 10)
-
-        headers.pop("x-ge-ua-step", "")
-        # remove ge_ua_p from cookie
-        cookie = add_or_replace(source=headers.get("cookie", ""), dest=f"{cpkname}=")
-        headers["cookie"] = cookie
-
-        if successed:
-            # add or replace ge_ua_key and lang
-            guk = specified_cookie(response.getheader("Set-Cookie"), "ge_ua_key", concat=True)
-            cookie = add_or_replace(source=cookie, dest=f"{guk}; lang=zh-cn")
+            headers.pop("x-ge-ua-step", "")
+            cookie = add_or_replace(source=headers.get("cookie", ""), dest=f"{cpkname}=")
             headers["cookie"] = cookie
-        return successed, headers
-    except:
-        return bypass(
-            url=url,
-            opener=opener,
-            cookies=cookies,
-            endtime=endtime,
-            content=content,
-            headers=headers,
-            retry=retry - 1,
-            starttime=starttime,
-        )
+
+            if successed:
+                guk = specified_cookie(response.getheader("Set-Cookie"), "ge_ua_key", concat=True)
+                cookie = add_or_replace(source=cookie, dest=f"{guk}; lang=zh-cn")
+                headers["cookie"] = cookie
+            return successed, headers
+        except:
+            if attempt >= max(1, retry) - 1:
+                break
+
+    return False, headers
 
 
 def specified_cookie(items: Any, key: str, concat: bool = False) -> str:

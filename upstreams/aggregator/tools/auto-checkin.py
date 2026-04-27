@@ -85,65 +85,60 @@ def extract_domain(url) -> str:
 
 
 def login(url, params, headers, retry, proxy=False) -> dict:
-    try:
-        if proxy:
-            response = requests.post(
-                url,
-                data=params,
-                headers=headers,
-                allow_redirects=True,
-                proxies=PROXY,
-                verify=False,
-            )
-        else:
-            response = requests.post(url, data=params, headers=headers, allow_redirects=True)
+    for attempt in range(max(1, retry)):
+        try:
+            if proxy:
+                response = requests.post(
+                    url,
+                    data=params,
+                    headers=headers,
+                    allow_redirects=True,
+                    proxies=PROXY,
+                    verify=False,
+                )
+            else:
+                response = requests.post(url, data=params, headers=headers, allow_redirects=True)
 
-        if response.status_code == 200:
-            return {str(key).lower(): value for key, value in response.headers.items()}
-        return {}
+            if response.status_code == 200:
+                return {str(key).lower(): value for key, value in response.headers.items()}
+            return {}
+        except RequestException as e:
+            logging.error(str(e))
+            if attempt < max(1, retry) - 1:
+                time.sleep(get_randint(30 * 60, 90 * 60))
 
-    except RequestException as e:
-        logging.error(str(e))
-        retry -= 1
-
-        if retry > 0:
-            time.sleep(get_randint(30 * 60, 90 * 60))
-            return login(url, params, headers, retry, proxy)
-
-        logging.error("登录失败 URL: {}".format(extract_domain(url)))
-        return {}
+    logging.error("登录失败 URL: {}".format(extract_domain(url)))
+    return {}
 
 
 def checkin(url, headers, retry, proxy=False) -> None:
-    try:
-        response = (
-            requests.post(url, headers=headers, proxies=PROXY, verify=False)
-            if proxy
-            else requests.post(url, headers=headers)
-        )
+    for attempt in range(max(1, retry)):
+        try:
+            response = (
+                requests.post(url, headers=headers, proxies=PROXY, verify=False)
+                if proxy
+                else requests.post(url, headers=headers)
+            )
 
-        if response.status_code == 200:
-            key = "Content-Encoding"
-            try:
-                data = (
-                    json.loads(brotli.decompress(response.content).decode("utf-8"))
-                    if key in response.headers and response.headers["Content-Encoding"] == "br"
-                    else response.json()
-                )
+            if response.status_code == 200:
+                key = "Content-Encoding"
+                try:
+                    data = (
+                        json.loads(brotli.decompress(response.content).decode("utf-8"))
+                        if key in response.headers and response.headers["Content-Encoding"] == "br"
+                        else response.json()
+                    )
 
-                logging.info("签到成功 URL: {} {}".format(extract_domain(url), data["msg"]))
-            except JSONDecodeError:
-                logging.error("签到失败 URL: {}".format(extract_domain(url)))
+                    logging.info("签到成功 URL: {} {}".format(extract_domain(url), data["msg"]))
+                except JSONDecodeError:
+                    logging.error("签到失败 URL: {}".format(extract_domain(url)))
+            return
+        except RequestException as e:
+            logging.error(str(e))
+            if attempt < max(1, retry) - 1:
+                time.sleep(get_randint(30, 60 * 60))
 
-    except RequestException as e:
-        logging.error(str(e))
-        retry -= 1
-
-        if retry > 0:
-            time.sleep(get_randint(30, 60 * 60))
-            return checkin(url, headers, retry, proxy)
-
-        logging.error("签到失败 URL: {}".format(extract_domain(url)))
+    logging.error("签到失败 URL: {}".format(extract_domain(url)))
 
 
 def logout(url, headers) -> int:
@@ -218,7 +213,7 @@ def main():
         RETRY_NUM = int(config["retry"])
 
     # only support http(s) proxy
-    if "proxyServer" in config and type(config["proxyServer"]) == dict:
+    if "proxyServer" in config and isinstance(config["proxyServer"], dict):
         global PROXY
         PROXY = config["proxyServer"]
 

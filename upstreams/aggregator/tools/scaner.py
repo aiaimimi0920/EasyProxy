@@ -252,45 +252,44 @@ def parse(node: dict, uuid: str, user: dict = None, includes: str = "all") -> di
 
 
 def login(url, params, headers, retry) -> str:
-    try:
-        data = urllib.parse.urlencode(params).encode(encoding="UTF8")
-        request = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    for attempt in range(max(1, retry)):
+        try:
+            data = urllib.parse.urlencode(params).encode(encoding="UTF8")
+            request = urllib.request.Request(url, data=data, headers=headers, method="POST")
 
-        response = urllib.request.urlopen(request, timeout=10, context=CTX)
-        if response.getcode() == 200:
-            return response.getheader("Set-Cookie")
-        else:
-            print("[LoginError]: {}".format(response.read().decode("unicode_escape")))
+            response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
+            if response.getcode() == 200:
+                return response.getheader("Set-Cookie")
+
+            print("[ScanerLoginError] domain: {}, message: {}".format(url, response.read().decode("unicode_escape")))
             return ""
+        except Exception as e:
+            print("[ScanerLoginError] doamin: {}, message: {}".format(url, str(e)))
+            if attempt >= max(1, retry) - 1:
+                break
 
-    except Exception as e:
-        print("[LoginError]: {}".format(str(e)))
-
-        retry -= 1
-        return login(url, params, headers, retry) if retry > 0 else ""
-
-
+    return ""
 def register(url: str, params: dict, retry: int) -> bool:
-    try:
-        data = urllib.parse.urlencode(params).encode(encoding="UTF8")
-        request = urllib.request.Request(url, data=data, method="POST", headers=HEADER)
+    for attempt in range(max(1, retry)):
+        try:
+            data = urllib.parse.urlencode(params).encode(encoding="UTF8")
+            request = urllib.request.Request(url, data=data, method="POST", headers=HEADER)
 
-        response = urllib.request.urlopen(request, timeout=10, context=CTX)
-        if response.getcode() == 200:
-            content = response.read()
-            kv = json.loads(content)
-            if "ret" in kv and kv["ret"] == 1:
-                return True
+            response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
+            if response.getcode() == 200:
+                content = response.read()
+                kv = json.loads(content)
+                if "ret" in kv and kv["ret"] == 1:
+                    return True
 
-        print("[ScanerRegisterError] domain: {}, message: {}".format(url, response.read().decode("unicode_escape")))
-        return False
-    except Exception as e:
-        print("[ScanerRegisterError] domain: {}, message: {}".format(url, str(e)))
+            print("[ScanerRegisterError] domain: {}, message: {}".format(url, response.read().decode("unicode_escape")))
+            return False
+        except Exception as e:
+            print("[ScanerRegisterError] domain: {}, message: {}".format(url, str(e)))
+            if attempt >= max(1, retry) - 1:
+                break
 
-        retry -= 1
-        return register(url, params, retry) if retry > 0 else False
-
-
+    return False
 def reload(url: str, config: str) -> None:
     if not (os.path.exists(config) and os.path.isfile(config)):
         print("config file not exists, path: {}".format(config))
@@ -338,26 +337,23 @@ def fetch_nodes(domain: str, email: str, passwd: str, headers: dict = None, retr
 
     headers["cookie"] = cookie
     content = None
-    while retry > 0 and not content:
-        retry -= 1
+    for attempt in range(max(1, retry)):
         try:
             request = urllib.request.Request(domain + "/getnodelist", headers=headers)
             response = urllib.request.urlopen(request, timeout=30, context=CTX)
             if response.getcode() == 200:
                 content = response.read()
                 break
-            else:
-                print(
-                    "[ScanerFetchError] domain: {}, message: {}".format(
-                        domain, response.read().decode("unicode_escape")
-                    )
+
+            print(
+                "[ScanerFetchError] domain: {}, message: {}".format(
+                    domain, response.read().decode("unicode_escape")
                 )
+            )
         except Exception as e:
             print("[ScanerFetchError] domain: {}, message: {}".format(domain, str(e)))
 
     return content
-
-
 def check(domain: str) -> bool:
     try:
         content = http_get(url=domain + "/getnodelist", headers=HEADER)
