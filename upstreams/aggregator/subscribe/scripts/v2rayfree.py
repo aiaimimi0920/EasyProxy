@@ -73,21 +73,21 @@ def fetch(email: str, retry: int = 2) -> str:
 
 
 def getrss(params: dict) -> list:
-    if not params or type(params) != dict:
+    if not params or not isinstance(params, dict):
         return []
 
     emails = params.get("emails", [])
-    if emails and type(emails) == list:
+    if isinstance(emails, list) and emails:
         emails = [x for x in emails if re.match(r"^\w+([-+.]\w+)*@\w+([-.]\w+)*\.\w+([-.]\w+)*$", x)]
 
     config = params.get("config", {})
-    if not emails or not config or type(config) != dict or not config.get("push_to"):
+    if not emails or not isinstance(config, dict) or not config or not config.get("push_to"):
         logger.error(f"[V2RayFreeError] cannot fetch subscribes bcause missing some parameters")
         return []
 
     include = params.get("include", "").strip()
     storage = params.get("storage", {})
-    if not storage or type(storage) != dict:
+    if not storage or not isinstance(storage, dict):
         logger.error(f"[V2RayFreeError] cannot fetch subscribes bcause storage config is invalidate")
         return []
 
@@ -143,7 +143,7 @@ def load(config: push.PushConfig, persist: dict) -> dict:
 
 
 def filter(data: dict) -> dict:
-    if not data or type(data) != dict:
+    if not data or not isinstance(data, dict):
         return {}
 
     emails, subscribes = list(data.keys()), list(data.values())

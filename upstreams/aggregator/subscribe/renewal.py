@@ -232,7 +232,7 @@ def checkout(
     link = utils.get_subpath(api_prefix) + "user/coupon/check" if utils.isblank(link) else link
     url = f"{domain}{link}"
     params = {"code": coupon}
-    if type(planid) == int and planid >= 0:
+    if isinstance(planid, int) and planid >= 0:
         params["plan_id"] = planid
 
     for attempt in range(max(1, retry)):
@@ -360,7 +360,7 @@ def submit_ticket(
         logger.error(f"[TicketError] submit ticket error, cookies and authorization is empty, domain: {domain}")
         return False
 
-    if not ticket or type(ticket) != dict:
+    if not isinstance(ticket, dict) or not ticket:
         logger.info(f"[TicketError] skip submit ticket because subject or message is empty, domain: {domain}")
         return False
 
@@ -773,7 +773,7 @@ def add_traffic_flow(domain: str, params: dict, jsonify: bool = False) -> str:
 
         # 提交工单重置流量
         ticket = params.get("ticket", {})
-        if ticket and type(ticket) == dict:
+        if isinstance(ticket, dict) and ticket:
             enable = ticket.pop("enable", True)
             autoreset = ticket.pop("autoreset", False)
             # 过期时间 <= 5 或者 流量使用例 >= 0.8 或者 重置日期 <= 1 且不会自动重置时提交工单

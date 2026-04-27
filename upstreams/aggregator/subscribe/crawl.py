@@ -393,7 +393,7 @@ def crawl_telegram_page(
     include: str = "",
     exclude: str = "",
     limits: int = 25,
-    config: dict = {},
+    config: dict | None = None,
 ) -> dict:
     if not url or not pts:
         return {}
@@ -432,7 +432,7 @@ def crawl_telegram(users: dict, pages: int = 1, limits: int = 3) -> dict:
     return subscribes
 
 
-def crawl_single_repo(username: str, repo: str, push_to: list = [], limits: int = 5, exclude: str = "") -> dict:
+def crawl_single_repo(username: str, repo: str, push_to: list | None = None, limits: int = 5, exclude: str = "") -> dict:
     if not username or not repo:
         logger.error(f"cannot crawl from github, username: {username}\trepo: {repo}")
         return {}
@@ -498,14 +498,14 @@ def crawl_github_repo(repos: dict) -> list[dict]:
 
 def crawl_google(
     qdr: int = 10,
-    push_to: list = [],
+    push_to: list | None = None,
     exclude: str = "",
     limits: int = 100,
     interval: int = 0,
-    notinurl: list = [],
+    notinurl: list | None = None,
 ) -> dict:
     items, query = set(), urllib.parse.quote('"/api/v1/client/subscribe?token="')
-    if notinurl and type(notinurl) == list:
+    if isinstance(notinurl, list) and notinurl:
         for text in notinurl:
             text = utils.trim(text).lower()
             if text and "+" not in text:
@@ -558,14 +558,14 @@ def crawl_google(
 
 def crawl_yandex(
     within: int = 2,
-    push_to: list = [],
+    push_to: list | None = None,
     exclude: str = "",
     pages: int = 5,
     interval: int = 0,
-    notinurl: list = [],
+    notinurl: list | None = None,
 ) -> dict:
     reject, query = "", urllib.parse.quote("/api/v1/client/subscribe?token=")
-    if notinurl and type(notinurl) == list:
+    if isinstance(notinurl, list) and notinurl:
         items = list(set([re.escape(utils.trim(x).lower()) for x in notinurl]))
         reject = "|".join(items)
 
@@ -635,7 +635,8 @@ def crawl_yandex(
     return collections
 
 
-def crawl_github_page(page: int, cookie: str, push_to: list = [], exclude: str = "") -> dict:
+def crawl_github_page(page: int, cookie: str, push_to: list | None = None, exclude: str = "") -> dict:
+    push_to = [] if push_to is None else push_to
     content = search_github_code(page=page, cookie=cookie)
     return extract_subscribes(content=content, push_to=push_to, exclude=exclude, source=Origin.GITHUB.name)
 
@@ -722,7 +723,7 @@ def search_github_issues_byapi(token: str, peer_page: int = 50, page: int = 1) -
         return []
 
 
-def search_github_code_byapi(token: str, peer_page: int = 50, page: int = 1, excludes: list = []) -> list[str]:
+def search_github_code_byapi(token: str, peer_page: int = 50, page: int = 1, excludes: list | None = None) -> list[str]:
     """
     curl -Ls -o response.json -H "Authorization: Bearer <token>" https://api.github.com/search/code?q=%22%2Fapi%2Fv1%2Fclient%2Fsubscribe%3Ftoken%3D%22&sort=indexed&order=desc&per_page=30&page=1
     """
@@ -741,9 +742,9 @@ def search_github_code_byapi(token: str, peer_page: int = 50, page: int = 1, exc
         return []
     try:
         items = json.loads(content).get("items", [])
-        excludes = list(set(excludes))
+        excludes = list(set(excludes or []))
         for item in items:
-            if not item or type(item) != dict:
+            if not item or not isinstance(item, dict):
                 continue
 
             link = item.get("html_url", "")
@@ -759,7 +760,7 @@ def search_github_code_byapi(token: str, peer_page: int = 50, page: int = 1, exc
         return []
 
 
-def search_github_code(page: int, cookie: str, excludes: list = []) -> list[str]:
+def search_github_code(page: int, cookie: str, excludes: list | None = None) -> list[str]:
     content = search_github(page=page, cookie=cookie, searchtype="Code", sortedby="indexed")
     if utils.isblank(content):
         return []
@@ -768,7 +769,7 @@ def search_github_code(page: int, cookie: str, excludes: list = []) -> list[str]
         regex = r'href="(/[^\s"]+/blob/(?:[^"]+)?)#L\d+"'
         groups = re.findall(regex, content, flags=re.I)
         uris, links = list(set(groups)) if groups else [], set()
-        excludes = list(set(excludes))
+        excludes = list(set(excludes or []))
 
         for uri in uris:
             if not intercept(text=uri, excludes=excludes):
@@ -779,7 +780,7 @@ def search_github_code(page: int, cookie: str, excludes: list = []) -> list[str]
         return []
 
 
-def intercept(text: str, excludes: list = []) -> bool:
+def intercept(text: str, excludes: list | None = None) -> bool:
     if not excludes:
         return False
 
@@ -792,7 +793,9 @@ def intercept(text: str, excludes: list = []) -> bool:
     return False
 
 
-def crawl_github(limits: int = 3, push_to: list = [], spams: list = [], exclude: str = "") -> dict:
+def crawl_github(limits: int = 3, push_to: list | None = None, spams: list | None = None, exclude: str = "") -> dict:
+    push_to = [] if push_to is None else push_to
+    spams = [] if spams is None else spams
     # user_session=${any}
     cookie = os.environ.get("GH_COOKIE", "").strip()
     token = os.environ.get("GH_TOKEN", "").strip()
@@ -844,14 +847,16 @@ def crawl_github(limits: int = 3, push_to: list = [], spams: list = [], exclude:
 
 def crawl_single_page(
     url: str,
-    push_to: list = [],
+    push_to: list | None = None,
     include: str = "",
     exclude: str = "",
-    config: dict = {},
+    config: dict | None = None,
     headers: dict = None,
     origin: str = Origin.PAGE.name,
     nocache: bool = False,
 ) -> dict:
+    push_to = [] if push_to is None else push_to
+    config = {} if config is None else config
     if not url or not push_to:
         logger.error(f"[PageCrawl] cannot crawl from page: {url}")
         return {}
@@ -1040,7 +1045,7 @@ def crawl_twitter(tasks: dict) -> dict:
 
     candidates, pages = {}, {}
     for k, v in tasks.items():
-        if utils.isblank(k) or not v or type(v) != dict:
+        if utils.isblank(k) or not isinstance(v, dict) or not v:
             continue
         candidates[k] = v
 
@@ -1251,7 +1256,7 @@ def validate(
 
 
 def remark(source: dict, defeat: int = 0, discovered: bool = True) -> None:
-    if not source or type(source) != dict or type(defeat) != int or defeat < 0 or type(discovered) != bool:
+    if not isinstance(source, dict) or not source or not isinstance(defeat, int) or defeat < 0 or not isinstance(discovered, bool):
         return
 
     source["defeat"] = defeat
@@ -1908,7 +1913,7 @@ def call(script: str, params: dict, availables: ListProxy, semaphore: Semaphore)
             return
 
         subscribes = execute_script(script=script, params=params)
-        if subscribes and type(subscribes) == list:
+        if isinstance(subscribes, list) and subscribes:
             availables.extend(subscribes)
     finally:
         if semaphore is not None and isinstance(semaphore, Semaphore):
@@ -1923,7 +1928,7 @@ def execute_script(script: str, params: dict = None) -> list[dict]:
             logger.info(f"[ScriptError] script execute error because script: {script} is invalidate")
             return []
 
-        if params is None or type(params) != dict:
+        if params is None or not isinstance(params, dict):
             params = {}
 
         path, func_name = script.split("#", maxsplit=1)
@@ -1939,7 +1944,7 @@ def execute_script(script: str, params: dict = None) -> list[dict]:
         logger.info(f"[ScriptInfo] start execute script: scripts.{script}")
 
         subscribes = func(params)
-        if type(subscribes) != list:
+        if not isinstance(subscribes, list):
             logger.error(f"[ScriptError] return value error, need a list, but got a {type(subscribes)}")
             return []
 
@@ -1948,7 +1953,7 @@ def execute_script(script: str, params: dict = None) -> list[dict]:
             "[ScriptInfo] finished execute script: scripts.{}, cost: {:.2f}s".format(script, endtime - starttime)
         )
 
-        subscribes = [s for s in subscribes if type(s) == dict and s.get("push_to", [])]
+        subscribes = [s for s in subscribes if isinstance(s, dict) and s.get("push_to", [])]
         return subscribes
     except:
         logger.error(f"[ScriptError] occur error run script: {script}, message: \n{traceback.format_exc()}")

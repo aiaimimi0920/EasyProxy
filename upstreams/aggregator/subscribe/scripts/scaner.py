@@ -207,8 +207,7 @@ def fetch_nodes(
 
     headers["cookie"] = cookie
     content = None
-    while retry > 0 and not content:
-        retry -= 1
+    for attempt in range(retry):
         try:
             url = f"{domain}/getuserinfo" if subflag else f"{domain}/getnodelist"
             request = urllib.request.Request(url=url, headers=headers)
@@ -224,6 +223,9 @@ def fetch_nodes(
                 )
         except Exception as e:
             logger.error("[ScanerFetchError] domain: {}, message: {}".format(domain, str(e)))
+
+        if attempt < retry - 1:
+            continue
 
     return content
 
@@ -311,13 +313,13 @@ def get_userinfo(domain: str, email: str, passwd: str, subflag: bool, verify: bo
 
 
 def filter_task(tasks: dict) -> list:
-    if not tasks or type(tasks) != dict:
+    if not tasks or not isinstance(tasks, dict):
         return []
 
     configs = []
     for k, v in tasks.items():
         domain = utils.extract_domain(k, include_protocal=True)
-        if not domain or type(v) != dict or not v.pop("enable", True):
+        if not domain or not isinstance(v, dict) or not v.pop("enable", True):
             continue
 
         email, password = v.pop("email", ""), v.pop("password", "")
@@ -334,7 +336,7 @@ def filter_task(tasks: dict) -> list:
 
 
 def scan(params: dict) -> list:
-    if not params or type(params) != dict:
+    if not params or not isinstance(params, dict):
         return []
 
     tasks = filter_task(tasks=params.get("tasks", {}))
@@ -344,14 +346,14 @@ def scan(params: dict) -> list:
 
     config = params.get("config", {})
     storage = params.get("storage", {})
-    if not storage or type(storage) != dict:
+    if not storage or not isinstance(storage, dict):
         logger.error(f"[ScanerError] cannot scan proxies bcause storage config is invalidate")
         return []
 
     persist = storage.get("items", {})
     pushtool = push.get_instance(config=push.PushConfig.from_dict(storage))
 
-    if not pushtool.validate(config=persist) or not config or type(config) != dict or not config.get("push_to"):
+    if not pushtool.validate(config=persist) or not isinstance(config, dict) or not config or not config.get("push_to"):
         logger.error(f"[ScanerError] cannot scan proxies bcause missing some parameters")
         return []
 

@@ -78,41 +78,39 @@ class PushTo(object):
                 logger.error(f"[PushError] invalid payload, domain: {self.name}")
                 return False
 
-        try:
-            request = urllib.request.Request(url=url, data=data, headers=headers, method=self.method)
-            response = urllib.request.urlopen(request, timeout=60, context=utils.CTX)
-            if self._is_success(response):
-                logger.info(f"[PushSuccess] push subscribes information to {self.name} successed, group=[{group}]")
-                return True
-            else:
+        for attempt in range(max(1, retry)):
+            try:
+                request = urllib.request.Request(url=url, data=data, headers=headers, method=self.method)
+                response = urllib.request.urlopen(request, timeout=60, context=utils.CTX)
+                if self._is_success(response):
+                    logger.info(f"[PushSuccess] push subscribes information to {self.name} successed, group=[{group}]")
+                    return True
+
                 logger.info(
                     "[PushError]: group=[{}], name: {}, error message: \n{}".format(
                         group, self.name, response.read().decode("unicode_escape")
                     )
                 )
                 return False
+            except Exception as e:
+                try:
+                    if isinstance(e, urllib.error.HTTPError):
+                        code = getattr(e, "code", None)
+                        try:
+                            message = e.read().decode("utf-8", errors="replace")
+                        except Exception:
+                            message = "cannot read error messgae from response"
+                        logger.error(
+                            f"[PushError] request failed, code: {code}, url: {url}, message: {message}, data: {data}"
+                        )
+                except Exception:
+                    logger.error(f"[PushError] failed to process exception: {traceback.format_exc()}")
 
-        except Exception as e:
-            try:
-                if isinstance(e, urllib.error.HTTPError):
-                    code = getattr(e, "code", None)
-                    try:
-                        message = e.read().decode("utf-8", errors="replace")
-                    except Exception:
-                        message = "cannot read error messgae from response"
-                    logger.error(
-                        f"[PushError] request failed, code: {code}, url: {url}, message: {message}, data: {data}"
-                    )
-            except Exception:
-                logger.error(f"[PushError] failed to process exception: {traceback.format_exc()}")
+                self._error_handler(group=group)
+                if attempt >= max(1, retry) - 1:
+                    break
 
-            self._error_handler(group=group)
-
-            retry -= 1
-            if retry > 0:
-                return self.push_to(content, config, group, retry)
-
-            return False
+        return False
 
     def _is_success(self, response: HTTPResponse) -> bool:
         return response and response.getcode() == 200
@@ -153,7 +151,7 @@ class PushToPasteGG(PushTo):
         self.api_address = f"{base}/v1/pastes"
 
     def validate(self, config: dict) -> bool:
-        if not config or type(config) != dict:
+        if not isinstance(config, dict) or not config:
             return False
 
         folderid = config.get("folderid", "")
@@ -182,6 +180,8 @@ class PushToPasteGG(PushTo):
         logger.error(f"[PushError]: group=[{group}], name: {self.name}, error message: \n{traceback.format_exc()}")
 
     def filter_push(self, config: dict) -> dict:
+        if not isinstance(config, dict):
+            return {}
         records = {}
         for k, v in config.items():
             if self.token and v.get("folderid", "") and v.get("fileid", "") and v.get("username", ""):
@@ -190,7 +190,7 @@ class PushToPasteGG(PushTo):
         return records
 
     def raw_url(self, config: dict) -> str:
-        if not config or type(config) != dict:
+        if not isinstance(config, dict) or not config:
             return ""
 
         fileid = config.get("fileid", "")
@@ -218,13 +218,15 @@ class PushToDevbin(PushToPasteGG):
         self.api_address = f"{base}/api/v3/paste"
 
     def validate(self, config: dict) -> bool:
-        if not config or type(config) != dict:
+        if not isinstance(config, dict) or not config:
             return False
 
         fileid = config.get("fileid", "")
         return "" != self.token.strip() and "" != fileid.strip()
 
     def filter_push(self, config: dict) -> dict:
+        if not isinstance(config, dict):
+            return {}
         records = {}
         for k, v in config.items():
             if v.get("fileid", "") and self.token:
@@ -249,7 +251,7 @@ class PushToDevbin(PushToPasteGG):
         return response and response.getcode() == 201
 
     def raw_url(self, config: dict) -> str:
-        if not config or type(config) != dict or not config.get("fileid", ""):
+        if not isinstance(config, dict) or not config or not config.get("fileid", ""):
             return ""
 
         fileid = config.get("fileid", "")
@@ -298,7 +300,7 @@ class PushToPastefy(PushToDevbin):
         logger.error(f"[PushError]: group=[{group}], name: {self.name}, error message: \n{traceback.format_exc()}")
 
     def raw_url(self, config: dict) -> str:
-        if not config or type(config) != dict:
+        if not isinstance(config, dict) or not config:
             return ""
 
         fileid = utils.trim(config.get("fileid", ""))
@@ -335,13 +337,15 @@ class PushToImperial(PushToPasteGG):
         return f"{self.domain}/r/{fileid}"
 
     def validate(self, config: dict) -> bool:
-        if not config or type(config) != dict:
+        if not isinstance(config, dict) or not config:
             return False
 
         fileid = config.get("fileid", "")
         return "" != self.token.strip() and "" != fileid.strip()
 
     def filter_push(self, config: dict) -> dict:
+        if not isinstance(config, dict):
+            return {}
         records = {}
         for k, v in config.items():
             if v.get("fileid", "") and self.token:
@@ -378,9 +382,13 @@ class PushToLocal(PushTo):
         self.name = "local"
 
     def validate(self, config: dict) -> bool:
-        return config is not None and config.get("fileid", "")
+        return isinstance(config, dict) and bool(config.get("fileid", ""))
 
     def push_to(self, content: str, config: dict, group: str = "", retry: int = 5) -> bool:
+        if not self.validate(config):
+            logger.error(f"[PushError] push config is invalidate, domain: {self.name}")
+            return False
+
         folder = config.get("folderid", "")
         filename = config.get("fileid", "")
         success = self._storage(content=content, filename=filename, folder=folder)
@@ -389,10 +397,12 @@ class PushToLocal(PushTo):
         return success
 
     def filter_push(self, config: dict) -> dict:
+        if not isinstance(config, dict):
+            return {}
         return {k: v for k, v in config.items() if v.get("fileid", "")}
 
     def raw_url(self, config: dict) -> str:
-        if not config or type(config) != dict:
+        if not isinstance(config, dict) or not config:
             return ""
 
         fileid = config.get("fileid", "")
@@ -449,7 +459,7 @@ class PushToGist(PushTo):
         }
 
     def raw_url(self, config: dict) -> str:
-        if not config or type(config) != dict:
+        if not isinstance(config, dict) or not config:
             return ""
 
         username = utils.trim(config.get("username", ""))
@@ -483,7 +493,7 @@ class PushToQBin(PushToPastefy):
         self.api_address = f"{base}/save"
 
     def validate(self, config: dict) -> bool:
-        if not config or type(config) != dict:
+        if not isinstance(config, dict) or not config:
             return False
 
         fileid = config.get("fileid", "")
@@ -520,6 +530,8 @@ class PushToQBin(PushToPastefy):
             return False
 
     def filter_push(self, config: dict) -> dict:
+        if not isinstance(config, dict):
+            return {}
         records = {}
         for k, v in config.items():
             if v.get("fileid", "") and self.token:
@@ -528,7 +540,7 @@ class PushToQBin(PushToPastefy):
         return records
 
     def raw_url(self, config: dict) -> str:
-        if not config or type(config) != dict:
+        if not isinstance(config, dict) or not config:
             return ""
 
         fileid = utils.trim(config.get("fileid", ""))
@@ -625,51 +637,52 @@ class PushToR2(PushTo):
             logger.error(f"[PushError] missing bucket or key for r2 storage, group=[{group}]")
             return False
 
-        try:
-            content_type = utils.trim(config.get("content_type", "")) or self._guess_content_type(key)
-            cache_control = utils.trim(config.get("cache_control", ""))
+        for attempt in range(max(1, retry)):
+            try:
+                content_type = utils.trim(config.get("content_type", "")) or self._guess_content_type(key)
+                cache_control = utils.trim(config.get("cache_control", ""))
 
-            if self.worker_base and self.trigger_token:
-                url = f"{self.worker_base}/__internal/r2-put?key={urllib.parse.quote(key)}"
-                headers = {
-                    "x-trigger-token": self.trigger_token,
-                    "Content-Type": content_type,
-                    "Accept": "application/json, text/plain, */*",
-                    "User-Agent": utils.USER_AGENT,
-                }
+                if self.worker_base and self.trigger_token:
+                    url = f"{self.worker_base}/__internal/r2-put?key={urllib.parse.quote(key)}"
+                    headers = {
+                        "x-trigger-token": self.trigger_token,
+                        "Content-Type": content_type,
+                        "Accept": "application/json, text/plain, */*",
+                        "User-Agent": utils.USER_AGENT,
+                    }
+                    if cache_control:
+                        headers["x-r2-cache-control"] = cache_control
+
+                    request = urllib.request.Request(
+                        url=url,
+                        data=content.encode("utf-8"),
+                        headers=headers,
+                        method="PUT",
+                    )
+                    response = urllib.request.urlopen(request, timeout=120, context=utils.CTX)
+                    if response.getcode() in [200, 201]:
+                        logger.info(f"[PushSuccess] push subscribes information to worker-r2 successed, group=[{group}]")
+                        return True
+                    raise RuntimeError(f"unexpected status code: {response.getcode()}")
+
+                client = self._client_instance()
+                if client is None:
+                    return False
+
+                extra_args = {"ContentType": content_type} if content_type else {}
                 if cache_control:
-                    headers["x-r2-cache-control"] = cache_control
+                    extra_args["CacheControl"] = cache_control
 
-                request = urllib.request.Request(
-                    url=url,
-                    data=content.encode("utf-8"),
-                    headers=headers,
-                    method="PUT",
-                )
-                response = urllib.request.urlopen(request, timeout=120, context=utils.CTX)
-                if response.getcode() in [200, 201]:
-                    logger.info(f"[PushSuccess] push subscribes information to worker-r2 successed, group=[{group}]")
-                    return True
-                raise RuntimeError(f"unexpected status code: {response.getcode()}")
+                payload = io.BytesIO(content.encode("utf-8"))
+                client.upload_fileobj(payload, bucket, key, ExtraArgs=extra_args or None)
+                logger.info(f"[PushSuccess] push subscribes information to {self.name} successed, group=[{group}]")
+                return True
+            except Exception:
+                logger.error(f"[PushError]: group=[{group}], name: {self.name}, error message: \n{traceback.format_exc()}")
+                if attempt >= max(1, retry) - 1:
+                    break
 
-            client = self._client_instance()
-            if client is None:
-                return False
-
-            extra_args = {"ContentType": content_type} if content_type else {}
-            if cache_control:
-                extra_args["CacheControl"] = cache_control
-
-            payload = io.BytesIO(content.encode("utf-8"))
-            client.upload_fileobj(payload, bucket, key, ExtraArgs=extra_args or None)
-            logger.info(f"[PushSuccess] push subscribes information to {self.name} successed, group=[{group}]")
-            return True
-        except Exception:
-            logger.error(f"[PushError]: group=[{group}], name: {self.name}, error message: \n{traceback.format_exc()}")
-            retry -= 1
-            if retry > 0:
-                return self.push_to(content, config, group, retry, **kwargs)
-            return False
+        return False
 
     def filter_push(self, config: dict) -> dict:
         if not self.access_key_id or not self.secret_access_key or not self.endpoint:
@@ -730,7 +743,7 @@ class PushConfig(object):
 
     @classmethod
     def from_dict(cls, data: dict) -> "PushConfig":
-        if not data or type(data) != dict:
+        if not isinstance(data, dict) or not data:
             return None
 
         engine = utils.trim(data.get("engine", ""))

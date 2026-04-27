@@ -560,7 +560,7 @@ class AirPort:
             logger.error(f"[ParseError] cannot found any proxies, subscribe: {utils.mask(url=self.sub)}")
             return []
 
-        chatgpt = chatgpt if chatgpt and type(chatgpt) == dict else None
+        chatgpt = chatgpt if isinstance(chatgpt, dict) and chatgpt else None
         enable, operate, pattern = False, "IN", ""
         if chatgpt:
             enable = chatgpt.get("enable", False)

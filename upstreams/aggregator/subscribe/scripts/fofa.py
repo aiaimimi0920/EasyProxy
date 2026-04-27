@@ -133,7 +133,7 @@ def recall(params: dict) -> list:
 
         return config
 
-    if not params or type(params) != dict:
+    if not params or not isinstance(params, dict):
         return []
 
     exclude = params.get("exclude", "")

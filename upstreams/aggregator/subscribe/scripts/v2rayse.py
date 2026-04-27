@@ -86,7 +86,7 @@ def detect(proxies: list, nopublic: bool, exclude: str, ignore: str, repeat: int
 
     count = 0
     for p in proxies:
-        if not p or type(p) != dict:
+        if not p or not isinstance(p, dict):
             continue
 
         name = str(p.get("name", ""))
@@ -244,7 +244,7 @@ def fetchone(
 
 
 def fetch(params: dict) -> list:
-    if not params or type(params) != dict:
+    if not params or not isinstance(params, dict):
         return []
 
     domain = utils.extract_domain(params.get("url", ""), include_protocal=True)
@@ -256,7 +256,7 @@ def fetch(params: dict) -> list:
     pushtool = push.get_instance(config=push.PushConfig.from_dict(storage))
 
     persist = storage.get("items", {})
-    if not persist or type(persist) != dict or not pushtool.validate(config=persist.get("proxies", {})):
+    if not persist or not isinstance(persist, dict) or not pushtool.validate(config=persist.get("proxies", {})):
         logger.error(f"[V2RaySE] invalid persist config, please check it and try again")
         return []
 
@@ -279,7 +279,7 @@ def fetch(params: dict) -> list:
     last = last_history(url=history_url, interval=interval)
 
     dates, manual = params.get("dates", []), True
-    if not dates or type(dates) != list:
+    if not isinstance(dates, list) or not dates:
         dates, manual = get_dates(last=last), False
 
     begin = current_time(utc=True).strftime(DATE_FORMAT)

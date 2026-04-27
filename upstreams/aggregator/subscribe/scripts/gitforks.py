@@ -77,11 +77,12 @@ def query_forks(username: str, repository: str, page: int, peer: int = 100, sort
     )
     subscriptions, starttime = {fullname: source}, time.time()
 
-    content, retry = "", 5
-    while not content and retry > 0:
+    content = ""
+    for attempt in range(5):
         content = utils.http_get(url=url, headers=DEFAULT_HEADERS, interval=1.0)
-        retry -= 1
-        if not content:
+        if content:
+            break
+        if attempt < 4:
             time.sleep(2)
 
     try:

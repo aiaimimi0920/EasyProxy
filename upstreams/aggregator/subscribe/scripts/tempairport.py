@@ -43,12 +43,12 @@ def register(
 
 
 def fetchsub(params: dict) -> list:
-    if not params or type(params) != dict:
+    if not params or not isinstance(params, dict):
         return []
 
     config = params.get("config", {})
     storage = params.get("storage", {})
-    if not storage or type(storage) != dict:
+    if not storage or not isinstance(storage, dict):
         logger.error(f"[TempSubError] cannot fetch subscribes bcause storage config is invalidate")
         return []
 
@@ -56,7 +56,7 @@ def fetchsub(params: dict) -> list:
     push_config = push.PushConfig.from_dict(storage)
 
     threshold = max(params.get("threshold", 1), 1)
-    if not persist or not config or type(config) != dict or not config.get("push_to"):
+    if not persist or not isinstance(config, dict) or not config or not config.get("push_to"):
         logger.error(f"[TempSubError] cannot fetch subscribes bcause not found arguments 'persist' or 'push_to'")
         return []
 

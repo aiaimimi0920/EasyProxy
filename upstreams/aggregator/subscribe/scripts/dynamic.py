@@ -84,7 +84,7 @@ def format(text: str, date: datetime = None) -> str:
 
 
 def collect_subs(params: dict) -> list[dict]:
-    if not params or type(params) != dict:
+    if not params or not isinstance(params, dict):
         return []
 
     repositories = params.get("repositories", [])

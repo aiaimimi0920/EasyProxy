@@ -339,11 +339,11 @@ def isb64encode(content: str, padding: bool = True) -> bool:
 
 
 def isblank(text: str) -> bool:
-    return not text or type(text) != str or not text.strip()
+    return not text or not isinstance(text, str) or not text.strip()
 
 
 def trim(text: str) -> str:
-    if not text or type(text) != str:
+    if not text or not isinstance(text, str):
         return ""
 
     return text.strip()
@@ -433,7 +433,7 @@ def http_post(
     timeout: float = 6,
     allow_redirects: bool = True,
 ) -> HTTPResponse:
-    if params is None or type(params) != dict or retry <= 0:
+    if params is None or not isinstance(params, dict) or retry <= 0:
         return None
 
     timeout = max(timeout, 1)
@@ -464,7 +464,7 @@ def http_post(
 
 
 def verify_uuid(text: str) -> bool:
-    if not text or type(text) != str:
+    if not text or not isinstance(text, str):
         return False
 
     try:
@@ -526,7 +526,7 @@ def load_emoji_pattern(filepath: str = "") -> dict:
 
 
 def get_emoji(text: str, patterns: dict, default: str = "") -> str:
-    if not patterns or type(patterns) != dict or not text or type(text) != str:
+    if not isinstance(patterns, dict) or not patterns or not text or not isinstance(text, str):
         return default
 
     for pattern, emoji in patterns.items():
@@ -547,11 +547,11 @@ def get_subpath(api_prefix: str, default: str = "/api/v1/") -> str:
 
 
 def multi_process_run(func: typing.Callable, tasks: list) -> list:
-    if not func or not isinstance(func, typing.Callable):
+    if not callable(func):
         logger.error(f"skip execute due to func is not callable")
         return []
 
-    if not tasks or type(tasks) != list:
+    if not isinstance(tasks, list) or not tasks:
         logger.error(f"skip execute due to tasks is empty or invalid")
         return []
 
@@ -595,7 +595,7 @@ def multi_thread_run(
     show_progress: bool = False,
     description: str = "",
 ) -> list:
-    if not func or not tasks or not isinstance(tasks, list):
+    if not callable(func) or not isinstance(tasks, list) or not tasks:
         return []
 
     if num_threads is None or num_threads <= 0:

@@ -87,7 +87,7 @@ PATTERN = re.compile(REGEX)
 
 
 def isurl(url: str) -> bool:
-    if not url or type(url) != str:
+    if not url or not isinstance(url, str):
         return False
 
     return PATTERN.match(url) is not None

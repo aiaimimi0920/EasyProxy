@@ -140,7 +140,7 @@ def load_configs(
         if twitter_conf.pop("enable", True) and users:
             enabled_users = {}
             for k, v in users.items():
-                if utils.isblank(k) or not v or type(v) != dict or not v.pop("enable", True):
+                if utils.isblank(k) or not isinstance(v, dict) or not v or not v.pop("enable", True):
                     continue
 
                 v["push_to"] = list(set(v.get("push_to", [])))
