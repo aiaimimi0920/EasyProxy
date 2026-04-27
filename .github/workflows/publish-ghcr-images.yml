@@ -91,6 +91,11 @@ jobs:
     name: Build and publish GHCR images
     runs-on: ubuntu-latest
     needs: preflight
+    outputs:
+      owner_lc: ${{ steps.prep.outputs.owner_lc }}
+      target: ${{ steps.prep.outputs.target }}
+      release_tag: ${{ steps.prep.outputs.release_tag }}
+      platforms: ${{ steps.prep.outputs.platforms }}
     concurrency:
       group: ghcr-publish-${{ github.event_name }}-${{ github.ref_name }}-${{ github.event_name == 'workflow_dispatch' && inputs.target || 'both' }}
       cancel-in-progress: false
@@ -224,4 +229,72 @@ jobs:
             if [[ "${{ steps.prep.outputs.target }}" == "both" || "${{ steps.prep.outputs.target }}" == "ech-workers" ]]; then
               echo "- worker image: \`ghcr.io/${{ steps.prep.outputs.owner_lc }}/ech-workers-monorepo:${{ steps.prep.outputs.release_tag }}\`"
             fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  runtime-e2e:
+    name: End-to-end EasyProxy runtime validation
+    runs-on: ubuntu-latest
+    needs: publish
+    if: ${{ needs.publish.result == 'success' && (needs.publish.outputs.target == 'both' || needs.publish.outputs.target == 'easyproxy') }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.10'
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Materialize runtime config for validation
+        shell: pwsh
+        env:
+          EASYPROXY_ROOT_CONFIG_YAML_B64: ${{ secrets.EASYPROXY_ROOT_CONFIG_YAML_B64 }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:EASYPROXY_ROOT_CONFIG_YAML_B64)) {
+            throw "EASYPROXY_ROOT_CONFIG_YAML_B64 is required for runtime validation."
+          }
+          $configPath = Join-Path $env:RUNNER_TEMP "easyproxy-runtime-config.yaml"
+          [System.IO.File]::WriteAllText($configPath, [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($env:EASYPROXY_ROOT_CONFIG_YAML_B64)))
+          "EASYPROXY_RUNTIME_CONFIG_PATH=$configPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Install PowerShell validation dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install PyYAML
+
+      - name: Run end-to-end EasyProxy runtime validation
+        shell: pwsh
+        run: |
+          .\deploy\service\base\scripts\validate-easy-proxy-runtime.ps1 `
+            -ConfigPath $env:EASYPROXY_RUNTIME_CONFIG_PATH `
+            -Image "ghcr.io/${{ needs.publish.outputs.owner_lc }}/easy-proxy-monorepo-service:${{ needs.publish.outputs.release_tag }}" `
+            -KeepArtifacts
+
+      - name: Upload runtime validation artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: easyproxy-runtime-validation-${{ needs.publish.outputs.release_tag }}
+          path: tmp/easy-proxy-runtime-validation
+          if-no-files-found: ignore
+
+      - name: Runtime validation summary
+        shell: bash
+        run: |
+          {
+            echo "## End-to-end EasyProxy runtime validation completed"
+            echo
+            echo "- validated image: \`ghcr.io/${{ needs.publish.outputs.owner_lc }}/easy-proxy-monorepo-service:${{ needs.publish.outputs.release_tag }}\`"
+            echo "- config source: \`EASYPROXY_ROOT_CONFIG_YAML_B64\`"
+            echo "- scenarios: \`local-subscription, local-direct-proxy, manifest-subscription, fallback-subscription, local-connector, manifest-connector\`"
           } >> "$GITHUB_STEP_SUMMARY"

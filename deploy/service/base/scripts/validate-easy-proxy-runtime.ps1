@@ -2,6 +2,7 @@
 param(
     [string]$ValidationId = ("runtime-" + (Get-Date -Format "yyyyMMdd-HHmmss")),
     [string]$Image = "easyproxy/easy-proxy-monorepo-service:validation-20260426",
+    [string]$ConfigPath = (Join-Path $PSScriptRoot "..\..\..\..\config.yaml"),
     [int]$ScenarioTimeoutSeconds = 720,
     [switch]$KeepArtifacts,
     [switch]$SkipCleanup
@@ -13,6 +14,9 @@ $ErrorActionPreference = "Stop"
 function Get-RepoRoot {
     return (Resolve-Path (Join-Path $PSScriptRoot "..\..\..\..")).Path
 }
+
+. (Join-Path (Get-RepoRoot) "scripts\lib\easyproxy-common.ps1")
+. (Join-Path (Get-RepoRoot) "scripts\lib\easyproxy-config.ps1")
 
 function Get-FreeTcpPort {
     $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, 0)
@@ -94,6 +98,33 @@ function Invoke-OptionalRestJson {
     }
 }
 
+function Get-NullDevicePath {
+    if ($env:OS -eq 'Windows_NT' -or $PSVersionTable.PSEdition -eq 'Desktop') {
+        return "NUL"
+    }
+    return "/dev/null"
+}
+
+function Get-CurlCommandName {
+    foreach ($name in @("curl.exe", "curl")) {
+        $command = Get-Command -Name $name -ErrorAction SilentlyContinue
+        if ($null -ne $command) {
+            return $command.Source
+        }
+    }
+    throw "curl is required for runtime proxy validation"
+}
+
+function Remove-DockerContainerSilently {
+    param([string]$ContainerName)
+
+    try {
+        & docker rm -f $ContainerName *> $null
+    }
+    catch {
+    }
+}
+
 function Wait-ManagementReady {
     param(
         [string]$BaseUrl,
@@ -141,11 +172,25 @@ function Wait-ScenarioState {
 function Test-Proxy204 {
     param([string]$ProxyUrl)
 
-    $code = & curl.exe -s -k -o NUL -w "%{http_code}" --max-time 45 -x $ProxyUrl https://www.google.com/generate_204
-    if ($LASTEXITCODE -ne 0 -or $code -ne "204") {
-        throw "Proxy check failed for $ProxyUrl (code=$code exit=$LASTEXITCODE)"
+    $probeTargets = @(
+        "https://www.google.com/generate_204",
+        "https://connectivitycheck.gstatic.com/generate_204",
+        "https://cp.cloudflare.com/generate_204",
+        "https://www.msftconnecttest.com/connecttest.txt"
+    )
+    $curlCommand = Get-CurlCommandName
+    $nullDevice = Get-NullDevicePath
+
+    $attemptErrors = @()
+    foreach ($target in $probeTargets) {
+        $code = & $curlCommand -s -k -o $nullDevice -w "%{http_code}" --max-time 25 -x $ProxyUrl $target
+        if ($LASTEXITCODE -eq 0 -and ($code -eq "204" -or $code -eq "200")) {
+            return [int]$code
+        }
+        $attemptErrors += "$target(code=$code exit=$LASTEXITCODE)"
     }
-    return 204
+
+    throw "Proxy check failed for $ProxyUrl after probing all targets: $($attemptErrors -join '; ')"
 }
 
 function New-ScenarioConfig {
@@ -207,10 +252,22 @@ function Convert-ScenarioEvidence {
 
     $availableNodes = @($State.Nodes.nodes | Where-Object { $_.available -eq $true })
     $nodeChecks = @()
+    $successfulNodeChecks = 0
     foreach ($port in $ValidatedPorts) {
+        $checkResult = $null
+        $checkError = ""
+        try {
+            $checkResult = (Test-Proxy204 ("http://127.0.0.1:{0}" -f $port))
+            $successfulNodeChecks++
+        }
+        catch {
+            $checkError = $_.Exception.Message
+        }
+
         $nodeChecks += [pscustomobject]@{
             port = $port
-            google_generate_204 = (Test-Proxy204 ("http://127.0.0.1:{0}" -f $port))
+            google_generate_204 = $checkResult
+            error = $checkError
         }
     }
 
@@ -223,6 +280,7 @@ function Convert-ScenarioEvidence {
         first_available_uri = if ($availableNodes.Count -gt 0) { [string]$availableNodes[0].uri } else { "" }
         source_sync = $State.SourceSync
         pool_google_generate_204 = (Test-Proxy204 ("http://127.0.0.1:{0}" -f $PoolPort))
+        stable_node_proxy_count = $successfulNodeChecks
         node_google_generate_204 = $nodeChecks
     }
 }
@@ -252,7 +310,7 @@ function Run-Scenario {
     $poolPort = Get-FreeTcpPort
     $containerName = ("easyproxy-monorepo-runtime-" + $ValidationId + "-" + $Name).ToLowerInvariant().Replace("_", "-")
 
-    cmd /c "docker rm -f $containerName >nul 2>nul" | Out-Null
+    Remove-DockerContainerSilently -ContainerName $containerName
 
     $dockerArgs = @(
         "run", "-d",
@@ -298,7 +356,7 @@ function Run-Scenario {
     }
     finally {
         if (-not $SkipCleanup) {
-            cmd /c "docker rm -f $containerName >nul 2>nul" | Out-Null
+            Remove-DockerContainerSilently -ContainerName $containerName
         }
     }
 }
@@ -307,16 +365,46 @@ $repoRoot = Get-RepoRoot
 $artifactDir = Join-Path $repoRoot ("tmp\easy-proxy-runtime-validation\" + $ValidationId)
 New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
 
-$misubSecrets = Get-Content (Join-Path $repoRoot "AIRead\密钥\ProxyService\MiSub密钥.json") | ConvertFrom-Json
-$echSecrets = Get-Content (Join-Path $repoRoot "AIRead\密钥\ProxyService\ech-workers-cloudflare密钥.json") | ConvertFrom-Json
-$manifestToken = [string]$misubSecrets.runtime_secrets.required.MANIFEST_TOKEN
-$managedConnector = $misubSecrets.connector_registry.managed_test_profiles.easyproxies_ech_test.sources[0]
-$workerUrl = [string]$managedConnector.input
-$workerAccessToken = [string]$managedConnector.access_token
-if ([string]::IsNullOrWhiteSpace($workerAccessToken)) {
-    $workerAccessToken = [string]$echSecrets.required_secrets.ECH_TOKEN
+$rootConfig = Read-EasyProxyConfig -ConfigPath $ConfigPath
+$serviceBase = Get-EasyProxyConfigSection -Config $rootConfig -Name 'serviceBase'
+$serviceRuntime = Get-EasyProxyConfigSection -Config $serviceBase -Name 'runtime'
+$sourceSyncConfig = Get-EasyProxyConfigSection -Config $serviceRuntime -Name 'source_sync'
+$misub = Get-EasyProxyConfigSection -Config $rootConfig -Name 'misub'
+$misubPages = Get-EasyProxyConfigSection -Config $misub -Name 'pages'
+$misubDocker = Get-EasyProxyConfigSection -Config $misub -Name 'docker'
+$misubDockerEnv = Get-EasyProxyConfigSection -Config $misubDocker -Name 'env'
+$echCloudflare = Get-EasyProxyConfigSection -Config $rootConfig -Name 'echWorkersCloudflare'
+$echSecrets = Get-EasyProxyConfigSection -Config $echCloudflare -Name 'secrets'
+
+$misubPublicUrl = [string](Get-EasyProxyConfigValue -Object $misubPages -Name 'publicUrl' -Default 'https://misub.aiaimimi.com')
+$misubConnectorProfileId = [string](Get-EasyProxyConfigValue -Object $misubPages -Name 'connectorProfileId' -Default 'easyproxies-ech-test')
+$manifestToken = [string](Get-EasyProxyConfigValue -Object $sourceSyncConfig -Name 'manifest_token' -Default '')
+if ([string]::IsNullOrWhiteSpace($manifestToken)) {
+    $manifestToken = [string](Get-EasyProxyConfigValue -Object $misubDockerEnv -Name 'MANIFEST_TOKEN' -Default '')
 }
-$workerServerIp = [string]$managedConnector.server_ip
+if ([string]::IsNullOrWhiteSpace($manifestToken)) {
+    throw "Unable to resolve MiSub manifest token from config.yaml"
+}
+
+$workerBaseUrl = [string](Get-EasyProxyConfigValue -Object $echCloudflare -Name 'publicUrl' -Default 'https://proxyservice-ech-workers.aiaimimi.com')
+$workerUrl = "{0}:443" -f $workerBaseUrl
+$workerAccessToken = [string](Get-EasyProxyConfigValue -Object $echSecrets -Name 'ECH_TOKEN' -Default '')
+if ([string]::IsNullOrWhiteSpace($workerAccessToken)) {
+    $connectors = Get-EasyProxyConfigValue -Object $serviceRuntime -Name 'connectors' -Default @()
+    if ($connectors -and @($connectors).Count -gt 0) {
+        $firstConnector = @($connectors)[0]
+        $connectorConfig = Get-EasyProxyConfigSection -Config $firstConnector -Name 'connector_config'
+        $workerAccessToken = [string](Get-EasyProxyConfigValue -Object $connectorConfig -Name 'access_token' -Default '')
+        $inputUrl = [string](Get-EasyProxyConfigValue -Object $firstConnector -Name 'input' -Default '')
+        if (-not [string]::IsNullOrWhiteSpace($inputUrl)) {
+            $workerUrl = $inputUrl
+        }
+    }
+}
+if ([string]::IsNullOrWhiteSpace($workerAccessToken)) {
+    throw "Unable to resolve ECH worker access token from config.yaml"
+}
+$workerServerIp = ""
 
 $summary = @()
 $directProxyUri = ""
@@ -347,6 +435,9 @@ subscriptions:
     param($evidence)
     if ([int]$evidence.available_nodes -lt 1) {
         throw "local-subscription did not produce available nodes"
+    }
+    if ([int]$evidence.stable_node_proxy_count -lt 1) {
+        throw "local-subscription did not yield a stable direct node proxy"
     }
 }
 
@@ -383,12 +474,15 @@ nodes:
     if ([int]$evidence.available_nodes -lt 1) {
         throw "local-direct-proxy did not become available"
     }
+    if ([int]$evidence.stable_node_proxy_count -lt 1) {
+        throw "local-direct-proxy did not yield a stable direct node proxy"
+    }
 }
 
 Run-Scenario -Name "manifest-subscription" -ScenarioIndex 2 -ConfigYaml (New-ScenarioConfig 25200 @"
 source_sync:
   enabled: true
-  manifest_url: "https://misub.aiaimimi.com/api/manifest/aggregator-global"
+  manifest_url: "$misubPublicUrl/api/manifest/aggregator-global"
   manifest_token: "$manifestToken"
   refresh_interval: 24h0m0s
   request_timeout: 15s
@@ -419,6 +513,9 @@ subscriptions: []
     }
     if ([int]$evidence.source_sync.manifest_source_count -lt 1) {
         throw "manifest-subscription missing manifest sources"
+    }
+    if ([int]$evidence.stable_node_proxy_count -lt 1) {
+        throw "manifest-subscription did not yield a stable direct node proxy"
     }
 }
 
@@ -458,6 +555,9 @@ subscriptions: []
     }
     if (-not $evidence.source_sync.fallback_active) {
         throw "fallback-subscription did not activate fallback"
+    }
+    if ([int]$evidence.stable_node_proxy_count -lt 1) {
+        throw "fallback-subscription did not yield a stable direct node proxy"
     }
 }
 
@@ -504,12 +604,15 @@ subscriptions: []
     if ([int]$evidence.source_sync.connector_instance_count -lt 1) {
         throw "local-connector did not start any connector instances"
     }
+    if ([int]$evidence.stable_node_proxy_count -lt 1) {
+        throw "local-connector did not yield a stable direct node proxy"
+    }
 }
 
 Run-Scenario -Name "manifest-connector" -ScenarioIndex 5 -ConfigYaml (New-ScenarioConfig 25500 @"
 source_sync:
   enabled: true
-  manifest_url: "https://misub.aiaimimi.com/api/manifest/easyproxies-ech-test"
+  manifest_url: "$misubPublicUrl/api/manifest/$misubConnectorProfileId"
   manifest_token: "$manifestToken"
   refresh_interval: 24h0m0s
   request_timeout: 15s
@@ -544,6 +647,9 @@ subscriptions: []
     }
     if ([int]$evidence.source_sync.connector_instance_count -lt 1) {
         throw "manifest-connector missing connector instances"
+    }
+    if ([int]$evidence.stable_node_proxy_count -lt 1) {
+        throw "manifest-connector did not yield a stable direct node proxy"
     }
 }
 

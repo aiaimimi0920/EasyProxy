@@ -319,6 +319,7 @@ def main() -> int:
     misub_d1_name = "misub"
     misub_d1_binding = "MISUB_DB"
     misub_manifest_profile_id = "aggregator-global"
+    misub_connector_profile_id = "easyproxies-ech-test"
     ech_worker_public_url = "https://proxyservice-ech-workers.aiaimimi.com"
     aggregator_public_base_url = "https://sub.aiaimimi.com"
 
@@ -426,6 +427,7 @@ def main() -> int:
     set_nested(config, ("misub", "pages", "d1DatabaseName"), misub_d1_name)
     set_nested(config, ("misub", "pages", "d1DatabaseBinding"), misub_d1_binding)
     set_nested(config, ("misub", "pages", "verifyManifestProfileId"), misub_manifest_profile_id)
+    set_nested(config, ("misub", "pages", "connectorProfileId"), misub_connector_profile_id)
     set_nested(config, ("misub", "docker", "env", "ADMIN_PASSWORD"), misub_admin_password)
     set_nested(config, ("misub", "docker", "env", "COOKIE_SECRET"), misub_cookie_secret)
     set_nested(config, ("misub", "docker", "env", "MANIFEST_TOKEN"), misub_manifest_token)
@@ -522,6 +524,7 @@ def main() -> int:
             "EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL": aggregator_public_base_url,
             "EASYPROXY_ECH_WORKER_PUBLIC_URL": ech_worker_public_url,
             "EASYPROXY_MISUB_CALLBACK_URL": misub_callback_url,
+            "EASYPROXY_MISUB_CONNECTOR_PROFILE_ID": misub_connector_profile_id,
             "EASYPROXY_MISUB_D1_DATABASE_BINDING": misub_d1_binding,
             "EASYPROXY_MISUB_D1_DATABASE_NAME": misub_d1_name,
             "EASYPROXY_MISUB_MANIFEST_PROFILE_ID": misub_manifest_profile_id,

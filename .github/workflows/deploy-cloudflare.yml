@@ -384,3 +384,73 @@ jobs:
             echo "- worker config: \`workers/ech-workers-cloudflare/wrangler.jsonc\`"
             echo "- public url: \`${{ vars.EASYPROXY_ECH_WORKER_PUBLIC_URL || 'n/a' }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  sync-misub-ech-profile:
+    name: Sync MiSub ECH connector profile
+    runs-on: ubuntu-latest
+    needs:
+      - deploy-misub-pages
+      - deploy-ech-workers-cloudflare
+    if: ${{ always() && (inputs.target == 'both' || inputs.target == 'misub-pages' || inputs.target == 'ech-workers-cloudflare') && (needs.deploy-misub-pages.result == 'success' || needs.deploy-misub-pages.result == 'skipped') && (needs.deploy-ech-workers-cloudflare.result == 'success' || needs.deploy-ech-workers-cloudflare.result == 'skipped') }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Synchronize MiSub connector manifest profile
+        shell: bash
+        env:
+          DEPLOY_TARGET: ${{ inputs.target }}
+          MISUB_PUBLIC_URL: ${{ vars.EASYPROXY_MISUB_PUBLIC_URL }}
+          MISUB_ADMIN_PASSWORD: ${{ secrets.MISUB_ADMIN_PASSWORD }}
+          MISUB_MANIFEST_TOKEN: ${{ secrets.MISUB_MANIFEST_TOKEN }}
+          MISUB_CONNECTOR_PROFILE_ID: ${{ vars.EASYPROXY_MISUB_CONNECTOR_PROFILE_ID }}
+          ECH_WORKER_PUBLIC_URL: ${{ vars.EASYPROXY_ECH_WORKER_PUBLIC_URL }}
+          ECH_TOKEN: ${{ secrets.ECH_TOKEN }}
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install requests
+
+          if [[ -z "${MISUB_PUBLIC_URL:-}" || -z "${MISUB_ADMIN_PASSWORD:-}" || -z "${MISUB_MANIFEST_TOKEN:-}" || -z "${ECH_WORKER_PUBLIC_URL:-}" || -z "${ECH_TOKEN:-}" ]]; then
+            echo "::error::MiSub/ECH profile sync requires MISUB_PUBLIC_URL, MISUB_ADMIN_PASSWORD, MISUB_MANIFEST_TOKEN, ECH_WORKER_PUBLIC_URL, and ECH_TOKEN."
+            exit 1
+          fi
+
+          connector_profile_id="${MISUB_CONNECTOR_PROFILE_ID:-easyproxies-ech-test}"
+
+          if ! python -c "import os, requests, sys; base=os.environ['MISUB_PUBLIC_URL'].rstrip('/') + '/'; response=requests.get(base, timeout=20); response.raise_for_status()"
+          then
+            if [[ "${DEPLOY_TARGET}" == "ech-workers-cloudflare" ]]; then
+              echo "::warning::MiSub is not reachable yet; skipping connector profile sync during ech-workers-only deployment."
+              exit 0
+            fi
+            echo "::error::MiSub public URL is not reachable, cannot synchronize connector profile."
+            exit 1
+          fi
+
+          python scripts/sync-misub-ech-profile.py \
+            --base-url "${MISUB_PUBLIC_URL}" \
+            --admin-password "${MISUB_ADMIN_PASSWORD}" \
+            --manifest-token "${MISUB_MANIFEST_TOKEN}" \
+            --profile-id "${connector_profile_id}" \
+            --worker-url "${ECH_WORKER_PUBLIC_URL}:443" \
+            --access-token "${ECH_TOKEN}"
+
+      - name: MiSub connector profile sync summary
+        shell: bash
+        env:
+          MISUB_CONNECTOR_PROFILE_ID: ${{ vars.EASYPROXY_MISUB_CONNECTOR_PROFILE_ID }}
+        run: |
+          {
+            echo "## MiSub ECH connector profile synchronized"
+            echo
+            echo "- profile id: \`${MISUB_CONNECTOR_PROFILE_ID:-easyproxies-ech-test}\`"
+            echo "- MiSub base URL: \`${{ vars.EASYPROXY_MISUB_PUBLIC_URL || 'n/a' }}\`"
+            echo "- ECH worker URL: \`${{ vars.EASYPROXY_ECH_WORKER_PUBLIC_URL || 'n/a' }}:443\`"
+          } >> "$GITHUB_STEP_SUMMARY"
