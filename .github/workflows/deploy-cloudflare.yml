@@ -232,10 +232,9 @@ jobs:
           MISUB_MANIFEST_TOKEN: ${{ secrets.MISUB_MANIFEST_TOKEN }}
         run: |
           set -euo pipefail
-          for name in MISUB_ADMIN_PASSWORD MISUB_COOKIE_SECRET MISUB_MANIFEST_TOKEN; do
-            value="${!name}"
-            printf "%s" "$value" | npx wrangler pages secret put "$name" --project-name "$PROJECT_NAME"
-          done
+          printf "%s" "${MISUB_ADMIN_PASSWORD}" | npx wrangler pages secret put ADMIN_PASSWORD --project-name "$PROJECT_NAME"
+          printf "%s" "${MISUB_COOKIE_SECRET}" | npx wrangler pages secret put COOKIE_SECRET --project-name "$PROJECT_NAME"
+          printf "%s" "${MISUB_MANIFEST_TOKEN}" | npx wrangler pages secret put MANIFEST_TOKEN --project-name "$PROJECT_NAME"
 
       - name: Deploy MiSub Pages
         id: deploy_misub
