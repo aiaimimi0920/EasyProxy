@@ -151,6 +151,7 @@ Read the module-specific deployment notes:
 
 - `docs/architecture.md`
 - `docs/quickstart.md`
+- `docs/release-checklist.md`
 - `docs/unified-source-architecture.md`
 - `docs/upstream-sync.md`
 - `docs/migration-plan.md`
@@ -252,6 +253,45 @@ Supported `-Project` values:
 - `publish-easyproxy-image`
 - `publish-ech-workers-image`
 - `publish-core-images`
+
+## Validation Matrix
+
+Local validation commands used by this repository:
+
+```powershell
+# Root script smoke tests
+python -m unittest discover -s "tests" -p "test_*.py" -v
+
+# Aggregator regression tests
+python -m unittest discover -s "upstreams/aggregator/tests" -p "test_*.py" -v
+
+# service/base critical Go regression packages
+Set-Location service/base
+go test ./internal/monitor
+go test ./internal/boxmgr
+go test ./internal/config
+```
+
+Repository CI coverage:
+
+- `.github/workflows/validate.yml`
+  - root PowerShell script smoke tests
+  - `upstreams/aggregator` regression tests
+  - `service/base` monitor / boxmgr / config Go tests
+- `.github/workflows/publish-ghcr-images.yml`
+  - now runs the validation preflight before publishing GHCR images
+
+## Release Checklist
+
+Before publishing a public release:
+
+1. Confirm `config.example.yaml` still contains placeholders only, and no real secrets were introduced.
+2. Run the local validation matrix or confirm `.github/workflows/validate.yml` passed on the target commit.
+3. Confirm the embedded frontend assets in `service/base/internal/monitor/assets` match the current frontend source when WebUI code changed.
+4. Confirm GHCR owner/image names are correct for the target repository or organization.
+5. If `upstreams/*` changed, note whether each change is an upstream sync import or a local carried patch.
+6. If deploy behavior changed, update the corresponding `deploy/*/README.md` notes.
+7. Publish via tag push or GitHub Actions only after validation is green.
 
 ## Private Operator Material
 

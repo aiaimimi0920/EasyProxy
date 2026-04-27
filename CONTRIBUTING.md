@@ -39,6 +39,13 @@ or `ech-workers`. The public contribution path is always this monorepo.
 
 ## Validation
 
+Minimum regression checks for repository-level changes:
+
+```powershell
+python -m unittest discover -s "tests" -p "test_*.py" -v
+python -m unittest discover -s "upstreams/aggregator/tests" -p "test_*.py" -v
+```
+
 For `service/base`:
 
 ```powershell
@@ -66,6 +73,7 @@ For deployment changes:
 - update the corresponding notes under `deploy/`
 - update the corresponding private operator notes under `AIRead` outside this
   repository when needed
+- if the change affects release or publish flow, check `docs/release-checklist.md`
 
 ## Commit Style
 

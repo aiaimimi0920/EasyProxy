@@ -96,6 +96,30 @@ powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Projec
 powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project aggregator -InitConfig
 ```
 
+## Validation
+
+Run these checks before publishing images or merging risky runtime changes:
+
+```powershell
+# Root script smoke coverage
+python -m unittest discover -s "tests" -p "test_*.py" -v
+
+# Aggregator regression coverage
+python -m unittest discover -s "upstreams/aggregator/tests" -p "test_*.py" -v
+
+# service/base critical Go packages
+Set-Location service/base
+go test ./internal/monitor
+go test ./internal/boxmgr
+go test ./internal/config
+```
+
+GitHub Actions equivalents:
+
+- `.github/workflows/validate.yml`
+- `.github/workflows/publish-ghcr-images.yml`
+  - GHCR publish now depends on the validation preflight job
+
 ## Private Config
 
 Do not commit live deployment values.
