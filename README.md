@@ -219,6 +219,9 @@ GitHub-hosted publish workflow:
 - `.github/workflows/publish-service-base-config.yml`
   - publishes the `service/base` runtime config distribution manifest and
     optional encrypted import-code artifact
+- `.github/workflows/publish-github-release.yml`
+  - creates or updates the GitHub Release body from the current EasyProxy
+    release metadata
 - `.github/workflows/deploy-cloudflare.yml`
   - deploys MiSub Pages and `ech-workers-cloudflare` from GitHub-hosted runners
   - supports `bootstrap` and `update` deployment modes with post-deploy verification
@@ -239,6 +242,8 @@ The repository now exposes five primary GitHub-hosted operational workflows:
   - `service/base` + local `ech-workers`
 - `Publish Service Base Config`
   - private config distribution manifest + optional encrypted import-code artifact
+- `Publish GitHub Release`
+  - release body automation for tags and manual draft releases
 
 ### One-Click Deploy Examples
 
