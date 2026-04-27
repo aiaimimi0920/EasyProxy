@@ -191,6 +191,10 @@ GitHub-hosted publish workflow:
 - `.github/workflows/publish-ghcr-images.yml`
   - publishes GHCR images on tag push or manual workflow dispatch
   - does not require local Docker on the operator machine
+- `.github/workflows/deploy-cloudflare.yml`
+  - deploys MiSub Pages and `ech-workers-cloudflare` from GitHub-hosted runners
+- `.github/workflows/dispatch-aggregator.yml`
+  - updates the external aggregator repository secret and dispatches its workflow
 
 ### One-Click Deploy Examples
 
@@ -280,6 +284,20 @@ Repository CI coverage:
   - `service/base` monitor / boxmgr / config Go tests
 - `.github/workflows/publish-ghcr-images.yml`
   - now runs the validation preflight before publishing GHCR images
+- `.github/workflows/deploy-cloudflare.yml`
+  - now runs the same validation preflight before deploying MiSub Pages or `ech-workers-cloudflare`
+
+## GitHub Secrets
+
+Critical deployment secrets should live in GitHub repository secrets, not in
+committed operator files. See
+[docs/github-secrets.md](/C:/Users/Public/nas_home/AI/GameEditor/EasyProxy/docs/github-secrets.md)
+for the current secret matrix covering:
+
+- Cloudflare deployment credentials
+- MiSub runtime secrets
+- `ECH_TOKEN` for `ech-workers-cloudflare`
+- the distinction between this monorepo and the external aggregator repo secret
 
 ## Release Checklist
 

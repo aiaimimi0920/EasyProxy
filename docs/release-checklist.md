@@ -30,6 +30,8 @@ CI workflows:
 
 - `.github/workflows/validate.yml`
 - `.github/workflows/publish-ghcr-images.yml`
+- `.github/workflows/deploy-cloudflare.yml`
+- `.github/workflows/dispatch-aggregator.yml`
 
 ## Release Artifacts
 
@@ -38,6 +40,7 @@ CI workflows:
 3. Confirm the target tag format is correct:
    - `release-*`
    - `v*`
+4. Confirm required GitHub repository secrets are present for any Cloudflare deploy you plan to run. See [docs/github-secrets.md](/C:/Users/Public/nas_home/AI/GameEditor/EasyProxy/docs/github-secrets.md).
 
 ## Upstream-Carried Modules
 

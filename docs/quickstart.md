@@ -119,6 +119,12 @@ GitHub Actions equivalents:
 - `.github/workflows/validate.yml`
 - `.github/workflows/publish-ghcr-images.yml`
   - GHCR publish now depends on the validation preflight job
+- `.github/workflows/deploy-cloudflare.yml`
+  - Cloudflare deploys now depend on the same validation preflight job
+- `.github/workflows/dispatch-aggregator.yml`
+  - external aggregator workflow dispatch now runs from GitHub too
+- [docs/github-secrets.md](/C:/Users/Public/nas_home/AI/GameEditor/EasyProxy/docs/github-secrets.md)
+  - configure repository secrets before using GitHub-hosted Cloudflare deploys
 
 ## Private Config
 

@@ -74,6 +74,8 @@ For deployment changes:
 - update the corresponding private operator notes under `AIRead` outside this
   repository when needed
 - if the change affects release or publish flow, check `docs/release-checklist.md`
+- if the change affects GitHub-hosted deployment or secret usage, update
+  `docs/github-secrets.md`
 
 ## Commit Style
 
