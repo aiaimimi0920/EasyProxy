@@ -54,17 +54,18 @@ def main() -> int:
     ensure(isinstance(public_payload, dict), "MiSub public config endpoint did not return a JSON object")
 
     login_url = urljoin(base_url, "api/login")
-    login = retry(
-        "MiSub login",
-        10,
-        5,
-        lambda: session.post(
+    def login_request():
+        response = session.post(
             login_url,
             json={"password": args.admin_password},
             timeout=30,
-        ),
-    )
-    login.raise_for_status()
+        )
+        if response.status_code == 401:
+            raise RuntimeError(f"MiSub login returned 401: {login_url}")
+        response.raise_for_status()
+        return response
+
+    login = retry("MiSub login", 12, 10, login_request)
     try:
         login_payload = login.json()
     except json.JSONDecodeError as exc:
