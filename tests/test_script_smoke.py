@@ -119,6 +119,31 @@ class ScriptSmokeTests(unittest.TestCase):
         combined = f"{result.stdout}\n{result.stderr}"
         self.assertIn("placeholder value", combined)
 
+    def test_deploy_aggregator_dispatches_native_workflow(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            capture_path = Path(temp_dir) / "external.jsonl"
+            result = self.run_powershell(
+                [
+                    "-File",
+                    str(REPO_ROOT / "scripts" / "deploy-aggregator.ps1"),
+                    "-ConfigPath",
+                    str(REPO_ROOT / "config.example.yaml"),
+                    "-DeploymentMode",
+                    "bootstrap",
+                ],
+                env={"EASYPROXY_TEST_CAPTURE_EXTERNAL_COMMANDS_PATH": str(capture_path)},
+            )
+
+            self.assertEqual(result.returncode, 0, msg=result.stderr or result.stdout)
+            records = read_json_lines(capture_path)
+            self.assertEqual(len(records), 2)
+            workflow_run = records[1]
+            self.assertEqual(workflow_run["FilePath"], "gh")
+            args = workflow_run["Arguments"]
+            self.assertEqual(args[:3], ["workflow", "run", "deploy-aggregator.yml"])
+            self.assertIn("deployment_mode=bootstrap", args)
+            self.assertIn("run_verification=true", args)
+
 
 if __name__ == "__main__":
     unittest.main()

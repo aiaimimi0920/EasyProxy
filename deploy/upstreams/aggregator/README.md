@@ -26,11 +26,15 @@ Removed from this monorepo boundary:
   - the authoritative GitHub Actions batch config
   - crawler enabled
   - `Issue #91` shared source kept as the main fallback seed
-- `scripts/export_actions_config_base64.ps1`
-  - exports `config.actions.r2.json` as base64 for the repository secret
-  - target secret name: `SUBSCRIBE_CONF_JSON_B64`
+- native materialization now happens through
+  [scripts/materialize-aggregator-config.py](/C:/Users/Public/nas_home/AI/GameEditor/EasyProxy/scripts/materialize-aggregator-config.py)
+  and repository secrets in the current EasyProxy repo
 
-Active workflow:
+Active root workflow:
+
+- `.github/workflows/deploy-aggregator.yml`
+
+Upstream reference workflow kept for comparison and sync review:
 
 - `upstreams/aggregator/.github/workflows/process-r2.yaml`
 
@@ -61,14 +65,11 @@ Current note:
 
 - Root operator entrypoint:
   - `scripts/deploy-aggregator.ps1`
-  - default target repository:
-    - `aiaimimi0920/aggregator`
   - behavior:
-    - refreshes `SUBSCRIBE_CONF_JSON_B64`
-    - triggers `process-r2.yaml`
+    - triggers the native `deploy-aggregator.yml` workflow in this repository
 - GitHub repository secrets and variables are documented in
-  the shared private `AIRead` archive for the EasyProxy stack.
+  [docs/github-secrets.md](/C:/Users/Public/nas_home/AI/GameEditor/EasyProxy/docs/github-secrets.md).
 - GitHub Actions runtime and verification notes are documented in
   the shared private deployment notes for the EasyProxy stack.
-- The legacy Cloudflare worker deployment path is retired; the active
-  deployment and verification baseline is the GitHub Actions batch flow above.
+- The legacy external-repository dispatch path is retired; the active
+  deployment and verification baseline is the native GitHub Actions batch flow above.

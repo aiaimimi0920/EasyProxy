@@ -50,22 +50,31 @@ These are not used by GitHub-hosted workflows, but local publishing can read:
 | `GHCR_USERNAME` | Local GHCR login override |
 | `GHCR_TOKEN` | Local GHCR login token |
 
-## Aggregator Secret Ownership
+## Aggregator Native Deployment
 
-The tracked operator config points at an external repo:
+The native aggregator workflow now runs inside this repository:
 
-- `aggregator.githubRepo`: `aiaimimi0920/aggregator`
-- `aggregator.secretName`: `SUBSCRIBE_CONF_JSON_B64`
+- [deploy-aggregator.yml](/C:/Users/Public/nas_home/AI/GameEditor/EasyProxy/.github/workflows/deploy-aggregator.yml)
 
-The new root workflow
-[.github/workflows/dispatch-aggregator.yml](/C:/Users/Public/nas_home/AI/GameEditor/EasyProxy/.github/workflows/dispatch-aggregator.yml)
-updates that external repository secret and dispatches the target workflow.
-
-Add this repository secret before using that workflow:
+Add these repository secrets before using that workflow:
 
 | Secret | Purpose |
 | --- | --- |
-| `AGGREGATOR_REPO_TOKEN` | GitHub token with permission to update repository secrets and dispatch workflows in the configured external aggregator repo |
+| `EASYPROXY_AGGREGATOR_GH_TOKEN` | GitHub token used by the aggregator GitHub crawler |
+| `EASYPROXY_AGGREGATOR_R2_ACCESS_KEY_ID` | R2 write credential for published artifacts |
+| `EASYPROXY_AGGREGATOR_R2_SECRET_ACCESS_KEY` | R2 write credential secret |
+| `EASYPROXY_AGGREGATOR_R2_ACCOUNT_ID` | Cloudflare account ID for the target R2 bucket |
+| `EASYPROXY_AGGREGATOR_SEED_SUB_KEY` | Replaces `__KEY_PLACEHOLDER__` in the tracked aggregator config template |
+| `EASYPROXY_AGGREGATOR_SHARED_TOKEN` | Replaces `__TOKEN_PLACEHOLDER__` in the tracked aggregator config template |
 
-The external repository still owns the `SUBSCRIBE_CONF_JSON_B64` secret itself.
-This monorepo only pushes the refreshed value into that external secret store.
+Optional repository variables:
+
+| Variable | Purpose |
+| --- | --- |
+| `EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL` | Public base URL used for post-deploy artifact verification |
+| `EASYPROXY_AGGREGATOR_ENABLE_SCHEDULE` | Set to `true` to enable scheduled native aggregator runs |
+| `EASYPROXY_AGGREGATOR_SKIP_ALIVE_CHECK` | Optional passthrough to the upstream runtime |
+| `EASYPROXY_AGGREGATOR_SKIP_REMARK` | Optional passthrough to the upstream runtime |
+| `EASYPROXY_AGGREGATOR_REACHABLE` | Optional passthrough to the upstream runtime |
+| `EASYPROXY_AGGREGATOR_ENABLE_SPECIAL_PROTOCOLS` | Optional passthrough to the upstream runtime |
+| `EASYPROXY_AGGREGATOR_LOG_LEVEL_DEBUG` | Optional passthrough to the upstream runtime |

@@ -84,7 +84,7 @@ Notes:
 - `deploy-misub.ps1` defaults to Cloudflare Pages mode. Use `-Mode docker`
   if you explicitly want the Docker/VPS path.
 - `deploy-aggregator.ps1` targets the current GitHub Actions + R2 deployment
-  model rather than a local runtime.
+  model through the current EasyProxy repository rather than an external repo.
 
 One-click examples:
 
@@ -121,8 +121,8 @@ GitHub Actions equivalents:
   - GHCR publish now depends on the validation preflight job
 - `.github/workflows/deploy-cloudflare.yml`
   - Cloudflare deploys now depend on the same validation preflight job
-- `.github/workflows/dispatch-aggregator.yml`
-  - external aggregator workflow dispatch now runs from GitHub too
+- `.github/workflows/deploy-aggregator.yml`
+  - native aggregator publish now runs from GitHub too
 - [docs/github-secrets.md](/C:/Users/Public/nas_home/AI/GameEditor/EasyProxy/docs/github-secrets.md)
   - configure repository secrets before using GitHub-hosted Cloudflare deploys
 

@@ -172,8 +172,7 @@ Root-level operator entrypoints live under `scripts/`:
 - `scripts/deploy-easyproxy.ps1`
   - renders and deploys `service/base` through Docker Compose
 - `scripts/deploy-aggregator.ps1`
-  - updates the current `SUBSCRIBE_CONF_JSON_B64` GitHub secret and triggers
-    the active aggregator GitHub Actions workflow
+  - triggers the native aggregator deployment workflow in the current repository
 - `scripts/deploy-misub.ps1`
   - deploys `upstreams/misub` either to Cloudflare Pages or through Docker
 - `scripts/deploy-ech-workers-cloudflare.ps1`
@@ -193,8 +192,8 @@ GitHub-hosted publish workflow:
   - does not require local Docker on the operator machine
 - `.github/workflows/deploy-cloudflare.yml`
   - deploys MiSub Pages and `ech-workers-cloudflare` from GitHub-hosted runners
-- `.github/workflows/dispatch-aggregator.yml`
-  - updates the external aggregator repository secret and dispatches its workflow
+- `.github/workflows/deploy-aggregator.yml`
+  - runs the native aggregator publish flow from this repository
 
 ### One-Click Deploy Examples
 
@@ -286,6 +285,8 @@ Repository CI coverage:
   - now runs the validation preflight before publishing GHCR images
 - `.github/workflows/deploy-cloudflare.yml`
   - now runs the same validation preflight before deploying MiSub Pages or `ech-workers-cloudflare`
+- `.github/workflows/deploy-aggregator.yml`
+  - now runs the same validation preflight before running the native aggregator publish flow
 
 ## GitHub Secrets
 
@@ -297,7 +298,7 @@ for the current secret matrix covering:
 - Cloudflare deployment credentials
 - MiSub runtime secrets
 - `ECH_TOKEN` for `ech-workers-cloudflare`
-- the distinction between this monorepo and the external aggregator repo secret
+- the native aggregator secrets and verification variables used by this repository
 
 ## Release Checklist
 

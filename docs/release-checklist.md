@@ -31,7 +31,7 @@ CI workflows:
 - `.github/workflows/validate.yml`
 - `.github/workflows/publish-ghcr-images.yml`
 - `.github/workflows/deploy-cloudflare.yml`
-- `.github/workflows/dispatch-aggregator.yml`
+- `.github/workflows/deploy-aggregator.yml`
 
 ## Release Artifacts
 

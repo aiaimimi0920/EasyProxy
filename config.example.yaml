@@ -100,11 +100,11 @@ misub:
       NODE_TLS_REJECT_UNAUTHORIZED: ""
 
 aggregator:
-  githubRepo: aiaimimi0920/aggregator
-  workflow: process-r2.yaml
+  projectRoot: upstreams/aggregator
+  workflowFile: deploy-aggregator.yml
   ref: main
-  secretName: SUBSCRIBE_CONF_JSON_B64
   configPath: deploy/upstreams/aggregator/config/config.actions.r2.json
+  publicBaseUrl: https://sub.example.com
 
 ghcr:
   owner: your-github-owner
