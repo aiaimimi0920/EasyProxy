@@ -10,6 +10,8 @@
 
 # Logs and temp
 **/*.log
+**/__pycache__/
+**/*.pyc
 .tmp/
 tmp/
 logs/
