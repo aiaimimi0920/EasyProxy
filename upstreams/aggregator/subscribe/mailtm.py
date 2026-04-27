@@ -80,7 +80,7 @@ class TemporaryMail(object):
                 return None
 
             return messages[0]
-        except:
+        except Exception:
             logger.error(f"cannot get any message from address: {account.address}")
             return None
 
@@ -94,7 +94,7 @@ class TemporaryMail(object):
             # return "".join(re.findall(regex, text))
             masks = re.findall(regex, text)
             return masks[0] if masks else ""
-        except:
+        except Exception:
             logger.error(f"[MaskExtractError] regex exists problems, regex: {regex}")
             return ""
 
@@ -133,7 +133,7 @@ class RootSh(TemporaryMail):
                 self.headers["Cookie"] = response.getheader("Set-Cookie")
                 try:
                     content = str(content, encoding="utf8")
-                except:
+                except Exception:
                     content = gzip.decompress(content).decode("utf8")
             except Exception:
                 pass
@@ -181,7 +181,7 @@ class RootSh(TemporaryMail):
                     )
                 )
                 return None
-            except:
+            except Exception:
                 if attempt >= retry - 1:
                     break
 
@@ -239,7 +239,7 @@ class RootSh(TemporaryMail):
                     f"[MailTMError] cannot get mail list from domain: {self.api_address}, email: {account.address}"
                 )
                 messages = []
-        except:
+        except Exception:
             messages = []
 
         return messages
@@ -260,7 +260,7 @@ class RootSh(TemporaryMail):
             else:
                 logger.info(f"[MailTMError] delete account {account.address} failed")
                 return False
-        except:
+        except Exception:
             return False
 
 
@@ -322,7 +322,7 @@ class SnapMail(TemporaryMail):
                 )
 
             return messages
-        except:
+        except Exception:
             logger.error(f"[MailTMError] cannot get messages, domain: {self.api_address}, address: {account.address}")
             return []
 
@@ -407,7 +407,7 @@ class LinShiEmail(TemporaryMail):
                     )
                 )
             return messages
-        except:
+        except Exception:
             return []
 
     def delete_account(self, account: Account) -> bool:
@@ -431,7 +431,7 @@ class MailTM(TemporaryMail):
 
             response = json.loads(content)
             return list(map(lambda x: x.get("domain", ""), response.get("hydra:member", [])))
-        except:
+        except Exception:
             return []
 
     def _make_account_request(self, endpoint: str, address: str, password: str, retry: int = 3) -> Dict:
@@ -455,7 +455,7 @@ class MailTM(TemporaryMail):
                     return {}
 
                 return json.loads(response.read())
-            except:
+            except Exception:
                 if attempt >= retry - 1:
                     break
 
@@ -530,8 +530,8 @@ class MailTM(TemporaryMail):
                         data=message_data,
                     )
                 )
-        except:
-            logger.error(f"failed to list messages, email: {self.address}")
+        except Exception:
+            logger.error(f"failed to list messages, email: {account.address}")
         return messages
 
     def delete_account(self, account: Account) -> bool:
@@ -611,7 +611,7 @@ class MOAKT(TemporaryMail):
 
                 self.headers["Cookie"] = response.getheader("Set-Cookie")
                 return Account(address=f"{username}@{domain}")
-            except:
+            except Exception:
                 if attempt >= retry - 1:
                     break
 
@@ -720,7 +720,7 @@ class Emailnator(TemporaryMail):
                     content = response.read()
                     try:
                         content = str(content, encoding="utf8")
-                    except:
+                    except Exception:
                         content = gzip.decompress(content).decode("utf8")
 
                     emails = json.loads(content).get("email", [])
@@ -732,7 +732,7 @@ class Emailnator(TemporaryMail):
                     )
                 )
                 return None
-            except:
+            except Exception:
                 if attempt >= retry - 1:
                     break
 
@@ -765,7 +765,7 @@ class Emailnator(TemporaryMail):
                     )
                 )
             return messages
-        except:
+        except Exception:
             return []
 
     def _get_messages(self, address: str, messageid: str = "", retry: int = 3) -> str:
@@ -790,11 +790,11 @@ class Emailnator(TemporaryMail):
                     content = response.read()
                     try:
                         content = str(content, encoding="utf8")
-                    except:
+                    except Exception:
                         content = gzip.decompress(content).decode("utf8")
 
                 return content
-            except:
+            except Exception:
                 if attempt >= retry - 1:
                     break
 

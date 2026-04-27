@@ -243,7 +243,8 @@ class AirPort:
                 api_prefix=api_prefix,
             )
 
-        except:
+        except Exception:
+            logger.debug(f"[QueryError] failed to parse register require, domain: {domain}")
             return RegisterRequire(verify=default, invite=default, recaptcha=default)
 
     def sen_email_verify(self, email: str, retry: int = 3) -> bool:
@@ -267,7 +268,7 @@ class AirPort:
                     return False
 
                 return json.loads(response.read()).get("data", False)
-            except:
+            except Exception:
                 if attempt >= retry - 1:
                     break
 
@@ -339,7 +340,7 @@ class AirPort:
                         logger.error(f"[RegisterError] cannot get token when register, domain: {self.ref}")
 
                 return cookies, authorization
-            except:
+            except Exception:
                 if attempt >= retry - 1:
                     break
 
@@ -423,7 +424,7 @@ class AirPort:
                     proxies.append(item.get("name"))
 
             return proxies
-        except:
+        except Exception:
             return []
 
     def get_subscribe(
@@ -511,7 +512,8 @@ class AirPort:
                     invite_code=invite_code,
                     retry=retry,
                 )
-            except:
+            except Exception:
+                logger.exception(f"[RegisterError] mailbox workflow failed, domain: {self.ref}")
                 return "", ""
 
     def parse(
@@ -603,7 +605,7 @@ class AirPort:
                     else:
                         if self.exclude and re.search(self.exclude, name, re.I):
                             continue
-                except:
+                except Exception:
                     logger.error(
                         f"filter proxies error, maybe include or exclude regex exists problems, include: {self.include}\texclude: {self.exclude}"
                     )
@@ -647,7 +649,7 @@ class AirPort:
                     # 重命名带网址的节点
                     regex = r"(?:https?://)?(?:[a-zA-Z0-9\u4e00-\u9fa5\-]+\.)+[a-zA-Z\u4e00-\u9fa5]{2,}"
                     name = re.sub(regex, "", name, flags=re.I)
-                except:
+                except Exception:
                     logger.error(
                         f"rename error, name: {name},\trename: {self.rename}\tseparator: {RENAME_SEPARATOR}\tchatgpt: {pattern}\tdomain: {self.ref}"
                     )
@@ -698,10 +700,8 @@ class AirPort:
                 proxies.append(item)
 
             return proxies
-        except:
-            logger.error(
-                f"[ParseError] occur error when parse data, domain: {self.ref}, message:\n{traceback.format_exc()}"
-            )
+        except Exception:
+            logger.exception(f"[ParseError] occur error when parse data, domain: {self.ref}")
             return []
 
     @staticmethod
@@ -771,12 +771,11 @@ class AirPort:
                 with open(v2ray_file, "w+", encoding="UTF8") as f:
                     f.write(text)
                     f.flush()
-            except:
+            except Exception:
                 if os.path.exists(v2ray_file):
                     os.remove(v2ray_file)
 
-                logger.error(f"save file fialed, artifact: {artifact}")
-                traceback.print_exc()
+                logger.exception(f"save file fialed, artifact: {artifact}")
 
             generate_conf = os.path.join(PATH, "subconverter", "generate.ini")
             success = subconverter.generate_conf(
