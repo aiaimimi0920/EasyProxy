@@ -3,6 +3,9 @@ package boxmgr
 import (
 	"context"
 	"errors"
+	"io"
+	"log"
+	"net"
 	"path/filepath"
 	"testing"
 	"time"
@@ -295,4 +298,89 @@ func TestNodeOperationsAcceptURIRefs(t *testing.T) {
 	if removed != nil {
 		t.Fatalf("expected node to be deleted by URI ref, got %+v", removed)
 	}
+}
+
+func TestSyncMonitorServerLifecycleRestartsOnListenChange(t *testing.T) {
+	getFreeListenAddr := func(t *testing.T) string {
+		t.Helper()
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("net.Listen() error = %v", err)
+		}
+		addr := ln.Addr().String()
+		_ = ln.Close()
+		return addr
+	}
+
+	waitReachable := func(t *testing.T, addr string, want bool) {
+		t.Helper()
+		var lastErr error
+		for i := 0; i < 20; i++ {
+			conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
+			if err == nil {
+				_ = conn.Close()
+				if want {
+					return
+				}
+			} else {
+				lastErr = err
+				if !want {
+					return
+				}
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		if want {
+			t.Fatalf("expected %s to become reachable, last error: %v", addr, lastErr)
+		}
+		t.Fatalf("expected %s to stop listening", addr)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	oldListen := getFreeListenAddr(t)
+	newListen := getFreeListenAddr(t)
+
+	monitorMgr, err := monitor.NewManager(monitor.Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	prevCfg := monitor.Config{Enabled: true, Listen: oldListen}
+	currentServer := monitor.NewServer(prevCfg, monitorMgr, log.New(io.Discard, "", 0))
+	if currentServer == nil {
+		t.Fatal("expected initial monitor server to be created")
+	}
+	currentServer.Start(ctx)
+	waitReachable(t, oldListen, true)
+
+	manager := &Manager{
+		monitorMgr:    monitorMgr,
+		monitorServer: currentServer,
+		monitorCfg: monitor.Config{
+			Enabled: true,
+			Listen:  newListen,
+		},
+		logger: defaultLogger{},
+	}
+
+	enabled := true
+	activeCfg := &config.Config{}
+	activeCfg.Management.Enabled = &enabled
+	activeCfg.Management.Listen = newListen
+
+	manager.syncMonitorServerLifecycle(ctx, prevCfg, activeCfg)
+
+	waitReachable(t, newListen, true)
+	waitReachable(t, oldListen, false)
+
+	if manager.monitorServer == nil {
+		t.Fatal("expected monitor server to remain available after restart")
+	}
+	if manager.monitorServer == currentServer {
+		t.Fatal("expected monitor server instance to be replaced after listen change")
+	}
+
+	manager.monitorServer.Shutdown(context.Background())
 }
