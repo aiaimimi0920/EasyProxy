@@ -81,14 +81,14 @@ def read_response(response: HTTPResponse, expected: int = 200, deserialize: bool
 
     try:
         text = response.read()
-    except:
+    except Exception:
         text = b""
 
     try:
         content = text.decode(encoding="UTF8")
     except UnicodeDecodeError:
         content = gzip.decompress(text).decode("UTF8")
-    except:
+    except Exception:
         content = ""
 
     if not deserialize:
@@ -99,7 +99,7 @@ def read_response(response: HTTPResponse, expected: int = 200, deserialize: bool
     try:
         data = json.loads(content)
         return data if not key else data.get(key, None)
-    except:
+    except Exception:
         return None
 
 
@@ -131,7 +131,7 @@ def write_file(filename: str, lines: str | list, overwrite: bool = True) -> None
 
         # release lock
         FILE_LOCK.release()
-    except:
+    except Exception:
         print(f"write {lines} to file {filename} failed")
 
 
@@ -417,7 +417,7 @@ def generate_subscription_links(data: dict, address: str, reader: database.Reade
 def check(url: str, filepath: str, reader: database.Reader) -> RunningState:
     try:
         address = parse.urlparse(url=url).hostname
-    except:
+    except Exception:
         print(f"cannot extract host from url: {url}")
         return None
 
@@ -473,7 +473,7 @@ def multi_thread_run(
                 result = future.result()
                 index = collections[future]
                 results[index] = result
-            except:
+            except Exception:
                 print(f"function {funcname} execution generated an exception, message:\n{traceback.format_exc()}")
     except KeyboardInterrupt:
         for future in list(locals().get("collections", {}).keys()):

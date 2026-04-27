@@ -360,7 +360,7 @@ def check(domain: str) -> bool:
         if content:
             data = json.loads(content)
             return "ret" in data and data["ret"] == -1
-    except:
+    except Exception:
         pass
 
     return False
@@ -533,7 +533,7 @@ def get_telegram_pages(channel: str) -> int:
         regex = f'<link\s+rel="canonical"\s+href="/s/{channel}\?before=(\d+)">'
         groups = re.findall(regex, content)
         before = int(groups[0]) if groups else before
-    except:
+    except Exception:
         print(f"[CrawlError] cannot count page num, chanel: {channel}")
 
     return before
@@ -551,7 +551,7 @@ def extract_airport_site(url: str) -> list:
         regex = 'href="(https?://(?:[a-zA-Z0-9\u4e00-\u9fa5\-]+\.)+[a-zA-Z0-9\u4e00-\u9fa5\-]+/?)"\s+target="_blank"\s+rel="noopener">'
         groups = re.findall(regex, content)
         return list(set(groups)) if groups else []
-    except:
+    except Exception:
         return []
 
 

@@ -69,7 +69,7 @@ def convert(chars: bytes) -> list:
                     result = parse_vmess(node["raw_node"], uuid)
                     if result:
                         arrays.append(result)
-                except:
+                except Exception:
                     pass
         return arrays
     except Exception as e:
@@ -236,7 +236,7 @@ def check(domain: str) -> bool:
         if content:
             data = json.loads(content)
             return "ret" in data and data["ret"] == -1
-    except:
+    except Exception:
         pass
 
     return False

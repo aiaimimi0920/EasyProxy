@@ -99,7 +99,7 @@ def login(
 
                 time.sleep(random.randint(5, 15) / 10)
             return successed, headers
-        except:
+        except Exception:
             if attempt >= max(1, retry) - 1:
                 break
 
@@ -147,7 +147,7 @@ def checkin(
                             message = data.get("msg", "")
                             logging.info(f"[PFVPN] checkin successed, message: {message}")
                             break
-                    except:
+                    except Exception:
                         logging.error(f"[PFVPNError] checkin failed, message: {content}")
 
                 time.sleep(random.randint(5, 15) / 10)
@@ -159,7 +159,7 @@ def checkin(
                 headers["x-cache"] = "BYPASS"
             if attempt >= max(1, retry) - 1:
                 break
-        except:
+        except Exception:
             if attempt >= max(1, retry) - 1:
                 break
 
@@ -195,7 +195,7 @@ def run(domain: str, params: dict, timeout: int) -> bool:
             return False
 
         passwd = b64decode(passwd)
-    except:
+    except Exception:
         logging.error(f"[PFVPNError] username=[{username}], password error, please encoding it with base64")
         return False
 
@@ -319,7 +319,7 @@ def bypass(
                 cookie = add_or_replace(source=cookie, dest=f"{guk}; lang=zh-cn")
                 headers["cookie"] = cookie
             return successed, headers
-        except:
+        except Exception:
             if attempt >= max(1, retry) - 1:
                 break
 
@@ -381,10 +381,10 @@ def read(response: HTTPResponse) -> str:
         content = response.read()
         try:
             content = gzip.decompress(content).decode("utf8")
-        except:
+        except Exception:
             content = str(content, encoding="utf8")
         return content
-    except:
+    except Exception:
         return ""
 
 
@@ -413,7 +413,7 @@ def loadconf(filename: str = "") -> dict:
                         }
                     )
                 configs["accounts"] = accounts
-    except:
+    except Exception:
         logging.error(f"[PFVPNError] loading config error, filename: {filename}")
 
     return configs

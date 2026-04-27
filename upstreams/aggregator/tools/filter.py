@@ -102,11 +102,11 @@ def http_get(url: str, headers: dict = None, retry: int = 3, timeout: int = 6) -
                     content = payload.decode("utf8")
                 except UnicodeDecodeError:
                     content = gzip.decompress(payload).decode("utf8")
-                except:
+                except Exception:
                     content = payload.decode("utf8", errors="replace")
 
             return status, content
-        except:
+        except Exception:
             continue
 
     return 400, ""
@@ -117,7 +117,7 @@ def fetch_proxies(prefix: str, provider: str, headers: dict, retry: int = 3) -> 
     _, content = http_get(url=url, headers=headers, retry=retry, timeout=30)
     try:
         return json.loads(content).get("proxies", [])
-    except:
+    except Exception:
         return []
 
 
@@ -170,7 +170,7 @@ def reload(prefix: str, secret: str, retry: int = 3) -> bool:
             response = urllib.request.urlopen(request, timeout=10, context=CTX)
             if response.getcode() == 204:
                 success = True
-        except:
+        except Exception:
             pass
 
         count += 1

@@ -61,11 +61,11 @@ def login(url: str, params: dict, headers: dict, retry: int = 3) -> tuple[str, s
                 try:
                     data = json.loads(response.read().decode("UTF8")).get("data", {})
                     authorization = data.get("auth_data", "")
-                except:
+                except Exception:
                     pass
 
             return cookies, authorization
-        except:
+        except Exception:
             if attempt >= max(1, retry) - 1:
                 break
 
@@ -187,7 +187,7 @@ def config_load(filename) -> dict:
     try:
         config = open(filename, "r").read()
         return json.loads(config)
-    except:
+    except Exception:
         return None
 
 

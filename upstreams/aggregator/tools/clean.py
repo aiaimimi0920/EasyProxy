@@ -152,14 +152,14 @@ def read_response(response: HTTPResponse, expected: int = 200, deserialize: bool
 
     try:
         text = response.read()
-    except:
+    except Exception:
         text = b""
 
     try:
         content = text.decode(encoding="UTF8")
     except UnicodeDecodeError:
         content = gzip.decompress(text).decode("UTF8")
-    except:
+    except Exception:
         content = ""
 
     if not deserialize:
@@ -170,7 +170,7 @@ def read_response(response: HTTPResponse, expected: int = 200, deserialize: bool
     try:
         data = json.loads(content)
         return data if not key else data.get(key, None)
-    except:
+    except Exception:
         return None
 
 
@@ -188,7 +188,7 @@ def main(args: argparse.Namespace) -> None:
             f.seek(0, 0)
             yaml.add_multi_constructor("str", lambda loader, suffix, node: str(node.value), Loader=yaml.SafeLoader)
             nodes = yaml.load(f, Loader=yaml.SafeLoader).get("proxies", [])
-        except:
+        except Exception:
             nodes = []
 
         if nodes and args.location:
