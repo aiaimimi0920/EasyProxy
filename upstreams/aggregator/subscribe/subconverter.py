@@ -117,7 +117,7 @@ def generate_conf(
             FILE_LOCK.release()
 
         return True
-    except:
+    except Exception:
         return False
 
 

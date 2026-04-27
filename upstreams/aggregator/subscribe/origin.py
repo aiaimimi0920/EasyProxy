@@ -33,7 +33,7 @@ class Origin(enum.Enum):
         try:
             name = name.upper()
             source = Origin.__getitem__(name)
-        except:
+        except Exception:
             source = Origin.OWNED
 
         return source.value.expire

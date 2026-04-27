@@ -289,7 +289,7 @@ def aggregate(args: argparse.Namespace) -> None:
         # 关闭clash
         try:
             process.terminate()
-        except:
+        except Exception:
             logger.error(f"terminate clash process error")
 
         nodes = [proxies[i] for i in range(len(proxies)) if masks[i]]

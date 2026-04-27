@@ -187,5 +187,5 @@ def load(config: push.PushConfig, persist: dict, retry: bool = False) -> tuple[d
             unregisters = [[k, v[0], v[1]] for k, v in data.items()]
 
         return exists, unregisters, unknowns, rawdata
-    except:
+    except Exception:
         return {}, [], {}, {}

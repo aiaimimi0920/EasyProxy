@@ -17,5 +17,5 @@ def persist(config: push.PushConfig, data: dict, persist: dict, meta: str = "") 
             return
 
         pushtool.push_to(content=json.dumps(data), config=persist, group="subscribes")
-    except:
+    except Exception:
         logger.error(f"[{meta}] occur error when persist subscribes")

@@ -148,7 +148,7 @@ def executewrapper(task_conf: TaskConfig) -> tuple[int, list]:
 
 
 def liveness_fillter(proxies: list) -> tuple[list, list]:
-    if not list:
+    if not proxies:
         return [], []
 
     checks, nochecks = [], []
@@ -306,8 +306,8 @@ def refresh(config: dict, push: PushTo, alives: dict, filepath: str = "", skip_r
                     content = json.dumps(data)
                     push.push_to(content=content, config=pushconf, group="crawled-remark")
                     logger.info(f"[UpdateInfo] found {count} invalid crawled subscriptions")
-            except:
-                logger.error(f"[UpdateError] remark invalid crawled subscriptions failed")
+            except Exception:
+                logger.exception("[UpdateError] remark invalid crawled subscriptions failed")
 
     update_conf = config.get("update", {})
     if not update_conf.get("enable", False):

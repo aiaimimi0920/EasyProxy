@@ -163,7 +163,7 @@ def collect_subs(params: dict) -> list[dict]:
     try:
         remain = max(params.get("remain", 0), 0)
         life = max(params.get("life", 0), 0)
-    except:
+    except Exception:
         logger.warning(f"[CollectSub] invalid remain or life, set to 0")
         remain, life = 0, 0
 
