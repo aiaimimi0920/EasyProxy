@@ -144,6 +144,25 @@ function Invoke-EasyProxyGhcrBuildxPublish {
     $auth = Resolve-EasyProxyGhcrAuth -ImagePrefix $ImagePrefix -GhcrUsername $GhcrUsername -GhcrToken $GhcrToken
     $fullImage = "${ImagePrefix}/${ImageName}:${ReleaseTag}"
 
+    $capturePath = [System.Environment]::GetEnvironmentVariable('EASYPROXY_TEST_CAPTURE_GHCR_BUILDS_PATH')
+    if (-not [string]::IsNullOrWhiteSpace($capturePath)) {
+        $record = [pscustomobject]@{
+            RepoRoot       = $RepoRoot
+            DockerfilePath = $DockerfilePath
+            ImagePrefix    = $ImagePrefix
+            ImageName      = $ImageName
+            ReleaseTag     = $ReleaseTag
+            Platform       = $Platform
+            GhcrUsername   = $auth.Username
+            LoadOnly       = [bool]$LoadOnly
+            NoCache        = [bool]$NoCache
+            FullImage      = $fullImage
+        }
+        $line = $record | ConvertTo-Json -Compress -Depth 5
+        Add-Content -LiteralPath $capturePath -Value $line -Encoding UTF8
+        return
+    }
+
     Write-Host "Building image: $fullImage"
     Write-Host "Context: $RepoRoot"
     Write-Host "Dockerfile: $DockerfilePath"

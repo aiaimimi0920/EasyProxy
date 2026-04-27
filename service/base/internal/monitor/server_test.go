@@ -458,6 +458,17 @@ func TestHandleSettingsReportsReloadRequirement(t *testing.T) {
 			}(),
 			wantReload: true,
 		},
+		{
+			name:        "management listen change",
+			initialMode: "pool",
+			initialSkip: false,
+			req: func() allSettingsRequest {
+				r := baseReq
+				r.ManagementListen = "127.0.0.1:9999"
+				return r
+			}(),
+			wantReload: true,
+		},
 	}
 
 	for _, tt := range cases {

@@ -69,6 +69,19 @@ function Invoke-EasyProxyExternalCommand {
     }
 
     try {
+        $capturePath = [System.Environment]::GetEnvironmentVariable('EASYPROXY_TEST_CAPTURE_EXTERNAL_COMMANDS_PATH')
+        if (-not [string]::IsNullOrWhiteSpace($capturePath)) {
+            $record = [pscustomobject]@{
+                FilePath         = $FilePath
+                Arguments        = @($Arguments)
+                WorkingDirectory = $WorkingDirectory
+                FailureMessage   = $FailureMessage
+            }
+            $line = $record | ConvertTo-Json -Compress -Depth 5
+            Add-Content -LiteralPath $capturePath -Value $line -Encoding UTF8
+            return
+        }
+
         & $FilePath @Arguments
         if ($LASTEXITCODE -ne 0) {
             if ([string]::IsNullOrWhiteSpace($FailureMessage)) {
