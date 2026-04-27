@@ -31,7 +31,14 @@ foreach ($required in @(
 }
 
 $resolvedConfigPath = Resolve-EasyProxyPath -Path $ConfigPath
-$renderServiceOutput = Join-Path $env:TEMP ("easyproxy-service-base-runtime-" + [Guid]::NewGuid().ToString("N") + ".yaml")
+$tempRoot = [string]$env:TEMP
+if ([string]::IsNullOrWhiteSpace($tempRoot)) {
+    $tempRoot = [System.IO.Path]::GetTempPath()
+}
+if ([string]::IsNullOrWhiteSpace($tempRoot)) {
+    throw "Unable to resolve a temporary directory for rendering service/base config."
+}
+$renderServiceOutput = Join-Path $tempRoot ("easyproxy-service-base-runtime-" + [Guid]::NewGuid().ToString("N") + ".yaml")
 
 try {
     & (Join-Path $PSScriptRoot 'render-derived-configs.ps1') `
