@@ -120,6 +120,8 @@ jobs:
         shell: bash
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_AUTH_EMAIL: ${{ secrets.CLOUDFLARE_AUTH_EMAIL }}
+          CLOUDFLARE_GLOBAL_API_KEY: ${{ secrets.CLOUDFLARE_GLOBAL_API_KEY }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           MISUB_ADMIN_PASSWORD: ${{ secrets.MISUB_ADMIN_PASSWORD }}
           MISUB_COOKIE_SECRET: ${{ secrets.MISUB_COOKIE_SECRET }}
@@ -128,12 +130,18 @@ jobs:
           MISUB_CALLBACK_URL: ${{ vars.EASYPROXY_MISUB_CALLBACK_URL }}
         run: |
           set -euo pipefail
-          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID MISUB_ADMIN_PASSWORD MISUB_COOKIE_SECRET MISUB_MANIFEST_TOKEN MISUB_PUBLIC_URL MISUB_CALLBACK_URL; do
+          for name in CLOUDFLARE_ACCOUNT_ID MISUB_ADMIN_PASSWORD MISUB_COOKIE_SECRET MISUB_MANIFEST_TOKEN MISUB_PUBLIC_URL MISUB_CALLBACK_URL; do
             if [[ -z "${!name:-}" ]]; then
               echo "::error::$name is required for MiSub Pages deployment."
               exit 1
             fi
           done
+          if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
+            if [[ -z "${CLOUDFLARE_AUTH_EMAIL:-}" || -z "${CLOUDFLARE_GLOBAL_API_KEY:-}" ]]; then
+              echo "::error::Provide either CLOUDFLARE_API_TOKEN or CLOUDFLARE_AUTH_EMAIL+CLOUDFLARE_GLOBAL_API_KEY for MiSub deployment."
+              exit 1
+            fi
+          fi
 
       - name: Install MiSub dependencies
         working-directory: upstreams/misub
@@ -149,6 +157,8 @@ jobs:
         working-directory: upstreams/misub
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_EMAIL: ${{ secrets.CLOUDFLARE_AUTH_EMAIL }}
+          CLOUDFLARE_API_KEY: ${{ secrets.CLOUDFLARE_GLOBAL_API_KEY }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           MISUB_PUBLIC_URL: ${{ vars.EASYPROXY_MISUB_PUBLIC_URL }}
           MISUB_CALLBACK_URL: ${{ vars.EASYPROXY_MISUB_CALLBACK_URL }}
@@ -207,6 +217,8 @@ jobs:
         working-directory: upstreams/misub
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_EMAIL: ${{ secrets.CLOUDFLARE_AUTH_EMAIL }}
+          CLOUDFLARE_API_KEY: ${{ secrets.CLOUDFLARE_GLOBAL_API_KEY }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           PROJECT_NAME: ${{ steps.misub_resources.outputs.project_name }}
           MISUB_ADMIN_PASSWORD: ${{ secrets.MISUB_ADMIN_PASSWORD }}
@@ -223,7 +235,6 @@ jobs:
         id: deploy_misub
         uses: cloudflare/wrangler-action@v3
         with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           gitHubToken: ${{ secrets.GITHUB_TOKEN }}
           command: >-
@@ -231,6 +242,10 @@ jobs:
             --project-name=${{ steps.misub_resources.outputs.project_name }}
             --branch=${{ steps.misub_resources.outputs.branch_name }}
             --config ${{ steps.misub_resources.outputs.runtime_config_path }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_EMAIL: ${{ secrets.CLOUDFLARE_AUTH_EMAIL }}
+          CLOUDFLARE_API_KEY: ${{ secrets.CLOUDFLARE_GLOBAL_API_KEY }}
 
       - name: Verify MiSub Pages deployment
         if: ${{ inputs.run_verification }}
@@ -244,8 +259,12 @@ jobs:
           set -euo pipefail
           python -m pip install --upgrade pip
           python -m pip install requests
+          base_url="${{ steps.deploy_misub.outputs['deployment-url'] }}"
+          if [[ -z "$base_url" ]]; then
+            base_url="${MISUB_PUBLIC_URL}"
+          fi
           python scripts/verify-misub-deploy.py \
-            --base-url "${MISUB_PUBLIC_URL}" \
+            --base-url "${base_url}" \
             --admin-password "${MISUB_ADMIN_PASSWORD}" \
             --manifest-token "${MISUB_MANIFEST_TOKEN}" \
             --manifest-profile-id "${MISUB_MANIFEST_PROFILE_ID:-default}"
@@ -284,27 +303,37 @@ jobs:
         shell: bash
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_AUTH_EMAIL: ${{ secrets.CLOUDFLARE_AUTH_EMAIL }}
+          CLOUDFLARE_GLOBAL_API_KEY: ${{ secrets.CLOUDFLARE_GLOBAL_API_KEY }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           ECH_TOKEN: ${{ secrets.ECH_TOKEN }}
           ECH_WORKER_PUBLIC_URL: ${{ vars.EASYPROXY_ECH_WORKER_PUBLIC_URL }}
         run: |
           set -euo pipefail
-          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID ECH_TOKEN ECH_WORKER_PUBLIC_URL; do
+          for name in CLOUDFLARE_ACCOUNT_ID ECH_TOKEN ECH_WORKER_PUBLIC_URL; do
             if [[ -z "${!name:-}" ]]; then
               echo "::error::$name is required for ech-workers-cloudflare deployment."
               exit 1
             fi
           done
+          if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
+            if [[ -z "${CLOUDFLARE_AUTH_EMAIL:-}" || -z "${CLOUDFLARE_GLOBAL_API_KEY:-}" ]]; then
+              echo "::error::Provide either CLOUDFLARE_API_TOKEN or CLOUDFLARE_AUTH_EMAIL+CLOUDFLARE_GLOBAL_API_KEY for worker deployment."
+              exit 1
+            fi
+          fi
 
       - name: Deploy ech-workers-cloudflare
         uses: cloudflare/wrangler-action@v3
         with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: deploy --config workers/ech-workers-cloudflare/wrangler.jsonc
           secrets: |
             ECH_TOKEN
         env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_EMAIL: ${{ secrets.CLOUDFLARE_AUTH_EMAIL }}
+          CLOUDFLARE_API_KEY: ${{ secrets.CLOUDFLARE_GLOBAL_API_KEY }}
           ECH_TOKEN: ${{ secrets.ECH_TOKEN }}
 
       - name: Verify ech-workers-cloudflare deployment

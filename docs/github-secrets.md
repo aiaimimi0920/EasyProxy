@@ -48,7 +48,9 @@ workflow:
 
 | Secret | Required For | Purpose |
 | --- | --- | --- |
-| `CLOUDFLARE_API_TOKEN` | MiSub Pages, ech-workers-cloudflare | Cloudflare deployment auth |
+| `CLOUDFLARE_API_TOKEN` | MiSub Pages, ech-workers-cloudflare | Preferred Cloudflare deployment auth |
+| `CLOUDFLARE_AUTH_EMAIL` | MiSub Pages, ech-workers-cloudflare | Fallback auth email when using Cloudflare Global API Key |
+| `CLOUDFLARE_GLOBAL_API_KEY` | MiSub Pages, ech-workers-cloudflare | Fallback deployment auth when API token is unavailable |
 | `CLOUDFLARE_ACCOUNT_ID` | MiSub Pages, ech-workers-cloudflare | Cloudflare account targeting |
 | `MISUB_ADMIN_PASSWORD` | MiSub Pages | MiSub admin login secret |
 | `MISUB_COOKIE_SECRET` | MiSub Pages | MiSub session signing secret |
@@ -56,6 +58,10 @@ workflow:
 | `ECH_TOKEN` | ech-workers-cloudflare | Worker-side access token |
 
 Notes:
+
+- `deploy-cloudflare.yml` accepts either:
+  - `CLOUDFLARE_API_TOKEN`
+  - or `CLOUDFLARE_AUTH_EMAIL` + `CLOUDFLARE_GLOBAL_API_KEY`
 
 - `MISUB_PUBLIC_URL` and `MISUB_CALLBACK_URL` are not secrets. They are
   expected as repository variables:
@@ -95,8 +101,6 @@ Add these repository secrets before using that workflow:
 | `EASYPROXY_AGGREGATOR_R2_ACCESS_KEY_ID` | R2 write credential for published artifacts |
 | `EASYPROXY_AGGREGATOR_R2_SECRET_ACCESS_KEY` | R2 write credential secret |
 | `EASYPROXY_AGGREGATOR_R2_ACCOUNT_ID` | Cloudflare account ID for the target R2 bucket |
-| `EASYPROXY_AGGREGATOR_SEED_SUB_KEY` | Replaces `__KEY_PLACEHOLDER__` in the tracked aggregator config template |
-| `EASYPROXY_AGGREGATOR_SHARED_TOKEN` | Replaces `__TOKEN_PLACEHOLDER__` in the tracked aggregator config template |
 
 Optional repository variables:
 
@@ -109,3 +113,14 @@ Optional repository variables:
 | `EASYPROXY_AGGREGATOR_REACHABLE` | Optional passthrough to the upstream runtime |
 | `EASYPROXY_AGGREGATOR_ENABLE_SPECIAL_PROTOCOLS` | Optional passthrough to the upstream runtime |
 | `EASYPROXY_AGGREGATOR_LOG_LEVEL_DEBUG` | Optional passthrough to the upstream runtime |
+
+Optional repository secrets:
+
+| Secret | Purpose |
+| --- | --- |
+| `EASYPROXY_AGGREGATOR_SEED_SUB_KEY` | Enables the tracked disabled seed-sub template entries when present |
+| `EASYPROXY_AGGREGATOR_SHARED_TOKEN` | Enables the tracked Issue #91 shared fallback seed when present |
+
+If the placeholder-backed aggregator secrets are missing, the native
+materialization step disables only those affected seed entries instead of
+failing the whole deployment.

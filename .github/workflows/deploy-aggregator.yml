@@ -193,12 +193,9 @@ jobs:
       - name: Validate native aggregator secrets
         if: steps.change_gate.outputs.should_deploy == 'true'
         shell: bash
-        env:
-          EASYPROXY_AGGREGATOR_SEED_SUB_KEY: ${{ secrets.EASYPROXY_AGGREGATOR_SEED_SUB_KEY }}
-          EASYPROXY_AGGREGATOR_SHARED_TOKEN: ${{ secrets.EASYPROXY_AGGREGATOR_SHARED_TOKEN }}
         run: |
           set -euo pipefail
-          for name in GH_TOKEN R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_ACCOUNT_ID EASYPROXY_AGGREGATOR_SEED_SUB_KEY EASYPROXY_AGGREGATOR_SHARED_TOKEN; do
+          for name in GH_TOKEN R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_ACCOUNT_ID; do
             if [[ -z "${!name:-}" ]]; then
               echo "::error::${name} is required for native aggregator deployment."
               exit 1

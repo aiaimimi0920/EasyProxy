@@ -57,9 +57,15 @@ class AggregatorMaterializeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             template = Path(temp_dir) / "config.template.json"
             output = Path(temp_dir) / "config.runtime.json"
-            template.write_text('{"token":"__TOKEN_PLACEHOLDER__"}', encoding="utf-8")
+            template.write_text(
+                '{"domains":[{"name":"placeholder-source","enable":true,"sub":["https://example.com?token=__TOKEN_PLACEHOLDER__"]}]}',
+                encoding="utf-8",
+            )
 
             result = self.run_script(template, output)
 
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("EASYPROXY_AGGREGATOR_SHARED_TOKEN", result.stderr)
+            self.assertEqual(result.returncode, 0, msg=result.stderr or result.stdout)
+            rendered = output.read_text(encoding="utf-8")
+            self.assertNotIn("PLACEHOLDER", rendered)
+            self.assertIn('"enable": false', rendered)
+            self.assertIn("[disabled-missing-secret]", rendered)
