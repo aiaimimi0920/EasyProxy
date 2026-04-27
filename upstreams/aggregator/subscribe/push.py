@@ -47,7 +47,7 @@ class PushTo(object):
                 f.flush()
 
             return True
-        except:
+        except Exception:
             return False
 
     def push_file(self, filepath: str, config: dict, group: str = "", retry: int = 5) -> bool:
@@ -74,7 +74,7 @@ class PushTo(object):
         if payload and isinstance(payload, dict):
             try:
                 data = json.dumps(payload).encode("UTF8")
-            except:
+            except Exception:
                 logger.error(f"[PushError] invalid payload, domain: {self.name}")
                 return False
 
@@ -293,7 +293,7 @@ class PushToPastefy(PushToDevbin):
 
         try:
             return json.loads(response.read()).get("success", "false")
-        except:
+        except Exception:
             return False
 
     def _error_handler(self, group: str = "") -> None:
@@ -372,7 +372,7 @@ class PushToImperial(PushToPasteGG):
 
         try:
             return json.loads(response.read()).get("success", "false")
-        except:
+        except Exception:
             return False
 
 
@@ -526,7 +526,7 @@ class PushToQBin(PushToPastefy):
         try:
             result = json.loads(response.read())
             return result.get("status", 403) == 200
-        except:
+        except Exception:
             return False
 
     def filter_push(self, config: dict) -> dict:

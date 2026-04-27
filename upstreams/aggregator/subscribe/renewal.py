@@ -123,13 +123,13 @@ def login(url: str, params: dict, headers: dict, retry: int = 3, jsonify: bool =
                 try:
                     data = json.loads(content).get("data", {})
                     authorization = data.get("auth_data", "")
-                except:
+                except Exception:
                     logger.error(content)
             else:
                 logger.info(response.read().decode("UTF8"))
 
             return cookies, authorization
-        except:
+        except Exception:
             if attempt >= max(1, retry) - 1:
                 break
 
@@ -157,7 +157,7 @@ def order(url: str, params: dict, headers: dict, retry: int = 3, jsonify: bool =
                 logger.error(response.read().decode("UTF8"))
 
             return trade_no
-        except:
+        except Exception:
             if attempt >= max(1, retry) - 1:
                 break
 
@@ -181,7 +181,7 @@ def fetch(url: str, headers: dict, retry: int = 3) -> str:
                     return item["trade_no"]
 
             return None
-        except:
+        except Exception:
             if attempt >= max(1, retry) - 1:
                 break
 
@@ -208,7 +208,7 @@ def payment(url: str, params: dict, headers: dict, retry: int = 3, jsonify: bool
                 logger.info(response.read().decode("UTF8"))
 
             return success
-        except:
+        except Exception:
             if attempt >= max(1, retry) - 1:
                 break
 
@@ -279,7 +279,7 @@ def get_payment_method(
         data = json.loads(content).get("data", [])
         methods = [item.get("id") for item in data if item.get("id", -1) >= 0]
         return methods
-    except:
+    except Exception:
         logger.error(f"cannot get payment method because response is empty, domain: {domain}")
         return []
 
@@ -303,7 +303,7 @@ def unclosed_ticket(domain: str, headers: dict, api_prefix: str = "") -> tuple[i
                 break
 
         return tid, timestamp, subject
-    except:
+    except Exception:
         logger.error(f"[TicketError] failed fetch last ticket, domain: {domain}, content: {content}")
         return -1, -1, ""
 
@@ -332,11 +332,11 @@ def close_ticket(
                 content = response.read().decode("UTF8")
                 try:
                     return json.loads(content).get("data", False)
-                except:
+                except Exception:
                     logger.error(f"[TicketError] failed submit ticket, domain: {domain}, message: {content}")
 
             return False
-        except:
+        except Exception:
             if attempt >= retry - 1:
                 break
 
@@ -414,11 +414,11 @@ def submit_ticket(
                 content = response.read().decode("UTF8")
                 try:
                     return json.loads(content).get("data", False)
-                except:
+                except Exception:
                     logger.error(f"[TicketError] failed submit ticket, domain: {domain}, message: {content}")
 
             return False
-        except:
+        except Exception:
             if attempt >= retry - 1:
                 break
 
@@ -489,9 +489,8 @@ def get_free_plan(
             return None
 
         # 查找流量最多的免费套餐
-        sorted(plans, key=lambda x: x.trafficflow, reverse=True)
-        return plans[0]
-    except:
+        return max(plans, key=lambda x: x.trafficflow)
+    except Exception:
         logger.error(f"cannot fetch free plans because response is empty, domain: {domain}")
         return None
 
@@ -585,7 +584,7 @@ def get_subscribe_info(
             sub_url=sub_url,
             reset_day=reset_day,
         )
-    except:
+    except Exception:
         logger.error(f"cannot get subscribe information, domain: {domain}, response: {content}")
         return None
 
@@ -664,7 +663,7 @@ def flow(
             jsonify=jsonify,
         )
         if not result:
-            logger.info("failed to renewal because coupon is valid")
+            logger.info("failed to renewal because coupon is invalid")
             return False
 
         payload["coupon_code"] = coupon
@@ -774,6 +773,7 @@ def add_traffic_flow(domain: str, params: dict, jsonify: bool = False) -> str:
         # 提交工单重置流量
         ticket = params.get("ticket", {})
         if isinstance(ticket, dict) and ticket:
+            ticket = dict(ticket)
             enable = ticket.pop("enable", True)
             autoreset = ticket.pop("autoreset", False)
             # 过期时间 <= 5 或者 流量使用例 >= 0.8 或者 重置日期 <= 1 且不会自动重置时提交工单
@@ -793,6 +793,6 @@ def add_traffic_flow(domain: str, params: dict, jsonify: bool = False) -> str:
                 logger.info(f"ticket submit {'successed' if success else 'failed'}, domain: {domain}")
 
         return subscribe.sub_url
-    except:
-        traceback.print_exc()
+    except Exception:
+        logger.exception(f"[RenewalError] add traffic flow failed, domain: {domain}")
         return ""
