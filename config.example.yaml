@@ -87,6 +87,11 @@ misub:
   pages:
     projectName: misub-git
     branch: main
+    publicUrl: https://misub.example.com
+    callbackUrl: https://misub.example.com
+    d1DatabaseName: misub
+    d1DatabaseBinding: MISUB_DB
+    verifyManifestProfileId: default
   docker:
     composeFile: upstreams/misub/docker-compose.yml
     envOutput: upstreams/misub/.env
@@ -121,5 +126,18 @@ echWorkersCloudflare:
   projectRoot: workers/ech-workers-cloudflare
   wranglerConfig: workers/ech-workers-cloudflare/wrangler.jsonc
   devVarsOutput: workers/ech-workers-cloudflare/.dev.vars
+  publicUrl: https://proxyservice-ech-workers.example.com
   secrets:
     ECH_TOKEN: ""
+
+distribution:
+  serviceBase:
+    accountId: ""
+    bucket: easyproxy-private
+    endpoint: ""
+    configObjectKey: service-base/config.yaml
+    manifestObjectKey: service-base/manifest.json
+    accessKeyId: ""
+    secretAccessKey: ""
+    readAccessKeyId: ""
+    readSecretAccessKey: ""

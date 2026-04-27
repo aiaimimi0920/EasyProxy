@@ -24,6 +24,7 @@ config.yaml
 **/.env.*.local
 **/.dev.vars
 deploy/service/base/config.yaml
+deploy/service/base/bootstrap/
 deploy/service/base/data/
 deploy/upstreams/misub/config.local.*
 workers/ech-workers-cloudflare/.dev.vars

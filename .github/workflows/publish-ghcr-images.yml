@@ -159,6 +159,20 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Pull EasyProxy service image for smoke
+        if: steps.prep.outputs.target == 'both' || steps.prep.outputs.target == 'easyproxy'
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull "ghcr.io/${{ steps.prep.outputs.owner_lc }}/easy-proxy-monorepo-service:${{ steps.prep.outputs.release_tag }}"
+
+      - name: Smoke EasyProxy service image
+        if: steps.prep.outputs.target == 'both' || steps.prep.outputs.target == 'easyproxy'
+        shell: pwsh
+        run: |
+          .\deploy\service\base\scripts\smoke-easy-proxy-docker-api.ps1 `
+            -Image "ghcr.io/${{ steps.prep.outputs.owner_lc }}/easy-proxy-monorepo-service:${{ steps.prep.outputs.release_tag }}"
+
       - name: Extract metadata for ech-workers image
         if: steps.prep.outputs.target == 'both' || steps.prep.outputs.target == 'ech-workers'
         id: meta_worker
@@ -180,6 +194,20 @@ jobs:
           labels: ${{ steps.meta_worker.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Pull ech-workers image for smoke
+        if: steps.prep.outputs.target == 'both' || steps.prep.outputs.target == 'ech-workers'
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull "ghcr.io/${{ steps.prep.outputs.owner_lc }}/ech-workers-monorepo:${{ steps.prep.outputs.release_tag }}"
+
+      - name: Smoke ech-workers image
+        if: steps.prep.outputs.target == 'both' || steps.prep.outputs.target == 'ech-workers'
+        shell: pwsh
+        run: |
+          .\deploy\upstreams\ech-workers\scripts\smoke-ech-workers-docker.ps1 `
+            -Image "ghcr.io/${{ steps.prep.outputs.owner_lc }}/ech-workers-monorepo:${{ steps.prep.outputs.release_tag }}"
 
       - name: Job summary
         shell: bash

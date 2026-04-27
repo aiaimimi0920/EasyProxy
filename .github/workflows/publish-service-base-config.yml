@@ -1,0 +1,300 @@
+name: Publish Service Base Config
+
+'on':
+  push:
+    tags:
+      - 'release-*'
+      - 'v*'
+      - 'service-base-config-*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Optional config release tag override
+        required: false
+        type: string
+      generate_encrypted_import_code:
+        description: Generate encrypted owner-only import-code artifact
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    name: Service base config preflight
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.10'
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: service/base/go.mod
+          cache-dependency-path: service/base/go.sum
+
+      - name: Install Python test dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install PyYAML tqdm requests websockets
+
+      - name: Run root script smoke tests
+        shell: pwsh
+        run: |
+          python -m unittest discover -s "tests" -p "test_*.py" -v
+
+      - name: Run aggregator regression tests
+        shell: pwsh
+        run: |
+          python -m unittest discover -s "upstreams/aggregator/tests" -p "test_*.py" -v
+
+      - name: Run service/base monitor tests
+        shell: pwsh
+        working-directory: service/base
+        run: |
+          go test ./internal/monitor
+
+      - name: Run service/base boxmgr tests
+        shell: pwsh
+        working-directory: service/base
+        run: |
+          go test ./internal/boxmgr
+
+      - name: Run service/base config tests
+        shell: pwsh
+        working-directory: service/base
+        run: |
+          go test ./internal/config
+
+  publish:
+    name: Upload service/base runtime config distribution
+    runs-on: ubuntu-latest
+    needs: preflight
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Assert config distribution secrets
+        shell: bash
+        env:
+          EASYPROXY_ROOT_CONFIG_YAML_B64: ${{ secrets.EASYPROXY_ROOT_CONFIG_YAML_B64 }}
+          EASYPROXY_R2_CONFIG_ACCOUNT_ID: ${{ secrets.EASYPROXY_R2_CONFIG_ACCOUNT_ID }}
+          EASYPROXY_R2_CONFIG_BUCKET: ${{ secrets.EASYPROXY_R2_CONFIG_BUCKET }}
+          EASYPROXY_R2_CONFIG_CONFIG_OBJECT_KEY: ${{ secrets.EASYPROXY_R2_CONFIG_CONFIG_OBJECT_KEY }}
+          EASYPROXY_R2_CONFIG_MANIFEST_OBJECT_KEY: ${{ secrets.EASYPROXY_R2_CONFIG_MANIFEST_OBJECT_KEY }}
+          EASYPROXY_R2_CONFIG_UPLOAD_ACCESS_KEY_ID: ${{ secrets.EASYPROXY_R2_CONFIG_UPLOAD_ACCESS_KEY_ID }}
+          EASYPROXY_R2_CONFIG_UPLOAD_SECRET_ACCESS_KEY: ${{ secrets.EASYPROXY_R2_CONFIG_UPLOAD_SECRET_ACCESS_KEY }}
+          EASYPROXY_R2_CONFIG_READ_ACCESS_KEY_ID: ${{ secrets.EASYPROXY_R2_CONFIG_READ_ACCESS_KEY_ID }}
+          EASYPROXY_R2_CONFIG_READ_SECRET_ACCESS_KEY: ${{ secrets.EASYPROXY_R2_CONFIG_READ_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          for name in \
+            EASYPROXY_ROOT_CONFIG_YAML_B64 \
+            EASYPROXY_R2_CONFIG_ACCOUNT_ID \
+            EASYPROXY_R2_CONFIG_BUCKET \
+            EASYPROXY_R2_CONFIG_CONFIG_OBJECT_KEY \
+            EASYPROXY_R2_CONFIG_MANIFEST_OBJECT_KEY \
+            EASYPROXY_R2_CONFIG_UPLOAD_ACCESS_KEY_ID \
+            EASYPROXY_R2_CONFIG_UPLOAD_SECRET_ACCESS_KEY \
+            EASYPROXY_R2_CONFIG_READ_ACCESS_KEY_ID \
+            EASYPROXY_R2_CONFIG_READ_SECRET_ACCESS_KEY
+          do
+            if [[ -z "${!name:-}" ]]; then
+              echo "::error::${name} is required for service/base config distribution."
+              exit 1
+            fi
+          done
+
+      - name: Materialize root config
+        shell: bash
+        env:
+          EASYPROXY_ROOT_CONFIG_YAML_B64: ${{ secrets.EASYPROXY_ROOT_CONFIG_YAML_B64 }}
+        run: |
+          set -euo pipefail
+          printf '%s' "${EASYPROXY_ROOT_CONFIG_YAML_B64}" | base64 -d > config.yaml
+
+      - name: Install distribution dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install pyyaml boto3 pynacl
+
+      - name: Resolve release metadata
+        id: release_meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            release_tag="${GITHUB_REF_NAME}"
+          else
+            release_tag="${{ inputs.release_tag }}"
+            if [[ -z "${release_tag}" ]]; then
+              release_tag="service-base-config-${GITHUB_RUN_NUMBER}-${GITHUB_SHA::7}"
+            fi
+          fi
+          echo "release_tag=${release_tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload service/base config to R2
+        id: upload
+        shell: pwsh
+        env:
+          EASYPROXY_R2_CONFIG_ACCOUNT_ID: ${{ secrets.EASYPROXY_R2_CONFIG_ACCOUNT_ID }}
+          EASYPROXY_R2_CONFIG_BUCKET: ${{ secrets.EASYPROXY_R2_CONFIG_BUCKET }}
+          EASYPROXY_R2_CONFIG_ENDPOINT: ${{ secrets.EASYPROXY_R2_CONFIG_ENDPOINT }}
+          EASYPROXY_R2_CONFIG_CONFIG_OBJECT_KEY: ${{ secrets.EASYPROXY_R2_CONFIG_CONFIG_OBJECT_KEY }}
+          EASYPROXY_R2_CONFIG_MANIFEST_OBJECT_KEY: ${{ secrets.EASYPROXY_R2_CONFIG_MANIFEST_OBJECT_KEY }}
+          EASYPROXY_R2_CONFIG_UPLOAD_ACCESS_KEY_ID: ${{ secrets.EASYPROXY_R2_CONFIG_UPLOAD_ACCESS_KEY_ID }}
+          EASYPROXY_R2_CONFIG_UPLOAD_SECRET_ACCESS_KEY: ${{ secrets.EASYPROXY_R2_CONFIG_UPLOAD_SECRET_ACCESS_KEY }}
+        run: |
+          $manifestPath = Join-Path $PWD 'service-base-r2-config-manifest.json'
+          .\scripts\upload-service-base-r2-config.ps1 `
+            -ConfigPath .\config.yaml `
+            -AccountId $env:EASYPROXY_R2_CONFIG_ACCOUNT_ID `
+            -Bucket $env:EASYPROXY_R2_CONFIG_BUCKET `
+            -AccessKeyId $env:EASYPROXY_R2_CONFIG_UPLOAD_ACCESS_KEY_ID `
+            -SecretAccessKey $env:EASYPROXY_R2_CONFIG_UPLOAD_SECRET_ACCESS_KEY `
+            -ConfigObjectKey $env:EASYPROXY_R2_CONFIG_CONFIG_OBJECT_KEY `
+            -ManifestObjectKey $env:EASYPROXY_R2_CONFIG_MANIFEST_OBJECT_KEY `
+            -Endpoint $env:EASYPROXY_R2_CONFIG_ENDPOINT `
+            -ReleaseVersion '${{ steps.release_meta.outputs.release_tag }}' `
+            -ManifestOutput $manifestPath
+          "path=$manifestPath" >> $env:GITHUB_OUTPUT
+
+      - name: Generate encrypted import code
+        id: import_code
+        shell: bash
+        env:
+          EASYPROXY_R2_CONFIG_ACCOUNT_ID: ${{ secrets.EASYPROXY_R2_CONFIG_ACCOUNT_ID }}
+          EASYPROXY_R2_CONFIG_BUCKET: ${{ secrets.EASYPROXY_R2_CONFIG_BUCKET }}
+          EASYPROXY_R2_CONFIG_ENDPOINT: ${{ secrets.EASYPROXY_R2_CONFIG_ENDPOINT }}
+          EASYPROXY_R2_CONFIG_MANIFEST_OBJECT_KEY: ${{ secrets.EASYPROXY_R2_CONFIG_MANIFEST_OBJECT_KEY }}
+          EASYPROXY_R2_CONFIG_READ_ACCESS_KEY_ID: ${{ secrets.EASYPROXY_R2_CONFIG_READ_ACCESS_KEY_ID }}
+          EASYPROXY_R2_CONFIG_READ_SECRET_ACCESS_KEY: ${{ secrets.EASYPROXY_R2_CONFIG_READ_SECRET_ACCESS_KEY }}
+          EASYPROXY_IMPORT_CODE_OWNER_PUBLIC_KEY: ${{ secrets.EASYPROXY_IMPORT_CODE_OWNER_PUBLIC_KEY }}
+          GENERATE_ENCRYPTED_IMPORT_CODE: ${{ github.event_name == 'workflow_dispatch' && inputs.generate_encrypted_import_code || 'true' }}
+        run: |
+          set -euo pipefail
+          if [[ "${GENERATE_ENCRYPTED_IMPORT_CODE}" != "true" ]]; then
+            echo "bundle_path=" >> "${GITHUB_OUTPUT}"
+            echo "encrypted_path=" >> "${GITHUB_OUTPUT}"
+            echo "Skipping encrypted import-code generation by request."
+            exit 0
+          fi
+          if [[ -z "${EASYPROXY_IMPORT_CODE_OWNER_PUBLIC_KEY:-}" ]]; then
+            echo "bundle_path=" >> "${GITHUB_OUTPUT}"
+            echo "encrypted_path=" >> "${GITHUB_OUTPUT}"
+            echo "Skipping encrypted import-code generation because EASYPROXY_IMPORT_CODE_OWNER_PUBLIC_KEY is missing."
+            exit 0
+          fi
+
+          python scripts/easyproxy-import-code.py encode \
+            --account-id "${EASYPROXY_R2_CONFIG_ACCOUNT_ID}" \
+            --bucket "${EASYPROXY_R2_CONFIG_BUCKET}" \
+            --manifest-object-key "${EASYPROXY_R2_CONFIG_MANIFEST_OBJECT_KEY}" \
+            --access-key-id "${EASYPROXY_R2_CONFIG_READ_ACCESS_KEY_ID}" \
+            --secret-access-key "${EASYPROXY_R2_CONFIG_READ_SECRET_ACCESS_KEY}" \
+            --endpoint "${EASYPROXY_R2_CONFIG_ENDPOINT}" \
+            --sync-enabled \
+            --sync-interval-seconds 7200 \
+            --release-version "${{ steps.release_meta.outputs.release_tag }}" \
+            --json-output \
+            --output service-base-import-code.bundle.json
+
+          python scripts/easyproxy-import-code.py encrypt \
+            --bundle-file service-base-import-code.bundle.json \
+            --public-key "${EASYPROXY_IMPORT_CODE_OWNER_PUBLIC_KEY}" \
+            --metadata-json "{\"releaseVersion\":\"${{ steps.release_meta.outputs.release_tag }}\",\"manifestObjectKey\":\"${EASYPROXY_R2_CONFIG_MANIFEST_OBJECT_KEY}\"}" \
+            --output service-base-import-code.encrypted.json
+
+          echo "bundle_path=service-base-import-code.bundle.json" >> "${GITHUB_OUTPUT}"
+          echo "encrypted_path=service-base-import-code.encrypted.json" >> "${GITHUB_OUTPUT}"
+
+      - name: Verify downloadable bootstrap path
+        shell: pwsh
+        env:
+          EASYPROXY_R2_CONFIG_ACCOUNT_ID: ${{ secrets.EASYPROXY_R2_CONFIG_ACCOUNT_ID }}
+          EASYPROXY_R2_CONFIG_BUCKET: ${{ secrets.EASYPROXY_R2_CONFIG_BUCKET }}
+          EASYPROXY_R2_CONFIG_ENDPOINT: ${{ secrets.EASYPROXY_R2_CONFIG_ENDPOINT }}
+          EASYPROXY_R2_CONFIG_MANIFEST_OBJECT_KEY: ${{ secrets.EASYPROXY_R2_CONFIG_MANIFEST_OBJECT_KEY }}
+          EASYPROXY_R2_CONFIG_READ_ACCESS_KEY_ID: ${{ secrets.EASYPROXY_R2_CONFIG_READ_ACCESS_KEY_ID }}
+          EASYPROXY_R2_CONFIG_READ_SECRET_ACCESS_KEY: ${{ secrets.EASYPROXY_R2_CONFIG_READ_SECRET_ACCESS_KEY }}
+        run: |
+          & python scripts/easyproxy-import-code.py encode `
+            --account-id "${env:EASYPROXY_R2_CONFIG_ACCOUNT_ID}" `
+            --bucket "${env:EASYPROXY_R2_CONFIG_BUCKET}" `
+            --manifest-object-key "${env:EASYPROXY_R2_CONFIG_MANIFEST_OBJECT_KEY}" `
+            --access-key-id "${env:EASYPROXY_R2_CONFIG_READ_ACCESS_KEY_ID}" `
+            --secret-access-key "${env:EASYPROXY_R2_CONFIG_READ_SECRET_ACCESS_KEY}" `
+            --endpoint "${env:EASYPROXY_R2_CONFIG_ENDPOINT}" `
+            --sync-enabled `
+            --sync-interval-seconds 7200 `
+            --release-version '${{ steps.release_meta.outputs.release_tag }}' `
+            --output verify-import-code.txt
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to generate verification import code"
+          }
+
+          $importCode = (Get-Content -Raw verify-import-code.txt).Trim()
+          .\scripts\write-service-base-r2-bootstrap.ps1 `
+            -ImportCode $importCode `
+            -OutputPath tmp/service-base-r2-bootstrap.json
+
+          & python deploy/service/base/bootstrap-service-config.py `
+            --bootstrap-path tmp/service-base-r2-bootstrap.json `
+            --config-path tmp/service-base-downloaded-config.yaml `
+            --state-path tmp/service-base-import-state.json
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to bootstrap verification config"
+          }
+
+          if (-not (Test-Path tmp/service-base-downloaded-config.yaml)) {
+            throw "Downloaded service/base config was not created."
+          }
+
+      - name: Upload config distribution manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: service-base-r2-config-manifest
+          path: ${{ steps.upload.outputs.path }}
+
+      - name: Upload encrypted import code
+        if: ${{ steps.import_code.outputs.encrypted_path != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: service-base-import-code-encrypted
+          path: ${{ steps.import_code.outputs.encrypted_path }}
+
+      - name: Write summary
+        shell: bash
+        env:
+          EASYPROXY_R2_CONFIG_BUCKET: ${{ secrets.EASYPROXY_R2_CONFIG_BUCKET }}
+          EASYPROXY_R2_CONFIG_CONFIG_OBJECT_KEY: ${{ secrets.EASYPROXY_R2_CONFIG_CONFIG_OBJECT_KEY }}
+          EASYPROXY_R2_CONFIG_MANIFEST_OBJECT_KEY: ${{ secrets.EASYPROXY_R2_CONFIG_MANIFEST_OBJECT_KEY }}
+        run: |
+          {
+            echo "## Service base config distribution published"
+            echo
+            echo "- release tag: \`${{ steps.release_meta.outputs.release_tag }}\`"
+            echo "- bucket: \`${EASYPROXY_R2_CONFIG_BUCKET}\`"
+            echo "- config object: \`${EASYPROXY_R2_CONFIG_CONFIG_OBJECT_KEY}\`"
+            echo "- manifest object: \`${EASYPROXY_R2_CONFIG_MANIFEST_OBJECT_KEY}\`"
+            if [[ -n "${{ steps.import_code.outputs.encrypted_path }}" ]]; then
+              echo "- encrypted import code artifact: \`service-base-import-code-encrypted\`"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

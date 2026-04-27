@@ -58,3 +58,10 @@ GitHub-hosted publish path:
 The manual GitHub Actions workflow now initializes QEMU before Buildx, so the
 `platforms` input can safely be used for non-native targets such as
 `linux/arm64` or combined multi-platform publishes.
+
+Published-image smoke path:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\deploy\upstreams\ech-workers\scripts\smoke-ech-workers-docker.ps1 `
+  -Image ghcr.io/<owner>/ech-workers-monorepo:<release-tag>
+```

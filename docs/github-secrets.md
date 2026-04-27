@@ -17,6 +17,30 @@ This workflow uses the built-in `GITHUB_TOKEN` to push container images to
 You do not need to add a separate PAT for the default GHCR workflow path unless
 you want to publish across repositories or organizations with a custom token.
 
+### `publish-service-base-config.yml`
+
+Add these repository secrets before using the private service/base config
+distribution workflow:
+
+| Secret | Purpose |
+| --- | --- |
+| `EASYPROXY_ROOT_CONFIG_YAML_B64` | Base64-encoded root `config.yaml` used to render the final `service/base` runtime config |
+| `EASYPROXY_R2_CONFIG_ACCOUNT_ID` | Cloudflare account id that owns the private R2 bucket |
+| `EASYPROXY_R2_CONFIG_BUCKET` | Private R2 bucket name for the service/base runtime config |
+| `EASYPROXY_R2_CONFIG_ENDPOINT` | Optional explicit R2 S3 endpoint |
+| `EASYPROXY_R2_CONFIG_CONFIG_OBJECT_KEY` | Object key for rendered `service/base` `config.yaml` |
+| `EASYPROXY_R2_CONFIG_MANIFEST_OBJECT_KEY` | Object key for the EasyProxy service-base distribution manifest |
+| `EASYPROXY_R2_CONFIG_UPLOAD_ACCESS_KEY_ID` | R2 upload access key id used by GitHub Actions |
+| `EASYPROXY_R2_CONFIG_UPLOAD_SECRET_ACCESS_KEY` | R2 upload secret access key used by GitHub Actions |
+| `EASYPROXY_R2_CONFIG_READ_ACCESS_KEY_ID` | Client-side R2 read-only access key id |
+| `EASYPROXY_R2_CONFIG_READ_SECRET_ACCESS_KEY` | Client-side R2 read-only secret access key |
+
+Optional secret for encrypted owner-only bootstrap artifacts:
+
+| Secret | Purpose |
+| --- | --- |
+| `EASYPROXY_IMPORT_CODE_OWNER_PUBLIC_KEY` | Owner public key used to generate encrypted import-code artifacts |
+
 ### `deploy-cloudflare.yml`
 
 Add these repository secrets before using the manual Cloudflare deployment
@@ -34,8 +58,15 @@ workflow:
 Notes:
 
 - `MISUB_PUBLIC_URL` and `MISUB_CALLBACK_URL` are not secrets. They are
-  currently tracked in
-  [upstreams/misub/wrangler.jsonc](/C:/Users/Public/nas_home/AI/GameEditor/EasyProxy/upstreams/misub/wrangler.jsonc).
+  expected as repository variables:
+  - `EASYPROXY_MISUB_PUBLIC_URL`
+  - `EASYPROXY_MISUB_CALLBACK_URL`
+- MiSub D1 resolution also expects repository variables:
+  - `EASYPROXY_MISUB_D1_DATABASE_NAME`
+  - `EASYPROXY_MISUB_D1_DATABASE_BINDING`
+  - `EASYPROXY_MISUB_MANIFEST_PROFILE_ID`
+- ech-workers-cloudflare verification expects repository variable:
+  - `EASYPROXY_ECH_WORKER_PUBLIC_URL`
 - `deploy-cloudflare.yml` syncs MiSub secrets into the Cloudflare Pages project
   before deploying the latest build output.
 - `deploy-cloudflare.yml` syncs `ECH_TOKEN` into the Worker secret store during

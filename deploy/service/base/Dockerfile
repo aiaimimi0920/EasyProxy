@@ -57,10 +57,10 @@ RUN wget -O /out-cloudflared ${CLOUDFLARED_DOWNLOAD_URL} \
 FROM debian:bookworm-slim AS runtime
 RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources \
     && apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates gosu \
+    && apt-get install -y --no-install-recommends ca-certificates gosu python3 python3-boto3 \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -r -u 10001 easy \
-    && mkdir -p /etc/easy-proxy /var/lib/easy-proxy/data /var/lib/easy-proxy/connectors /usr/local/share/cfst \
+    && mkdir -p /etc/easy-proxy /etc/easy-proxy/bootstrap /var/lib/easy-proxy/data /var/lib/easy-proxy/connectors /usr/local/share/cfst \
     && chown -R easy:easy /etc/easy-proxy /var/lib/easy-proxy
 
 WORKDIR /app
@@ -70,6 +70,8 @@ COPY --from=cfst-builder /out/cfst /usr/local/bin/cfst
 COPY --from=cfst-builder /out/share/ip.txt /usr/local/share/cfst/ip.txt
 COPY --from=cloudflared-fetch /out-cloudflared /usr/local/bin/cloudflared
 COPY deploy/service/base/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY deploy/service/base/bootstrap-service-config.py /usr/local/bin/bootstrap-service-config.py
+COPY scripts/easyproxy-import-code.py /usr/local/bin/easyproxy-import-code.py
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 COPY --chown=easy:easy deploy/service/base/config.template.yaml /etc/easy-proxy/config.yaml
 

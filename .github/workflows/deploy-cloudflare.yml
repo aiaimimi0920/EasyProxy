@@ -12,6 +12,14 @@ name: Deploy Cloudflare Apps
           - both
           - misub-pages
           - ech-workers-cloudflare
+      deployment_mode:
+        description: Bootstrap missing resources or update existing resources
+        required: true
+        default: update
+        type: choice
+        options:
+          - bootstrap
+          - update
       misub_branch:
         description: Branch name recorded for the MiSub Pages deployment
         required: false
@@ -22,6 +30,11 @@ name: Deploy Cloudflare Apps
         required: false
         default: misub-git
         type: string
+      run_verification:
+        description: Verify the deployed Cloudflare targets after publish
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: read
@@ -51,7 +64,7 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          python -m pip install PyYAML tqdm
+          python -m pip install PyYAML tqdm requests websockets
 
       - name: Run root script smoke tests
         shell: pwsh
@@ -98,6 +111,11 @@ jobs:
           cache: npm
           cache-dependency-path: upstreams/misub/package-lock.json
 
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
       - name: Assert MiSub deployment secrets
         shell: bash
         env:
@@ -106,9 +124,11 @@ jobs:
           MISUB_ADMIN_PASSWORD: ${{ secrets.MISUB_ADMIN_PASSWORD }}
           MISUB_COOKIE_SECRET: ${{ secrets.MISUB_COOKIE_SECRET }}
           MISUB_MANIFEST_TOKEN: ${{ secrets.MISUB_MANIFEST_TOKEN }}
+          MISUB_PUBLIC_URL: ${{ vars.EASYPROXY_MISUB_PUBLIC_URL }}
+          MISUB_CALLBACK_URL: ${{ vars.EASYPROXY_MISUB_CALLBACK_URL }}
         run: |
           set -euo pipefail
-          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID MISUB_ADMIN_PASSWORD MISUB_COOKIE_SECRET MISUB_MANIFEST_TOKEN; do
+          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID MISUB_ADMIN_PASSWORD MISUB_COOKIE_SECRET MISUB_MANIFEST_TOKEN MISUB_PUBLIC_URL MISUB_CALLBACK_URL; do
             if [[ -z "${!name:-}" ]]; then
               echo "::error::$name is required for MiSub Pages deployment."
               exit 1
@@ -123,13 +143,72 @@ jobs:
         working-directory: upstreams/misub
         run: npm run build
 
+      - name: Resolve MiSub Cloudflare resources
+        id: misub_resources
+        shell: bash
+        working-directory: upstreams/misub
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          MISUB_PUBLIC_URL: ${{ vars.EASYPROXY_MISUB_PUBLIC_URL }}
+          MISUB_CALLBACK_URL: ${{ vars.EASYPROXY_MISUB_CALLBACK_URL }}
+          MISUB_D1_DATABASE_NAME: ${{ vars.EASYPROXY_MISUB_D1_DATABASE_NAME }}
+          MISUB_D1_DATABASE_BINDING: ${{ vars.EASYPROXY_MISUB_D1_DATABASE_BINDING }}
+        run: |
+          set -euo pipefail
+          mode="${{ inputs.deployment_mode }}"
+          project_name="${{ inputs.misub_project_name }}"
+          branch_name="${{ inputs.misub_branch }}"
+          db_name="${MISUB_D1_DATABASE_NAME:-$project_name}"
+          db_binding="${MISUB_D1_DATABASE_BINDING:-MISUB_DB}"
+
+          if [[ "$mode" == "bootstrap" ]]; then
+            set +e
+            npx wrangler pages project create "$project_name" --production-branch "$branch_name"
+            create_status=$?
+            set -e
+            if [[ $create_status -ne 0 ]]; then
+              echo "pages project create returned ${create_status}; continuing in case the project already exists"
+            fi
+          fi
+
+          d1_list_json="$(npx wrangler d1 list --json)"
+          db_id="$(printf '%s' "$d1_list_json" | python -c "import json,sys; name=sys.argv[1]; items=json.load(sys.stdin); print(next((str(item.get('uuid') or item.get('id') or '').strip() for item in items if str(item.get('name','')).strip()==name), ''))" "$db_name")"
+
+          if [[ -z "$db_id" && "$mode" == "bootstrap" ]]; then
+            create_db_json="$(npx wrangler d1 create "$db_name" --json)"
+            db_id="$(printf '%s' "$create_db_json" | python -c "import json,sys; payload=json.load(sys.stdin); print(str(payload.get('uuid') or payload.get('id') or '').strip())")"
+          fi
+
+          if [[ -z "$db_id" ]]; then
+            echo "::error::Failed to resolve a D1 database id for ${db_name}. Use bootstrap mode to create it or pre-create the database in Cloudflare."
+            exit 1
+          fi
+
+          runtime_config_path="${RUNNER_TEMP}/misub-wrangler.runtime.jsonc"
+          python "${GITHUB_WORKSPACE}/scripts/materialize-misub-wrangler.py" \
+            --base-config "${GITHUB_WORKSPACE}/upstreams/misub/wrangler.jsonc" \
+            --output "$runtime_config_path" \
+            --project-name "$project_name" \
+            --public-url "${MISUB_PUBLIC_URL}" \
+            --callback-url "${MISUB_CALLBACK_URL}" \
+            --d1-binding "$db_binding" \
+            --d1-database-name "$db_name" \
+            --d1-database-id "$db_id"
+
+          echo "project_name=$project_name" >> "$GITHUB_OUTPUT"
+          echo "branch_name=$branch_name" >> "$GITHUB_OUTPUT"
+          echo "database_name=$db_name" >> "$GITHUB_OUTPUT"
+          echo "database_id=$db_id" >> "$GITHUB_OUTPUT"
+          echo "runtime_config_path=$runtime_config_path" >> "$GITHUB_OUTPUT"
+
       - name: Sync MiSub Pages secrets
         shell: bash
         working-directory: upstreams/misub
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          PROJECT_NAME: ${{ inputs.misub_project_name }}
+          PROJECT_NAME: ${{ steps.misub_resources.outputs.project_name }}
           MISUB_ADMIN_PASSWORD: ${{ secrets.MISUB_ADMIN_PASSWORD }}
           MISUB_COOKIE_SECRET: ${{ secrets.MISUB_COOKIE_SECRET }}
           MISUB_MANIFEST_TOKEN: ${{ secrets.MISUB_MANIFEST_TOKEN }}
@@ -137,7 +216,7 @@ jobs:
           set -euo pipefail
           for name in MISUB_ADMIN_PASSWORD MISUB_COOKIE_SECRET MISUB_MANIFEST_TOKEN; do
             value="${!name}"
-            printf "%s" "$value" | npx wrangler pages secret put "$name" --project-name "$PROJECT_NAME" --config wrangler.jsonc
+            printf "%s" "$value" | npx wrangler pages secret put "$name" --project-name "$PROJECT_NAME" --config "${{ steps.misub_resources.outputs.runtime_config_path }}"
           done
 
       - name: Deploy MiSub Pages
@@ -149,9 +228,27 @@ jobs:
           gitHubToken: ${{ secrets.GITHUB_TOKEN }}
           command: >-
             pages deploy upstreams/misub/dist
-            --project-name=${{ inputs.misub_project_name }}
-            --branch=${{ inputs.misub_branch }}
-            --config upstreams/misub/wrangler.jsonc
+            --project-name=${{ steps.misub_resources.outputs.project_name }}
+            --branch=${{ steps.misub_resources.outputs.branch_name }}
+            --config ${{ steps.misub_resources.outputs.runtime_config_path }}
+
+      - name: Verify MiSub Pages deployment
+        if: ${{ inputs.run_verification }}
+        shell: bash
+        env:
+          MISUB_PUBLIC_URL: ${{ vars.EASYPROXY_MISUB_PUBLIC_URL }}
+          MISUB_ADMIN_PASSWORD: ${{ secrets.MISUB_ADMIN_PASSWORD }}
+          MISUB_MANIFEST_TOKEN: ${{ secrets.MISUB_MANIFEST_TOKEN }}
+          MISUB_MANIFEST_PROFILE_ID: ${{ vars.EASYPROXY_MISUB_MANIFEST_PROFILE_ID }}
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install requests
+          python scripts/verify-misub-deploy.py \
+            --base-url "${MISUB_PUBLIC_URL}" \
+            --admin-password "${MISUB_ADMIN_PASSWORD}" \
+            --manifest-token "${MISUB_MANIFEST_TOKEN}" \
+            --manifest-profile-id "${MISUB_MANIFEST_PROFILE_ID:-default}"
 
       - name: MiSub deploy summary
         shell: bash
@@ -159,8 +256,11 @@ jobs:
           {
             echo "## MiSub Pages deploy completed"
             echo
-            echo "- project: \`${{ inputs.misub_project_name }}\`"
-            echo "- branch: \`${{ inputs.misub_branch }}\`"
+            echo "- mode: \`${{ inputs.deployment_mode }}\`"
+            echo "- project: \`${{ steps.misub_resources.outputs.project_name }}\`"
+            echo "- branch: \`${{ steps.misub_resources.outputs.branch_name }}\`"
+            echo "- d1 database: \`${{ steps.misub_resources.outputs.database_name }}\`"
+            echo "- d1 database id: \`${{ steps.misub_resources.outputs.database_id }}\`"
             echo "- deployment url: \`${{ steps.deploy_misub.outputs['deployment-url'] || 'n/a' }}\`"
             echo "- preview alias: \`${{ steps.deploy_misub.outputs['pages-deployment-alias-url'] || 'n/a' }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -175,15 +275,21 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
       - name: Assert Worker deployment secrets
         shell: bash
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           ECH_TOKEN: ${{ secrets.ECH_TOKEN }}
+          ECH_WORKER_PUBLIC_URL: ${{ vars.EASYPROXY_ECH_WORKER_PUBLIC_URL }}
         run: |
           set -euo pipefail
-          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID ECH_TOKEN; do
+          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID ECH_TOKEN ECH_WORKER_PUBLIC_URL; do
             if [[ -z "${!name:-}" ]]; then
               echo "::error::$name is required for ech-workers-cloudflare deployment."
               exit 1
@@ -201,11 +307,27 @@ jobs:
         env:
           ECH_TOKEN: ${{ secrets.ECH_TOKEN }}
 
+      - name: Verify ech-workers-cloudflare deployment
+        if: ${{ inputs.run_verification }}
+        shell: bash
+        env:
+          ECH_WORKER_PUBLIC_URL: ${{ vars.EASYPROXY_ECH_WORKER_PUBLIC_URL }}
+          ECH_TOKEN: ${{ secrets.ECH_TOKEN }}
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install requests websockets
+          python scripts/verify-ech-worker-deploy.py \
+            --base-url "${ECH_WORKER_PUBLIC_URL}" \
+            --token "${ECH_TOKEN}"
+
       - name: Worker deploy summary
         shell: bash
         run: |
           {
             echo "## ech-workers-cloudflare deploy completed"
             echo
+            echo "- mode: \`${{ inputs.deployment_mode }}\`"
             echo "- worker config: \`workers/ech-workers-cloudflare/wrangler.jsonc\`"
+            echo "- public url: \`${{ vars.EASYPROXY_ECH_WORKER_PUBLIC_URL || 'n/a' }}\`"
           } >> "$GITHUB_STEP_SUMMARY"

@@ -7,6 +7,7 @@ param(
         "ech-workers-cloudflare",
         "build-easyproxy-image",
         "build-ech-workers-image",
+        "publish-service-base-config",
         "publish-easyproxy-image",
         "publish-ech-workers-image",
         "publish-core-images"
@@ -123,6 +124,18 @@ function Assert-ProjectConfigReady {
                 $errors += "echWorkersCloudflare.secrets.ECH_TOKEN is empty."
             }
         }
+        "publish-service-base-config" {
+            $distribution = Get-EasyProxyConfigSection -Config $Config -Name 'distribution'
+            $serviceBaseDistribution = Get-EasyProxyConfigSection -Config $distribution -Name 'serviceBase'
+            $accountId = [string](Get-EasyProxyConfigValue -Object $serviceBaseDistribution -Name 'accountId' -Default '')
+            $bucket = [string](Get-EasyProxyConfigValue -Object $serviceBaseDistribution -Name 'bucket' -Default '')
+            if ([string]::IsNullOrWhiteSpace($accountId)) {
+                $errors += "distribution.serviceBase.accountId must be set."
+            }
+            if ([string]::IsNullOrWhiteSpace($bucket)) {
+                $errors += "distribution.serviceBase.bucket must be set."
+            }
+        }
     }
 
     if ($errors.Count -gt 0) {
@@ -132,7 +145,7 @@ function Assert-ProjectConfigReady {
 }
 
 if ([string]::IsNullOrWhiteSpace($Project)) {
-    throw "Missing -Project. Supported values: easyproxy, misub-pages, misub-docker, aggregator, ech-workers-cloudflare, build-easyproxy-image, build-ech-workers-image, publish-easyproxy-image, publish-ech-workers-image, publish-core-images"
+    throw "Missing -Project. Supported values: easyproxy, misub-pages, misub-docker, aggregator, ech-workers-cloudflare, build-easyproxy-image, build-ech-workers-image, publish-service-base-config, publish-easyproxy-image, publish-ech-workers-image, publish-core-images"
 }
 
 $resolvedConfigPath = Resolve-ConfigPath -Path $ConfigPath
@@ -216,6 +229,13 @@ switch ($Project) {
         if ($NoCache) { $args += "-NoCache" }
         if ($LoadOnly) { $args += "-LoadOnly" }
         Invoke-EasyProxyExternalCommand -FilePath "powershell" -Arguments $args -FailureMessage "publish easyproxy image failed"
+        break
+    }
+    "publish-service-base-config" {
+        $scriptPath = Join-Path $PSScriptRoot 'publish-service-base-config.ps1'
+        $args = @("-ExecutionPolicy", "Bypass", "-File", $scriptPath, "-ConfigPath", $resolvedConfigPath)
+        if (-not [string]::IsNullOrWhiteSpace($ReleaseTag)) { $args += @("-ReleaseVersion", $ReleaseTag) }
+        Invoke-EasyProxyExternalCommand -FilePath "powershell" -Arguments $args -FailureMessage "publish service-base config failed"
         break
     }
     "publish-ech-workers-image" {

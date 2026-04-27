@@ -8,6 +8,7 @@ Use this checklist before publishing a tag or manually running the GHCR release 
 2. Confirm no live secrets were added to tracked files such as:
    - `config.yaml`
    - `deploy/service/base/config.yaml`
+   - `deploy/service/base/bootstrap/r2-bootstrap.json`
    - `upstreams/misub/.env`
    - `workers/ech-workers-cloudflare/.dev.vars`
 3. Confirm `.gitignore` still excludes local runtime data, generated config, and Python caches.
@@ -30,6 +31,7 @@ CI workflows:
 
 - `.github/workflows/validate.yml`
 - `.github/workflows/publish-ghcr-images.yml`
+- `.github/workflows/publish-service-base-config.yml`
 - `.github/workflows/deploy-cloudflare.yml`
 - `.github/workflows/deploy-aggregator.yml`
 
@@ -41,6 +43,7 @@ CI workflows:
    - `release-*`
    - `v*`
 4. Confirm required GitHub repository secrets are present for any Cloudflare deploy you plan to run. See [docs/github-secrets.md](/C:/Users/Public/nas_home/AI/GameEditor/EasyProxy/docs/github-secrets.md).
+5. Confirm the service/base R2 distribution secrets are present before running `.github/workflows/publish-service-base-config.yml`.
 
 ## Upstream-Carried Modules
 

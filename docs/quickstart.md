@@ -68,6 +68,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\render-derived-configs.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\deploy-easyproxy.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\build-easyproxy-image.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\build-ech-workers-image.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\publish-service-base-config.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\deploy-misub.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\deploy-ech-workers-cloudflare.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\deploy-aggregator.ps1
@@ -119,12 +120,16 @@ GitHub Actions equivalents:
 - `.github/workflows/validate.yml`
 - `.github/workflows/publish-ghcr-images.yml`
   - GHCR publish now depends on the validation preflight job
+- `.github/workflows/publish-service-base-config.yml`
+  - service/base config distribution now depends on the validation preflight job
 - `.github/workflows/deploy-cloudflare.yml`
-  - Cloudflare deploys now depend on the same validation preflight job
+  - Cloudflare deploys now depend on the same validation preflight job and distinguish bootstrap vs update mode
 - `.github/workflows/deploy-aggregator.yml`
   - native aggregator publish now runs from GitHub too
 - [docs/github-secrets.md](/C:/Users/Public/nas_home/AI/GameEditor/EasyProxy/docs/github-secrets.md)
   - configure repository secrets before using GitHub-hosted Cloudflare deploys
+- [docs/service-base-config-distribution.md](/C:/Users/Public/nas_home/AI/GameEditor/EasyProxy/docs/service-base-config-distribution.md)
+  - bootstrap/import-code path for long-lived `service/base` runtime config delivery
 
 ## Private Config
 

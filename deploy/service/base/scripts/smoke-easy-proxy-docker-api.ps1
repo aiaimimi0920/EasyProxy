@@ -1,5 +1,6 @@
 param(
     [string]$SmokeId = ("smoke-" + (Get-Date -Format "yyyyMMdd-HHmmss")),
+    [string]$Image = "",
     [switch]$KeepArtifacts,
     [switch]$SkipCleanup
 )
@@ -122,13 +123,27 @@ nodes:
     uri: "http://127.0.0.1:9"
 "@
 
-$composeYaml = @"
-services:
-  easy-proxy-monorepo-service:
+$serviceImage = if ([string]::IsNullOrWhiteSpace($Image)) {
+    "easyproxy/easy-proxy-monorepo-service:${SmokeId}"
+} else {
+    $Image
+}
+
+$composeBuildBlock = if ([string]::IsNullOrWhiteSpace($Image)) {
+@"
     build:
       context: ${repoRootDocker}
       dockerfile: deploy/service/base/Dockerfile
-    image: easyproxy/easy-proxy-monorepo-service:${SmokeId}
+"@
+} else {
+    ""
+}
+
+$composeYaml = @"
+services:
+  easy-proxy-monorepo-service:
+${composeBuildBlock}
+    image: ${serviceImage}
     container_name: ${projectName}
     restart: "no"
     ports:
@@ -157,9 +172,13 @@ $exportText = $null
 try {
     Write-Host "[easy-proxy-smoke] artifact dir: $artifactDir"
     Write-Host "[easy-proxy-smoke] management api: $baseUrl"
-    & docker compose @composeArgs up -d --build
+    $upArgs = @($composeArgs + @("up", "-d"))
+    if ([string]::IsNullOrWhiteSpace($Image)) {
+        $upArgs += "--build"
+    }
+    & docker compose @upArgs
     if ($LASTEXITCODE -ne 0) {
-        throw "docker compose up --build failed"
+        throw "docker compose up failed"
     }
 
     $deadline = (Get-Date).AddMinutes(8)

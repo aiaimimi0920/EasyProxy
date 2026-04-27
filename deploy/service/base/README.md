@@ -50,7 +50,11 @@ These defaults are encoded in:
     `CloudflareSpeedTest`, and `cloudflared`
 - `docker-entrypoint.sh`
   - runtime entrypoint that prepares `/var/lib/easy-proxy`, reads
-    `EASY_PROXY_CONFIG_PATH`, and can optionally start local `cloudflared proxy-dns`
+    `EASY_PROXY_CONFIG_PATH`, can bootstrap the runtime config from private R2,
+    and can optionally start local `cloudflared proxy-dns`
+- `bootstrap-service-config.py`
+  - runtime bootstrap helper that downloads the service config from private R2
+    storage when the container starts without a mounted local config
 - `docker-compose.yaml`
   - local container deployment definition
 - `scripts/publish-ghcr-easy-proxy-service.ps1`
@@ -278,6 +282,9 @@ GitHub Actions workflow:
     - platforms `linux/amd64` or `linux/amd64,linux/arm64`
   - publishes the service image without requiring a local Docker daemon on the
     operator machine
+- `.github/workflows/publish-service-base-config.yml`
+  - publishes the rendered runtime config to private R2 storage
+  - can also emit an encrypted owner-only import-code artifact
 
 The publish helper now prefers the current machine Docker login state and only
 attempts an explicit `docker login` when credentials were supplied.
@@ -298,6 +305,13 @@ The smoke script builds the image from `deploy/service/base/Dockerfile`,
 launches `easy-proxy-monorepo-service` through Docker Compose with the formal
 file-mount contract, and verifies the management API and container runtime
 paths.
+
+Published-image smoke path:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\deploy\service\base\scripts\smoke-easy-proxy-docker-api.ps1 `
+  -Image ghcr.io/<owner>/easy-proxy-monorepo-service:<release-tag>
+```
 
 Full live runtime validation:
 
@@ -326,6 +340,22 @@ Operational consequence:
   or `ech-workers` from GitHub at container startup
 - this keeps the runtime path under monorepo control and makes ECH helper
   changes part of the normal image release flow
+
+## Private Config Distribution
+
+The runtime image now supports bootstrap-driven config loading:
+
+- bootstrap path:
+  - `/etc/easy-proxy/bootstrap/r2-bootstrap.json`
+- import-code env:
+  - `EASY_PROXY_IMPORT_CODE`
+
+When `/etc/easy-proxy/config.yaml` is missing, the entrypoint can bootstrap the
+runtime config from private R2 storage before starting `easy-proxy`.
+
+See:
+
+- [service-base-config-distribution.md](/C:/Users/Public/nas_home/AI/GameEditor/EasyProxy/docs/service-base-config-distribution.md)
 
 ## Local Source Management
 

@@ -30,6 +30,8 @@ monorepo. It collects:
   - standalone local image build metadata
 - `echWorkersCloudflare`
   - Wrangler deploy metadata and local secret values
+- `distribution`
+  - private service/base runtime config distribution metadata
 
 Use `scripts/render-derived-configs.ps1` to generate module-specific files such
 as:
@@ -152,6 +154,7 @@ Read the module-specific deployment notes:
 - `docs/architecture.md`
 - `docs/quickstart.md`
 - `docs/release-checklist.md`
+- `docs/service-base-config-distribution.md`
 - `docs/unified-source-architecture.md`
 - `docs/upstream-sync.md`
 - `docs/migration-plan.md`
@@ -184,16 +187,23 @@ Root-level operator entrypoints live under `scripts/`:
 - `scripts/publish-ghcr-images.ps1`
   - publishes the primary EasyProxy service image, the standalone
     `ech-workers` image, or both to GHCR
+- `scripts/publish-service-base-config.ps1`
+  - uploads the rendered `service/base` runtime config to private R2 storage
+    and writes the current service distribution manifest
 
 GitHub-hosted publish workflow:
 
 - `.github/workflows/publish-ghcr-images.yml`
   - publishes GHCR images on tag push or manual workflow dispatch
   - does not require local Docker on the operator machine
+- `.github/workflows/publish-service-base-config.yml`
+  - publishes the `service/base` runtime config distribution manifest and
+    optional encrypted import-code artifact
 - `.github/workflows/deploy-cloudflare.yml`
   - deploys MiSub Pages and `ech-workers-cloudflare` from GitHub-hosted runners
+  - supports `bootstrap` and `update` deployment modes with post-deploy verification
 - `.github/workflows/deploy-aggregator.yml`
-  - runs the native aggregator publish flow from this repository
+  - runs the native aggregator publish flow from this repository with artifact verification
 
 ### One-Click Deploy Examples
 
@@ -223,6 +233,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Projec
 
 # Publish both core images with one command
 powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project publish-core-images -ReleaseTag release-20260427-001
+
+# Publish the private service/base runtime config distribution
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project publish-service-base-config -ReleaseTag release-20260428-001
 ```
 
 ### GitHub Actions Publish
@@ -253,6 +266,7 @@ Supported `-Project` values:
 - `ech-workers-cloudflare`
 - `build-easyproxy-image`
 - `build-ech-workers-image`
+- `publish-service-base-config`
 - `publish-easyproxy-image`
 - `publish-ech-workers-image`
 - `publish-core-images`
@@ -287,6 +301,8 @@ Repository CI coverage:
   - now runs the same validation preflight before deploying MiSub Pages or `ech-workers-cloudflare`
 - `.github/workflows/deploy-aggregator.yml`
   - now runs the same validation preflight before running the native aggregator publish flow
+- `.github/workflows/publish-service-base-config.yml`
+  - now runs the same validation preflight before uploading private service/base runtime config artifacts
 
 ## GitHub Secrets
 
@@ -299,6 +315,7 @@ for the current secret matrix covering:
 - MiSub runtime secrets
 - `ECH_TOKEN` for `ech-workers-cloudflare`
 - the native aggregator secrets and verification variables used by this repository
+- the private R2 distribution secrets used by `service/base`
 
 ## Release Checklist
 
