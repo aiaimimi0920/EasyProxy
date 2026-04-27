@@ -112,6 +112,7 @@ def main() -> int:
     parser.add_argument("--source-name-prefix", default="ECH Worker Preferred")
     parser.add_argument("--source-group", default="ECH Connectors")
     parser.add_argument("--notes-prefix", default="Preferred Cloudflare entry IP")
+    parser.add_argument("--preserve-server-ips", action="store_true")
     args = parser.parse_args()
 
     base_url = args.base_url.rstrip("/") + "/"
@@ -144,10 +145,11 @@ def main() -> int:
     ensure(profile is not None, f"MiSub profile not found: {args.profile_id}")
 
     existing_sources, existing_server_ips = normalize_existing_sources(misubs, args.source_id_prefix)
+    selected_server_ips = existing_server_ips if args.preserve_server_ips else []
     new_sources = build_sources(
         worker_url=args.worker_url,
         access_token=args.access_token,
-        server_ips=existing_server_ips,
+        server_ips=selected_server_ips,
         local_protocol=args.local_protocol,
         source_id_prefix=args.source_id_prefix,
         source_name_prefix=args.source_name_prefix,
@@ -220,8 +222,9 @@ def main() -> int:
     summary = {
         "profile_id": args.profile_id,
         "worker_url": args.worker_url,
+        "preserve_server_ips": args.preserve_server_ips,
         "source_count": len(new_sources),
-        "server_ips": existing_server_ips,
+        "server_ips": selected_server_ips,
         "updated_source_ids": [source["id"] for source in new_sources],
     }
     print(json.dumps(summary, ensure_ascii=False, indent=2))
