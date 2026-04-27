@@ -265,12 +265,16 @@ jobs:
           set -euo pipefail
           python -m pip install --upgrade pip
           python -m pip install requests
-          base_url="${{ steps.deploy_misub.outputs['pages-deployment-alias-url'] }}"
-          if [[ -z "$base_url" ]]; then
-            base_url="${{ steps.deploy_misub.outputs['deployment-url'] }}"
-          fi
-          if [[ -z "$base_url" ]]; then
-            base_url="${MISUB_PUBLIC_URL}"
+          if [[ "${{ steps.misub_resources.outputs.branch_name }}" == "${{ inputs.misub_branch }}" && "${{ steps.misub_resources.outputs.branch_name }}" == "main" ]]; then
+            base_url="https://${{ steps.misub_resources.outputs.project_name }}.pages.dev"
+          else
+            base_url="${{ steps.deploy_misub.outputs['pages-deployment-alias-url'] }}"
+            if [[ -z "$base_url" ]]; then
+              base_url="${{ steps.deploy_misub.outputs['deployment-url'] }}"
+            fi
+            if [[ -z "$base_url" ]]; then
+              base_url="${MISUB_PUBLIC_URL}"
+            fi
           fi
           python scripts/verify-misub-deploy.py \
             --base-url "${base_url}" \
