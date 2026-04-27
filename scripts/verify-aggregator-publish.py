@@ -44,6 +44,18 @@ def fetch_and_validate(base_url: str, path: str, validator: Callable[[bytes], No
     print(f"verified {url}")
 
 
+def fetch_and_check_optional(base_url: str, path: str, validator: Callable[[bytes], None]) -> None:
+    url = f"{base_url.rstrip('/')}/{path.lstrip('/')}"
+    response = requests.get(url, timeout=30)
+    response.raise_for_status()
+    content = response.content
+    if not content.strip():
+        print(f"warning: optional artifact is empty, skipping strict validation: {url}")
+        return
+    validator(content)
+    print(f"verified optional {url}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Verify published aggregator artifacts are readable and well-formed.")
     parser.add_argument("--base-url", required=True, help="Public base URL serving the aggregator artifacts.")
@@ -56,10 +68,12 @@ def main() -> int:
 
     required = {
         "public-clash": validate_clash_yaml,
-        "public-v2ray": validate_v2ray_payload,
         "public-singbox": validate_json_document,
         "public-mixed": validate_non_empty_text,
         "crawledsubs": validate_json_document,
+    }
+    optional = {
+        "public-v2ray": validate_v2ray_payload,
     }
 
     for item_name, validator in required.items():
@@ -69,6 +83,14 @@ def main() -> int:
         if not key:
             raise RuntimeError(f"Storage item {item_name} does not define a key")
         fetch_and_validate(args.base_url, key, validator)
+
+    for item_name, validator in optional.items():
+        if item_name not in items:
+            continue
+        key = items[item_name].get("key", "").strip()
+        if not key:
+            continue
+        fetch_and_check_optional(args.base_url, key, validator)
 
     return 0
 

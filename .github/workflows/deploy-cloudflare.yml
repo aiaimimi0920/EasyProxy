@@ -212,6 +212,12 @@ jobs:
           echo "database_id=$db_id" >> "$GITHUB_OUTPUT"
           echo "runtime_config_path=$runtime_config_path" >> "$GITHUB_OUTPUT"
 
+      - name: Apply MiSub runtime wrangler config
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "${{ steps.misub_resources.outputs.runtime_config_path }}" upstreams/misub/wrangler.jsonc
+
       - name: Sync MiSub Pages secrets
         shell: bash
         working-directory: upstreams/misub
@@ -228,7 +234,7 @@ jobs:
           set -euo pipefail
           for name in MISUB_ADMIN_PASSWORD MISUB_COOKIE_SECRET MISUB_MANIFEST_TOKEN; do
             value="${!name}"
-            printf "%s" "$value" | npx wrangler pages secret put "$name" --project-name "$PROJECT_NAME" --config "${{ steps.misub_resources.outputs.runtime_config_path }}"
+            printf "%s" "$value" | npx wrangler pages secret put "$name" --project-name "$PROJECT_NAME"
           done
 
       - name: Deploy MiSub Pages
@@ -241,7 +247,6 @@ jobs:
             pages deploy upstreams/misub/dist
             --project-name=${{ steps.misub_resources.outputs.project_name }}
             --branch=${{ steps.misub_resources.outputs.branch_name }}
-            --config ${{ steps.misub_resources.outputs.runtime_config_path }}
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_EMAIL: ${{ secrets.CLOUDFLARE_AUTH_EMAIL }}
@@ -323,18 +328,27 @@ jobs:
             fi
           fi
 
+      - name: Sync ech-workers-cloudflare secret
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_EMAIL: ${{ secrets.CLOUDFLARE_AUTH_EMAIL }}
+          CLOUDFLARE_API_KEY: ${{ secrets.CLOUDFLARE_GLOBAL_API_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ECH_TOKEN: ${{ secrets.ECH_TOKEN }}
+        run: |
+          set -euo pipefail
+          printf "%s" "${ECH_TOKEN}" | npx wrangler secret put ECH_TOKEN --config workers/ech-workers-cloudflare/wrangler.jsonc
+
       - name: Deploy ech-workers-cloudflare
         uses: cloudflare/wrangler-action@v3
         with:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: deploy --config workers/ech-workers-cloudflare/wrangler.jsonc
-          secrets: |
-            ECH_TOKEN
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_EMAIL: ${{ secrets.CLOUDFLARE_AUTH_EMAIL }}
           CLOUDFLARE_API_KEY: ${{ secrets.CLOUDFLARE_GLOBAL_API_KEY }}
-          ECH_TOKEN: ${{ secrets.ECH_TOKEN }}
 
       - name: Verify ech-workers-cloudflare deployment
         if: ${{ inputs.run_verification }}

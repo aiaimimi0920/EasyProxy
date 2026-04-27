@@ -267,6 +267,11 @@ finally {
     }
 
     if ((-not $KeepArtifacts) -and (Test-Path -LiteralPath $artifactDir)) {
-        Remove-Item -LiteralPath $artifactDir -Recurse -Force
+        try {
+            Remove-Item -LiteralPath $artifactDir -Recurse -Force -ErrorAction Stop
+        }
+        catch {
+            Write-Warning "[easy-proxy-smoke] artifact cleanup failed: $($_.Exception.Message)"
+        }
     }
 }
