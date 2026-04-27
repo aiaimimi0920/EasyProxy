@@ -5,6 +5,7 @@ param(
         "misub-docker",
         "aggregator",
         "ech-workers-cloudflare",
+        "sync-github-settings",
         "build-easyproxy-image",
         "build-ech-workers-image",
         "publish-service-base-config",
@@ -92,15 +93,15 @@ function Assert-ProjectConfigReady {
         }
         "misub-pages" {
             $misub = Get-EasyProxyConfigSection -Config $Config -Name 'misub'
-            $pages = Get-EasyProxyConfigSection -Config $misub -Name 'pages'
-            $env = Get-EasyProxyConfigSection -Config $pages -Name 'env'
+            $docker = Get-EasyProxyConfigSection -Config $misub -Name 'docker'
+            $env = Get-EasyProxyConfigSection -Config $docker -Name 'env'
             $adminPassword = [string](Get-EasyProxyConfigValue -Object $env -Name 'ADMIN_PASSWORD' -Default '')
             $cookieSecret = [string](Get-EasyProxyConfigValue -Object $env -Name 'COOKIE_SECRET' -Default '')
             if ($adminPassword -like 'change_me*' -or [string]::IsNullOrWhiteSpace($adminPassword)) {
-                $errors += "misub.pages.env.ADMIN_PASSWORD must be set to a strong value."
+                $errors += "misub.docker.env.ADMIN_PASSWORD must be set to a strong value."
             }
             if ($cookieSecret -like 'change_me*' -or [string]::IsNullOrWhiteSpace($cookieSecret)) {
-                $errors += "misub.pages.env.COOKIE_SECRET must be set to a stable random value."
+                $errors += "misub.docker.env.COOKIE_SECRET must be set to a stable random value."
             }
         }
         "misub-docker" {
@@ -145,7 +146,7 @@ function Assert-ProjectConfigReady {
 }
 
 if ([string]::IsNullOrWhiteSpace($Project)) {
-    throw "Missing -Project. Supported values: easyproxy, misub-pages, misub-docker, aggregator, ech-workers-cloudflare, build-easyproxy-image, build-ech-workers-image, publish-service-base-config, publish-easyproxy-image, publish-ech-workers-image, publish-core-images"
+    throw "Missing -Project. Supported values: easyproxy, misub-pages, misub-docker, aggregator, ech-workers-cloudflare, sync-github-settings, build-easyproxy-image, build-ech-workers-image, publish-service-base-config, publish-easyproxy-image, publish-ech-workers-image, publish-core-images"
 }
 
 $resolvedConfigPath = Resolve-ConfigPath -Path $ConfigPath
@@ -201,6 +202,12 @@ switch ($Project) {
         if ($SkipRender) { $args += "-SkipRender" }
         if ($SkipSecretSync) { $args += "-SkipSecretSync" }
         Invoke-EasyProxyExternalCommand -FilePath "powershell" -Arguments $args -FailureMessage "ech-workers-cloudflare deploy failed"
+        break
+    }
+    "sync-github-settings" {
+        $scriptPath = Join-Path $PSScriptRoot 'sync-github-deployment-settings.ps1'
+        $args = @("-ExecutionPolicy", "Bypass", "-File", $scriptPath, "-ConfigPath", $resolvedConfigPath)
+        Invoke-EasyProxyExternalCommand -FilePath "powershell" -Arguments $args -FailureMessage "sync github deployment settings failed"
         break
     }
     "build-easyproxy-image" {

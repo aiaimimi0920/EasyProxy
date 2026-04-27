@@ -72,6 +72,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\publish-service-base-config.p
 powershell -ExecutionPolicy Bypass -File .\scripts\deploy-misub.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\deploy-ech-workers-cloudflare.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\deploy-aggregator.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\sync-github-deployment-settings.ps1
 ```
 
 Notes:
@@ -86,6 +87,9 @@ Notes:
   if you explicitly want the Docker/VPS path.
 - `deploy-aggregator.ps1` targets the current GitHub Actions + R2 deployment
   model through the current EasyProxy repository rather than an external repo.
+- `sync-github-deployment-settings.ps1` regenerates the ignored local
+  `config.yaml` and synchronizes GitHub deployment secrets / variables from the
+  current operator state.
 
 One-click examples:
 
@@ -95,6 +99,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Projec
 powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project misub-docker -InitConfig
 powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project ech-workers-cloudflare -InitConfig
 powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project aggregator -InitConfig
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project sync-github-settings -InitConfig
 ```
 
 ## Validation

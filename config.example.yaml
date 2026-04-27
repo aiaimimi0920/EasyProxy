@@ -110,6 +110,16 @@ aggregator:
   ref: main
   configPath: deploy/upstreams/aggregator/config/config.actions.r2.json
   publicBaseUrl: https://sub.example.com
+  r2:
+    accountId: ""
+    accessKeyId: ""
+    secretAccessKey: ""
+
+cloudflare:
+  accountId: ""
+  authEmail: ""
+  globalApiKey: ""
+  apiToken: ""
 
 ghcr:
   owner: your-github-owner

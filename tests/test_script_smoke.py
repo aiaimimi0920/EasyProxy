@@ -97,6 +97,33 @@ class ScriptSmokeTests(unittest.TestCase):
             self.assertIn("-ReleaseVersion", args)
             self.assertIn("config-tag", args)
 
+    def test_deploy_subproject_dispatches_sync_github_settings(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            capture_path = Path(temp_dir) / "external.jsonl"
+            temp_config = Path(temp_dir) / "config.yaml"
+            template = (REPO_ROOT / "config.example.yaml").read_text(encoding="utf-8")
+            temp_config.write_text(template, encoding="utf-8")
+
+            result = self.run_powershell(
+                [
+                    "-File",
+                    str(REPO_ROOT / "scripts" / "deploy-subproject.ps1"),
+                    "-Project",
+                    "sync-github-settings",
+                    "-ConfigPath",
+                    str(temp_config),
+                ],
+                env={"EASYPROXY_TEST_CAPTURE_EXTERNAL_COMMANDS_PATH": str(capture_path)},
+            )
+
+            self.assertEqual(result.returncode, 0, msg=result.stderr or result.stdout)
+            records = read_json_lines(capture_path)
+            self.assertEqual(len(records), 1)
+            record = records[0]
+            self.assertEqual(record["FilePath"], "powershell")
+            args = record["Arguments"]
+            self.assertIn("sync-github-deployment-settings.ps1", " ".join(args))
+
     def test_publish_ghcr_images_dispatches_both_images_in_capture_mode(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             capture_path = Path(temp_dir) / "ghcr.jsonl"

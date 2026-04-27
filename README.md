@@ -188,6 +188,9 @@ Root-level operator entrypoints live under `scripts/`:
   - copies `config.example.yaml` to `config.yaml`
 - `scripts/render-derived-configs.ps1`
   - renders module-specific config files from the root `config.yaml`
+- `scripts/sync-github-deployment-settings.ps1`
+  - regenerates the local ignored `config.yaml` and synchronizes GitHub
+    deployment secrets / variables from the current operator state
 
 - `scripts/deploy-easyproxy.ps1`
   - renders and deploys `service/base` through Docker Compose
@@ -256,6 +259,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Projec
 
 # Aggregator workflow deploy
 powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project aggregator -InitConfig
+
+# Regenerate local config.yaml and sync GitHub deployment settings
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project sync-github-settings -InitConfig
 
 # Publish the primary EasyProxy GHCR image
 powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project publish-easyproxy-image -ReleaseTag release-20260427-001
@@ -335,6 +341,7 @@ Supported `-Project` values:
 - `misub-pages`
 - `misub-docker`
 - `aggregator`
+- `sync-github-settings`
 - `ech-workers-cloudflare`
 - `build-easyproxy-image`
 - `build-ech-workers-image`
