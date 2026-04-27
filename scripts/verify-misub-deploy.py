@@ -44,28 +44,40 @@ def main() -> int:
     root.raise_for_status()
     ensure("html" in root.text.lower(), "MiSub root page did not return HTML content")
 
-    public_config = retry("MiSub public config", 10, 5, lambda: session.get(urljoin(base_url, "api/public_config"), timeout=30))
+    public_config_url = urljoin(base_url, "api/public_config")
+    public_config = retry("MiSub public config", 10, 5, lambda: session.get(public_config_url, timeout=30))
     public_config.raise_for_status()
-    public_payload = public_config.json()
+    try:
+        public_payload = public_config.json()
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"MiSub public config did not return JSON: {public_config_url}") from exc
     ensure(isinstance(public_payload, dict), "MiSub public config endpoint did not return a JSON object")
 
+    login_url = urljoin(base_url, "api/login")
     login = retry(
         "MiSub login",
         10,
         5,
         lambda: session.post(
-            urljoin(base_url, "api/login"),
+            login_url,
             json={"password": args.admin_password},
             timeout=30,
         ),
     )
     login.raise_for_status()
-    login_payload = login.json()
+    try:
+        login_payload = login.json()
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"MiSub login did not return JSON: {login_url}") from exc
     ensure(bool(login_payload.get("success")), "MiSub login did not report success")
 
-    settings = retry("MiSub settings", 10, 5, lambda: session.get(urljoin(base_url, "api/settings"), timeout=30))
+    settings_url = urljoin(base_url, "api/settings")
+    settings = retry("MiSub settings", 10, 5, lambda: session.get(settings_url, timeout=30))
     settings.raise_for_status()
-    settings_payload = settings.json()
+    try:
+        settings_payload = settings.json()
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"MiSub settings did not return JSON: {settings_url}") from exc
     ensure(isinstance(settings_payload, dict), "MiSub settings endpoint did not return JSON")
     ensure("mytoken" in settings_payload, "MiSub settings payload is missing expected keys")
 
@@ -94,9 +106,13 @@ def main() -> int:
             "MiSub manifest verification failed due to auth/runtime configuration",
         )
 
-    cron_status = retry("MiSub cron status", 10, 5, lambda: session.get(urljoin(base_url, "api/cron/status"), timeout=30))
+    cron_url = urljoin(base_url, "api/cron/status")
+    cron_status = retry("MiSub cron status", 10, 5, lambda: session.get(cron_url, timeout=30))
     cron_status.raise_for_status()
-    cron_payload = cron_status.json()
+    try:
+        cron_payload = cron_status.json()
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"MiSub cron status did not return JSON: {cron_url}") from exc
     ensure(isinstance(cron_payload, dict), "MiSub cron status endpoint did not return JSON")
 
     print(f"verified {base_url}")

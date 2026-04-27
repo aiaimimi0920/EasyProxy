@@ -17,6 +17,23 @@ $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot 'lib\easyproxy-common.ps1')
 . (Join-Path $PSScriptRoot 'lib\easyproxy-config.ps1')
 
+function Resolve-EasyProxyOutputPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        throw "Output path must not be empty."
+    }
+
+    if ([System.IO.Path]::IsPathRooted($Path)) {
+        return [System.IO.Path]::GetFullPath($Path)
+    }
+
+    return [System.IO.Path]::GetFullPath((Join-Path (Get-EasyProxyRepoRoot) $Path))
+}
+
 foreach ($required in @(
     @{ Name = 'AccountId'; Value = $AccountId },
     @{ Name = 'Bucket'; Value = $Bucket },
@@ -68,7 +85,7 @@ try {
         $pythonArgs += @('--release-version', $ReleaseVersion)
     }
     if (-not [string]::IsNullOrWhiteSpace($ManifestOutput)) {
-        $pythonArgs += @('--manifest-output', (Resolve-EasyProxyPath -Path $ManifestOutput))
+        $pythonArgs += @('--manifest-output', (Resolve-EasyProxyOutputPath -Path $ManifestOutput))
     }
 
     & python @pythonArgs

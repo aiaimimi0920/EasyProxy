@@ -266,6 +266,9 @@ jobs:
           python -m pip install requests
           base_url="${{ steps.deploy_misub.outputs['deployment-url'] }}"
           if [[ -z "$base_url" ]]; then
+            base_url="${{ steps.deploy_misub.outputs['pages-deployment-alias-url'] }}"
+          fi
+          if [[ -z "$base_url" ]]; then
             base_url="${MISUB_PUBLIC_URL}"
           fi
           python scripts/verify-misub-deploy.py \
