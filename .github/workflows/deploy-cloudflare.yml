@@ -437,7 +437,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          python -m pip install requests
+          python -m pip install requests PyYAML
 
           if [[ -z "${MISUB_PUBLIC_URL:-}" || -z "${MISUB_ADMIN_PASSWORD:-}" || -z "${MISUB_MANIFEST_TOKEN:-}" || -z "${ECH_WORKER_PUBLIC_URL:-}" || -z "${ECH_TOKEN:-}" || -z "${AGGREGATOR_EFFECTIVE_URL:-}" ]]; then
             echo "::error::MiSub profile sync requires MISUB_PUBLIC_URL, MISUB_ADMIN_PASSWORD, MISUB_MANIFEST_TOKEN, ECH_WORKER_PUBLIC_URL, ECH_TOKEN, and AGGREGATOR_EFFECTIVE_URL."
