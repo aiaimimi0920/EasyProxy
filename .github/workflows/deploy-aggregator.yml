@@ -1,5 +1,8 @@
 name: Deploy Aggregator
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 'on':
   schedule:
     - cron: '0 */6 * * *'
@@ -248,7 +251,7 @@ jobs:
             throw "EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL is required for aggregator effective audit."
           }
           $summaryPath = Join-Path $env:RUNNER_TEMP "aggregator-effective-summary.json"
-          python .\scripts\easyproxy_source_audit.py `
+          python ./scripts/easyproxy_source_audit.py `
             --audit-id "aggregator-effective-${{ github.run_id }}" `
             --subscription "$baseUrl/subs/clash.yaml" `
             --output-path $summaryPath `
