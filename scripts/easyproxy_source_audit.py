@@ -541,7 +541,6 @@ def main() -> int:
 
     management_port = get_free_port()
     pool_port = get_free_port()
-    multi_range_end = multi_port_base + 80
     container_name = f"easyproxy-source-audit-{args.audit_id}".lower().replace("_", "-")
     stop_container(container_name)
 
@@ -558,8 +557,6 @@ def main() -> int:
         f"{management_port}:29888",
         "-p",
         f"{pool_port}:22323",
-        "-p",
-        f"{multi_port_base}-{multi_range_end}:{multi_port_base}-{multi_range_end}",
         "-v",
         f"{config_path.resolve()}:/etc/easy-proxy/config.yaml",
         "-v",
