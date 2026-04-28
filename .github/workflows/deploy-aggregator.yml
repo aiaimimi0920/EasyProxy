@@ -277,11 +277,12 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           import json
+          import os
           import requests
           from pathlib import Path
 
           runtime = json.loads(Path("upstreams/aggregator/subscribe/config/config.actions.runtime.json").read_text(encoding="utf-8"))
-          base_url = "${EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL}".rstrip("/")
+          base_url = os.environ["EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL"].rstrip("/")
           items = (runtime.get("storage") or {}).get("items") or {}
           for item_name in ("public-effective", "public-effective-json"):
               item = items.get(item_name) or {}
