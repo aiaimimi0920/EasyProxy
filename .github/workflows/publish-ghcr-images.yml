@@ -53,6 +53,13 @@ jobs:
           go-version-file: service/base/go.mod
           cache-dependency-path: service/base/go.sum
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: upstreams/misub/package-lock.json
+
       - name: Install Python test dependencies
         shell: pwsh
         run: |
@@ -68,6 +75,18 @@ jobs:
         shell: pwsh
         run: |
           python -m unittest discover -s "upstreams/aggregator/tests" -p "test_*.py" -v
+
+      - name: Install MiSub test dependencies
+        shell: pwsh
+        working-directory: upstreams/misub
+        run: |
+          npm ci
+
+      - name: Run MiSub unit tests
+        shell: pwsh
+        working-directory: upstreams/misub
+        run: |
+          npm run test:run
 
       - name: Run service/base monitor tests
         shell: pwsh

@@ -1,13 +1,16 @@
 package subscription
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
 	"easy_proxies/internal/config"
+	"easy_proxies/internal/monitor"
 )
 
 type fakeConnectorRuntime struct {
@@ -373,6 +376,73 @@ func TestBuildActiveSourceSnapshotPreservesDistinctConnectorVariants(t *testing.
 	}
 	if len(snapshot.EphemeralProxySources) != 2 {
 		t.Fatalf("unexpected ephemeral proxy source count: %d", len(snapshot.EphemeralProxySources))
+	}
+}
+
+func TestBuildConnectorSpecsAutoFanoutSingleECHSource(t *testing.T) {
+	binaryPath, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable() error = %v", err)
+	}
+
+	manager := &connectorRuntimeManager{
+		ctx:       context.Background(),
+		logger:    defaultLogger{},
+		instances: make(map[string]*connectorInstance),
+		fanoutCache: make(map[string][]RuntimeSource),
+		preferredIPSelector: func(_ context.Context, _ string, _ config.ConnectorRuntimeConfig, _ config.ConnectorSourceConfig, options monitor.PreferredIPRefreshOptions) ([]preferredIPResultRow, string, string, error) {
+			if options.TopCount != 2 {
+				t.Fatalf("unexpected top count: %d", options.TopCount)
+			}
+			return []preferredIPResultRow{
+				{IP: "198.41.132.114"},
+				{IP: "198.41.140.152"},
+			}, "", "", nil
+		},
+	}
+
+	cfg := &config.Config{
+		SourceSync: config.SourceSyncConfig{
+			ConnectorRuntime: config.ConnectorRuntimeConfig{
+				ListenHost: "127.0.0.1",
+				BinaryPath: binaryPath,
+				WorkingDirectory: t.TempDir(),
+				PreferredIP: config.PreferredIPGeneratorConfig{
+					FanoutCount: 2,
+				},
+			},
+		},
+	}
+
+	sources := []RuntimeSource{
+		{
+			ID:     "manifest-ech",
+			Kind:   SourceKindConnector,
+			Name:   "Manifest ECH",
+			Input:  "https://ech.example.com",
+			Origin: "manifest",
+			Options: map[string]any{
+				"connector_type": connectorTypeECHWorker,
+				"connector_config": map[string]any{
+					"access_token":   "ech-token",
+					"local_protocol": "socks5",
+				},
+			},
+		},
+	}
+
+	specs, err := manager.buildConnectorSpecs(cfg, sources)
+	if err != nil {
+		t.Fatalf("buildConnectorSpecs() error = %v", err)
+	}
+	if len(specs) != 2 {
+		t.Fatalf("expected 2 specs after fanout, got %d", len(specs))
+	}
+	if !strings.Contains(strings.Join(specs[0].Args, " "), "-ip 198.41.132.114") {
+		t.Fatalf("expected first spec to use preferred ip, got %#v", specs[0].Args)
+	}
+	if !strings.Contains(strings.Join(specs[1].Args, " "), "-ip 198.41.140.152") {
+		t.Fatalf("expected second spec to use preferred ip, got %#v", specs[1].Args)
 	}
 }
 

@@ -543,6 +543,20 @@ export async function syncAggregatorArtifacts({
         }
     }
 
+    if (config.stableSourceEnabled && stableSourceId && config.secondaryProbeEnabled) {
+        const stableIndex = nextSources.findIndex(source => source?.id === stableSourceId);
+        if (stableIndex >= 0) {
+            const [probedStable] = await probeSourceItems([nextSources[stableIndex]], {
+                concurrency: 1,
+                fetchImpl
+            });
+            if (probedStable && JSON.stringify(nextSources[stableIndex]) !== JSON.stringify(probedStable)) {
+                nextSources[stableIndex] = probedStable;
+                changedSources = true;
+            }
+        }
+    }
+
     if (config.stableSourceEnabled && config.stableSourceUrl && !stableSourceId) {
         const stableIndex = findManagedStableSourceIndex(nextSources);
         if (stableIndex !== -1) {

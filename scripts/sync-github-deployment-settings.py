@@ -496,6 +496,7 @@ def main() -> int:
     set_nested(config, ("serviceBase", "runtime", "management", "password"), service_base_management_password)
     set_nested(config, ("serviceBase", "runtime", "source_sync", "manifest_url"), f"{misub_public_url}/api/manifest/{misub_manifest_profile_id}")
     set_nested(config, ("serviceBase", "runtime", "source_sync", "manifest_token"), misub_manifest_token)
+    set_nested(config, ("serviceBase", "runtime", "source_sync", "connector_runtime", "startup_timeout"), "30s")
     existing_subscriptions = get_nested(config, "serviceBase", "runtime", "subscriptions", default=[])
     if not isinstance(existing_subscriptions, list):
         existing_subscriptions = []

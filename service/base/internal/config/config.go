@@ -156,6 +156,7 @@ type PreferredIPGeneratorConfig struct {
 	IPFilePath       string        `yaml:"ip_file_path"`
 	WorkingDirectory string        `yaml:"working_directory"`
 	Timeout          time.Duration `yaml:"timeout"`
+	FanoutCount      int           `yaml:"fanout_count"`
 }
 
 // NodeSource indicates where a node configuration originated from.
@@ -464,13 +465,16 @@ func (c *Config) applyDefaults() error {
 		c.SourceSync.ConnectorRuntime.ListenStartPort = 30000
 	}
 	if c.SourceSync.ConnectorRuntime.StartupTimeout <= 0 {
-		c.SourceSync.ConnectorRuntime.StartupTimeout = 10 * time.Second
+		c.SourceSync.ConnectorRuntime.StartupTimeout = 30 * time.Second
 	}
 	if strings.TrimSpace(c.SourceSync.ConnectorRuntime.PreferredIP.BinaryPath) == "" {
 		c.SourceSync.ConnectorRuntime.PreferredIP.BinaryPath = "cfst"
 	}
 	if c.SourceSync.ConnectorRuntime.PreferredIP.Timeout <= 0 {
 		c.SourceSync.ConnectorRuntime.PreferredIP.Timeout = 5 * time.Minute
+	}
+	if c.SourceSync.ConnectorRuntime.PreferredIP.FanoutCount <= 0 {
+		c.SourceSync.ConnectorRuntime.PreferredIP.FanoutCount = 5
 	}
 	if strings.TrimSpace(c.SourceSync.ConnectorRuntime.PreferredIP.WorkingDirectory) == "" {
 		baseDir := "."

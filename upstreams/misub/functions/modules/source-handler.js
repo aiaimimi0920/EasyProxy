@@ -5,7 +5,10 @@ import {
     SOURCE_KIND_CONNECTOR,
     SOURCE_KIND_PROXY_URI,
     SOURCE_KIND_SUBSCRIPTION,
+    SOURCE_PROBE_STATUS_SKIPPED,
+    SOURCE_PROBE_STATUS_VERIFIED,
     dedupeSources,
+    isLikelyHTTPProxyInput,
     normalizeSourceCollection,
     normalizeSourceItem,
     toManifestSource
@@ -38,19 +41,36 @@ function selectProfileSources(profile, allSources) {
 
     for (const id of profile.subscriptions || []) {
         const source = sourceMap.get(id);
-        if (!source || source.enabled !== true) continue;
+        if (!source || source.enabled !== true || !isManifestEffectiveSource(source)) continue;
         if (source.kind !== SOURCE_KIND_SUBSCRIPTION) continue;
         selected.push(source);
     }
 
     for (const id of profile.manualNodes || []) {
         const source = sourceMap.get(id);
-        if (!source || source.enabled !== true) continue;
+        if (!source || source.enabled !== true || !isManifestEffectiveSource(source)) continue;
         if (![SOURCE_KIND_PROXY_URI, SOURCE_KIND_CONNECTOR].includes(source.kind)) continue;
         selected.push(source);
     }
 
     return dedupeSources(selected);
+}
+
+function isManifestEffectiveSource(source) {
+    const normalized = normalizeSourceItem(source);
+    if (!normalized || normalized.enabled !== true) {
+        return false;
+    }
+    if (normalized.kind === SOURCE_KIND_CONNECTOR) {
+        return true;
+    }
+    if (normalized.probe_status === SOURCE_PROBE_STATUS_VERIFIED) {
+        return true;
+    }
+    if (normalized.kind === SOURCE_KIND_PROXY_URI && normalized.probe_status === SOURCE_PROBE_STATUS_SKIPPED) {
+        return isLikelyHTTPProxyInput(normalized.input);
+    }
+    return false;
 }
 
 export async function handleManifestRequest(request, env, profileIdentifier) {

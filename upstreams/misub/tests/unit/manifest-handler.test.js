@@ -97,7 +97,10 @@ describe('handleManifestRequest', () => {
                     kind: 'subscription',
                     name: 'Shared Subscription',
                     enabled: true,
-                    input: 'https://example.com/sub'
+                    input: 'https://example.com/sub',
+                    probe_status: 'verified',
+                    probe_input: 'https://example.com/sub',
+                    last_probe_at: '2026-04-28T00:00:00.000Z'
                 },
                 {
                     id: 'sub-disabled',
@@ -112,7 +115,10 @@ describe('handleManifestRequest', () => {
                     name: 'Residential Proxy',
                     enabled: true,
                     input: 'user:pass@proxy.example.com:8080',
-                    group: 'residential'
+                    group: 'residential',
+                    probe_status: 'skipped',
+                    probe_input: 'http://user:pass@proxy.example.com:8080',
+                    last_probe_at: '2026-04-28T00:00:00.000Z'
                 },
                 {
                     id: 'proxy-dup',
@@ -120,7 +126,10 @@ describe('handleManifestRequest', () => {
                     name: 'Residential Proxy Duplicate',
                     enabled: true,
                     input: 'http://user:pass@proxy.example.com:8080',
-                    group: 'duplicate'
+                    group: 'duplicate',
+                    probe_status: 'unreachable',
+                    probe_input: 'http://user:pass@proxy.example.com:8080',
+                    last_probe_at: '2026-04-28T00:00:00.000Z'
                 },
                 {
                     id: 'connector-1',
@@ -196,7 +205,10 @@ describe('handleManifestRequest', () => {
                     kind: 'subscription',
                     name: 'Shared Subscription',
                     enabled: true,
-                    input: 'https://example.com/sub'
+                    input: 'https://example.com/sub',
+                    probe_status: 'verified',
+                    probe_input: 'https://example.com/sub',
+                    last_probe_at: '2026-04-28T00:00:00.000Z'
                 }
             ],
             profiles: [
@@ -221,5 +233,86 @@ describe('handleManifestRequest', () => {
         const payload = await response.json();
         expect(payload.profile.id).toBe('profile-internal');
         expect(payload.sources).toHaveLength(1);
+    });
+
+    it('filters manifest output down to effective sources while keeping connectors', async () => {
+        vi.spyOn(StorageFactory, 'getStorageType').mockResolvedValue('d1');
+        vi.spyOn(StorageFactory, 'createAdapter').mockReturnValue(createStorageAdapter({
+            sources: [
+                {
+                    id: 'sub-good',
+                    kind: 'subscription',
+                    name: 'Good Subscription',
+                    enabled: true,
+                    input: 'https://example.com/good',
+                    probe_status: 'verified',
+                    probe_input: 'https://example.com/good',
+                    last_probe_at: '2026-04-28T00:00:00.000Z'
+                },
+                {
+                    id: 'sub-bad',
+                    kind: 'subscription',
+                    name: 'Bad Subscription',
+                    enabled: true,
+                    input: 'https://example.com/bad',
+                    probe_status: 'unreachable',
+                    probe_input: 'https://example.com/bad',
+                    last_probe_at: '2026-04-28T00:00:00.000Z'
+                },
+                {
+                    id: 'proxy-good',
+                    kind: 'proxy_uri',
+                    name: 'Direct Proxy',
+                    enabled: true,
+                    input: 'http://user:pass@proxy.example.com:8080',
+                    probe_status: 'skipped',
+                    probe_input: 'http://user:pass@proxy.example.com:8080',
+                    last_probe_at: '2026-04-28T00:00:00.000Z'
+                },
+                {
+                    id: 'proxy-bad',
+                    kind: 'proxy_uri',
+                    name: 'Bad Proxy',
+                    enabled: true,
+                    input: 'http://user:pass@proxy-bad.example.com:8080',
+                    probe_status: 'unchecked',
+                    probe_input: 'http://user:pass@proxy-bad.example.com:8080',
+                    last_probe_at: '2026-04-28T00:00:00.000Z'
+                },
+                {
+                    id: 'connector-1',
+                    kind: 'connector',
+                    name: 'ECH Connector',
+                    enabled: true,
+                    input: 'https://ech.example.com/connect',
+                    options: {
+                        connector_type: 'ech_worker',
+                        connector_config: {
+                            local_protocol: 'socks5'
+                        }
+                    }
+                }
+            ],
+            profiles: [
+                {
+                    id: 'profile-2',
+                    customId: 'effective-only',
+                    name: 'Effective Only',
+                    enabled: true,
+                    subscriptions: ['sub-good', 'sub-bad'],
+                    manualNodes: ['proxy-good', 'proxy-bad', 'connector-1']
+                }
+            ]
+        }));
+
+        const response = await handleManifestRequest(
+            createAuthorizedRequest('https://misub.example.com/api/manifest/effective-only'),
+            { MANIFEST_TOKEN: 'manifest-secret' },
+            'effective-only'
+        );
+
+        expect(response.status).toBe(200);
+        const payload = await response.json();
+        expect(payload.sources.map(item => item.id)).toEqual(['sub-good', 'proxy-good', 'connector-1']);
     });
 });

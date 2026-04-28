@@ -52,6 +52,12 @@ describe('syncAggregatorArtifacts', () => {
                 });
             }
 
+            if (url === 'https://sub.aiaimimi.com/subs/clash.yaml') {
+                return createTextResponse('proxies:\n  - { name: stable, type: ss, server: stable.example.com, port: 443, cipher: aes-128-gcm, password: test }', {
+                    contentType: 'text/yaml; charset=utf-8'
+                });
+            }
+
             throw new Error(`Unexpected fetch URL in test: ${url}`);
         });
 
@@ -107,7 +113,7 @@ describe('syncAggregatorArtifacts', () => {
             fetchImpl: fetchMock
         });
 
-        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(fetchMock).toHaveBeenCalledTimes(3);
         expect(result.summary).toMatchObject({
             status: 'success',
             totalRemote: 2,
@@ -154,6 +160,7 @@ describe('syncAggregatorArtifacts', () => {
             visibility: 'public_default'
         });
         expect(stableSource.id).toBe('sub_aggregator_stable');
+        expect(stableSource.probe_status).toBe('verified');
 
         expect(result.profiles).toContainEqual(expect.objectContaining({
             id: 'aggregator_global',
@@ -180,6 +187,11 @@ describe('syncAggregatorArtifacts', () => {
             const url = String(input);
             if (url === 'https://sub.aiaimimi.com/internal/crawledsubs.json') {
                 return createJsonResponse({});
+            }
+            if (url === 'https://sub.aiaimimi.com/subs/clash.yaml') {
+                return createTextResponse('proxies:\n  - { name: stable, type: ss, server: stable.example.com, port: 443, cipher: aes-128-gcm, password: test }', {
+                    contentType: 'text/yaml; charset=utf-8'
+                });
             }
 
             throw new Error(`Unexpected fetch URL in test: ${url}`);
@@ -241,6 +253,11 @@ describe('syncAggregatorArtifacts', () => {
             const url = String(input);
             if (url === 'https://sub.aiaimimi.com/internal/crawledsubs.json') {
                 return createJsonResponse({});
+            }
+            if (url === 'https://sub.aiaimimi.com/subs/clash.yaml') {
+                return createTextResponse('proxies:\n  - { name: stable, type: ss, server: stable.example.com, port: 443, cipher: aes-128-gcm, password: test }', {
+                    contentType: 'text/yaml; charset=utf-8'
+                });
             }
 
             throw new Error(`Unexpected fetch URL in test: ${url}`);

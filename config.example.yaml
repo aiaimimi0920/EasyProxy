@@ -62,12 +62,13 @@ serviceBase:
         working_directory: /var/lib/easy-proxy/connectors
         listen_host: 127.0.0.1
         listen_start_port: 30000
-        startup_timeout: 10s
+        startup_timeout: 30s
         preferred_ip:
           binary_path: /usr/local/bin/cfst
           ip_file_path: /usr/local/share/cfst/ip.txt
           working_directory: /var/lib/easy-proxy/connectors/preferred-ip
           timeout: 5m0s
+          fanout_count: 5
     connectors:
       - name: ECH Worker Template
         input: https://your-ech-worker.example.com:443

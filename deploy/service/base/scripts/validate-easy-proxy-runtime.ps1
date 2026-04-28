@@ -275,14 +275,19 @@ function Convert-ScenarioEvidence {
     $nodeChecks = @()
     $successfulNodeChecks = 0
     $stableAvailableNode = $null
+    $stableAvailableURIs = New-Object System.Collections.Generic.List[string]
     foreach ($port in $ValidatedPorts) {
         $checkResult = $null
         $checkError = ""
         try {
             $checkResult = (Test-Proxy204 ("http://127.0.0.1:{0}" -f $port))
             $successfulNodeChecks++
+            $matchingNode = @($availableNodes | Where-Object { [int]$_.port -eq $port } | Select-Object -First 1)
+            if ($matchingNode -and -not [string]::IsNullOrWhiteSpace([string]$matchingNode.uri)) {
+                $stableAvailableURIs.Add([string]$matchingNode.uri)
+            }
             if ($null -eq $stableAvailableNode) {
-                $stableAvailableNode = @($availableNodes | Where-Object { [int]$_.port -eq $port } | Select-Object -First 1)
+                $stableAvailableNode = $matchingNode
             }
         }
         catch {
@@ -304,6 +309,7 @@ function Convert-ScenarioEvidence {
         available_node_names = @($availableNodes | Select-Object -First 5 | ForEach-Object { [string]$_.name })
         first_available_uri = if ($availableNodes.Count -gt 0) { [string]$availableNodes[0].uri } else { "" }
         first_stable_available_uri = if ($null -ne $stableAvailableNode) { [string]$stableAvailableNode.uri } else { "" }
+        stable_available_uris = @($stableAvailableURIs | Select-Object -Unique)
         source_sync = $State.SourceSync
         pool_google_generate_204 = (Test-Proxy204 ("http://127.0.0.1:{0}" -f $PoolPort))
         stable_node_proxy_count = $successfulNodeChecks
@@ -371,6 +377,16 @@ function Run-Scenario {
 
         if ([string]::IsNullOrWhiteSpace($script:directProxyUri) -and -not [string]::IsNullOrWhiteSpace([string]$evidence.first_stable_available_uri)) {
             $script:directProxyUri = [string]$evidence.first_stable_available_uri
+        }
+        if ($evidence.stable_available_uris) {
+            foreach ($candidateUri in @($evidence.stable_available_uris)) {
+                if ([string]::IsNullOrWhiteSpace([string]$candidateUri)) {
+                    continue
+                }
+                if (-not ($script:directProxyCandidates -contains [string]$candidateUri)) {
+                    $script:directProxyCandidates += [string]$candidateUri
+                }
+            }
         }
 
         Write-Host "[runtime:$Name] passed"
@@ -454,6 +470,7 @@ $configuredLocalSubscriptionsYaml = Convert-StringListToYamlSequence -Items $con
 
 $summary = @()
 $directProxyUri = ""
+$directProxyCandidates = @()
 
 Run-Scenario -Name "local-subscription" -ScenarioIndex 0 -ConfigYaml (New-ScenarioConfig 25000 @"
 source_sync:
@@ -470,7 +487,7 @@ source_sync:
     working_directory: "/var/lib/easy-proxy/connectors"
     listen_host: "127.0.0.1"
     listen_start_port: 30000
-    startup_timeout: 10s
+    startup_timeout: 30s
 connectors: []
 subscriptions:
 $configuredLocalSubscriptionsYaml
@@ -499,7 +516,7 @@ source_sync:
     working_directory: "/var/lib/easy-proxy/connectors"
     listen_host: "127.0.0.1"
     listen_start_port: 30000
-    startup_timeout: 10s
+    startup_timeout: 30s
 connectors: []
 subscriptions: []
 "@) -Ready {
@@ -524,11 +541,21 @@ subscriptions: []
     }
 }
 
+if ([string]::IsNullOrWhiteSpace($directProxyUri) -and $directProxyCandidates.Count -gt 0) {
+    $directProxyUri = $directProxyCandidates[0]
+}
 if ([string]::IsNullOrWhiteSpace($directProxyUri)) {
     throw "No reusable stable direct proxy URI was discovered during subscription validation"
 }
+if ($directProxyCandidates.Count -eq 0) {
+    $directProxyCandidates = @($directProxyUri)
+}
 
-Run-Scenario -Name "local-direct-proxy" -ScenarioIndex 2 -ConfigYaml (New-ScenarioConfig 25100 @"
+$directProxyValidated = $false
+$directProxyErrors = @()
+foreach ($candidateUri in $directProxyCandidates) {
+    try {
+        Run-Scenario -Name "local-direct-proxy" -ScenarioIndex 2 -ConfigYaml (New-ScenarioConfig 25100 @"
 source_sync:
   enabled: false
   manifest_url: ""
@@ -543,23 +570,34 @@ source_sync:
     working_directory: "/var/lib/easy-proxy/connectors"
     listen_host: "127.0.0.1"
     listen_start_port: 30000
-    startup_timeout: 10s
+    startup_timeout: 30s
 connectors: []
 subscriptions: []
 nodes:
   - name: "seed-direct-proxy"
-    uri: "$directProxyUri"
+    uri: "$candidateUri"
 "@) -Ready {
-    param($state)
-    return ($state.Nodes.total_nodes -gt 0 -and $state.Nodes.available_nodes -gt 0)
-} -Assert {
-    param($evidence)
-    if ([int]$evidence.available_nodes -lt 1) {
-        throw "local-direct-proxy did not become available"
+            param($state)
+            return ($state.Nodes.total_nodes -gt 0 -and $state.Nodes.available_nodes -gt 0)
+        } -Assert {
+            param($evidence)
+            if ([int]$evidence.available_nodes -lt 1) {
+                throw "local-direct-proxy did not become available"
+            }
+            if ([int]$evidence.stable_node_proxy_count -lt 1) {
+                throw "local-direct-proxy did not yield a stable direct node proxy"
+            }
+        }
+        $directProxyValidated = $true
+        $directProxyUri = $candidateUri
+        break
     }
-    if ([int]$evidence.stable_node_proxy_count -lt 1) {
-        throw "local-direct-proxy did not yield a stable direct node proxy"
+    catch {
+        $directProxyErrors += "$candidateUri => $($_.Exception.Message)"
     }
+}
+if (-not $directProxyValidated) {
+    throw "local-direct-proxy failed for all candidate URIs: $($directProxyErrors -join '; ')"
 }
 
 Run-Scenario -Name "fallback-subscription" -ScenarioIndex 3 -ConfigYaml (New-ScenarioConfig 25300 @"
@@ -619,7 +657,7 @@ source_sync:
     working_directory: "/var/lib/easy-proxy/connectors"
     listen_host: "127.0.0.1"
     listen_start_port: 30000
-    startup_timeout: 15s
+    startup_timeout: 30s
 connectors:
   - name: "ECH Local Preferred"
     input: "$workerUrl"
@@ -644,8 +682,8 @@ subscriptions: []
     if ([int]$evidence.available_nodes -lt 1) {
         throw "local-connector did not yield an available route"
     }
-    if ([int]$evidence.source_sync.connector_instance_count -lt 1) {
-        throw "local-connector did not start any connector instances"
+    if ([int]$evidence.source_sync.connector_instance_count -lt 5) {
+        throw "local-connector did not fan out into at least 5 preferred connector instances"
     }
     if ([int]$evidence.stable_node_proxy_count -lt 1) {
         throw "local-connector did not yield a stable direct node proxy"
@@ -667,7 +705,7 @@ source_sync:
     working_directory: "/var/lib/easy-proxy/connectors"
     listen_host: "127.0.0.1"
     listen_start_port: 30000
-    startup_timeout: 15s
+    startup_timeout: 30s
 connectors: []
 subscriptions: []
 "@) -Ready {
@@ -688,8 +726,8 @@ subscriptions: []
     if ([int]$evidence.source_sync.connector_source_count -lt 1) {
         throw "manifest-connector missing connector sources"
     }
-    if ([int]$evidence.source_sync.connector_instance_count -lt 1) {
-        throw "manifest-connector missing connector instances"
+    if ([int]$evidence.source_sync.connector_instance_count -lt 5) {
+        throw "manifest-connector did not fan out into at least 5 preferred connector instances"
     }
     if ([int]$evidence.stable_node_proxy_count -lt 1) {
         throw "manifest-connector did not yield a stable direct node proxy"
