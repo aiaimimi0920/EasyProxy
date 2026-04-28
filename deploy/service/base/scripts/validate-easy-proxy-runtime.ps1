@@ -242,6 +242,17 @@ $Body
 "@
 }
 
+function Convert-StringListToYamlSequence {
+    param([string[]]$Items)
+
+    $normalized = @($Items | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_.Trim() })
+    if ($normalized.Count -eq 0) {
+        return "[]"
+    }
+
+    return (($normalized | ForEach-Object { '  - "{0}"' -f ($_ -replace '"', '\"') }) -join [Environment]::NewLine)
+}
+
 function Convert-ScenarioEvidence {
     param(
         [string]$Name,
@@ -253,12 +264,16 @@ function Convert-ScenarioEvidence {
     $availableNodes = @($State.Nodes.nodes | Where-Object { $_.available -eq $true })
     $nodeChecks = @()
     $successfulNodeChecks = 0
+    $stableAvailableNode = $null
     foreach ($port in $ValidatedPorts) {
         $checkResult = $null
         $checkError = ""
         try {
             $checkResult = (Test-Proxy204 ("http://127.0.0.1:{0}" -f $port))
             $successfulNodeChecks++
+            if ($null -eq $stableAvailableNode) {
+                $stableAvailableNode = @($availableNodes | Where-Object { [int]$_.port -eq $port } | Select-Object -First 1)
+            }
         }
         catch {
             $checkError = $_.Exception.Message
@@ -278,6 +293,7 @@ function Convert-ScenarioEvidence {
         available_nodes = [int]$State.Nodes.available_nodes
         available_node_names = @($availableNodes | Select-Object -First 5 | ForEach-Object { [string]$_.name })
         first_available_uri = if ($availableNodes.Count -gt 0) { [string]$availableNodes[0].uri } else { "" }
+        first_stable_available_uri = if ($null -ne $stableAvailableNode) { [string]$stableAvailableNode.uri } else { "" }
         source_sync = $State.SourceSync
         pool_google_generate_204 = (Test-Proxy204 ("http://127.0.0.1:{0}" -f $PoolPort))
         stable_node_proxy_count = $successfulNodeChecks
@@ -333,7 +349,7 @@ function Run-Scenario {
         $baseUrl = "http://127.0.0.1:$managementPort"
         $null = Wait-ManagementReady -BaseUrl $baseUrl -TimeoutSeconds 180
         $state = Wait-ScenarioState -BaseUrl $baseUrl -TimeoutSeconds $ScenarioTimeoutSeconds -Ready $Ready
-        $availablePorts = @($state.Nodes.nodes | Where-Object { $_.available -eq $true } | Select-Object -First 3 | ForEach-Object { [int]$_.port })
+        $availablePorts = @($state.Nodes.nodes | Where-Object { $_.available -eq $true } | Select-Object -First 20 | ForEach-Object { [int]$_.port })
         if ($availablePorts.Count -lt 1) {
             throw "Scenario $Name reported no available node ports"
         }
@@ -343,8 +359,8 @@ function Run-Scenario {
         $evidence | ConvertTo-Json -Depth 100 | Set-Content -Path $evidencePath -Encoding UTF8
         $script:summary += $evidence
 
-        if ($Name -eq "local-subscription") {
-            $script:directProxyUri = [string]$evidence.first_available_uri
+        if ([string]::IsNullOrWhiteSpace($script:directProxyUri) -and -not [string]::IsNullOrWhiteSpace([string]$evidence.first_stable_available_uri)) {
+            $script:directProxyUri = [string]$evidence.first_stable_available_uri
         }
 
         Write-Host "[runtime:$Name] passed"
@@ -377,7 +393,7 @@ $echCloudflare = Get-EasyProxyConfigSection -Config $rootConfig -Name 'echWorker
 $echSecrets = Get-EasyProxyConfigSection -Config $echCloudflare -Name 'secrets'
 
 $misubPublicUrl = [string](Get-EasyProxyConfigValue -Object $misubPages -Name 'publicUrl' -Default 'https://misub.aiaimimi.com')
-$misubConnectorProfileId = [string](Get-EasyProxyConfigValue -Object $misubPages -Name 'connectorProfileId' -Default 'easyproxies-ech-test')
+$misubConnectorProfileId = [string](Get-EasyProxyConfigValue -Object $misubPages -Name 'connectorProfileId' -Default 'easyproxies-ech-runtime')
 $manifestToken = [string](Get-EasyProxyConfigValue -Object $sourceSyncConfig -Name 'manifest_token' -Default '')
 if ([string]::IsNullOrWhiteSpace($manifestToken)) {
     $manifestToken = [string](Get-EasyProxyConfigValue -Object $misubDockerEnv -Name 'MANIFEST_TOKEN' -Default '')
@@ -405,6 +421,11 @@ if ([string]::IsNullOrWhiteSpace($workerAccessToken)) {
     throw "Unable to resolve ECH worker access token from config.yaml"
 }
 $workerServerIp = ""
+$configuredLocalSubscriptions = @(Get-EasyProxyConfigValue -Object $serviceRuntime -Name 'subscriptions' -Default @())
+if ($configuredLocalSubscriptions.Count -lt 1) {
+    throw "config.yaml does not define any serviceBase.runtime.subscriptions for local subscription validation"
+}
+$configuredLocalSubscriptionsYaml = Convert-StringListToYamlSequence -Items $configuredLocalSubscriptions
 
 $summary = @()
 $directProxyUri = ""
@@ -427,7 +448,7 @@ source_sync:
     startup_timeout: 10s
 connectors: []
 subscriptions:
-  - "https://sub.aiaimimi.com/subs/clash.yaml"
+$configuredLocalSubscriptionsYaml
 "@) -Ready {
     param($state)
     return ($state.Nodes.total_nodes -gt 0 -and $state.Nodes.available_nodes -gt 0)
@@ -436,50 +457,9 @@ subscriptions:
     if ([int]$evidence.available_nodes -lt 1) {
         throw "local-subscription did not produce available nodes"
     }
-    if ([int]$evidence.stable_node_proxy_count -lt 1) {
-        throw "local-subscription did not yield a stable direct node proxy"
-    }
 }
 
-if ([string]::IsNullOrWhiteSpace($directProxyUri)) {
-    throw "local-subscription did not yield a reusable direct proxy URI"
-}
-
-Run-Scenario -Name "local-direct-proxy" -ScenarioIndex 1 -ConfigYaml (New-ScenarioConfig 25100 @"
-source_sync:
-  enabled: false
-  manifest_url: ""
-  manifest_token: ""
-  refresh_interval: 24h0m0s
-  request_timeout: 15s
-  default_direct_proxy_scheme: http
-  fallback_subscriptions: []
-  connector_runtime:
-    enabled: true
-    binary_path: "/usr/local/bin/ech-workers"
-    working_directory: "/var/lib/easy-proxy/connectors"
-    listen_host: "127.0.0.1"
-    listen_start_port: 30000
-    startup_timeout: 10s
-connectors: []
-subscriptions: []
-nodes:
-  - name: "seed-direct-proxy"
-    uri: "$directProxyUri"
-"@) -Ready {
-    param($state)
-    return ($state.Nodes.total_nodes -gt 0 -and $state.Nodes.available_nodes -gt 0)
-} -Assert {
-    param($evidence)
-    if ([int]$evidence.available_nodes -lt 1) {
-        throw "local-direct-proxy did not become available"
-    }
-    if ([int]$evidence.stable_node_proxy_count -lt 1) {
-        throw "local-direct-proxy did not yield a stable direct node proxy"
-    }
-}
-
-Run-Scenario -Name "manifest-subscription" -ScenarioIndex 2 -ConfigYaml (New-ScenarioConfig 25200 @"
+Run-Scenario -Name "manifest-subscription" -ScenarioIndex 1 -ConfigYaml (New-ScenarioConfig 25200 @"
 source_sync:
   enabled: true
   manifest_url: "$misubPublicUrl/api/manifest/aggregator-global"
@@ -516,6 +496,44 @@ subscriptions: []
     }
     if ([int]$evidence.stable_node_proxy_count -lt 1) {
         throw "manifest-subscription did not yield a stable direct node proxy"
+    }
+}
+
+if ([string]::IsNullOrWhiteSpace($directProxyUri)) {
+    throw "No reusable stable direct proxy URI was discovered during subscription validation"
+}
+
+Run-Scenario -Name "local-direct-proxy" -ScenarioIndex 2 -ConfigYaml (New-ScenarioConfig 25100 @"
+source_sync:
+  enabled: false
+  manifest_url: ""
+  manifest_token: ""
+  refresh_interval: 24h0m0s
+  request_timeout: 15s
+  default_direct_proxy_scheme: http
+  fallback_subscriptions: []
+  connector_runtime:
+    enabled: true
+    binary_path: "/usr/local/bin/ech-workers"
+    working_directory: "/var/lib/easy-proxy/connectors"
+    listen_host: "127.0.0.1"
+    listen_start_port: 30000
+    startup_timeout: 10s
+connectors: []
+subscriptions: []
+nodes:
+  - name: "seed-direct-proxy"
+    uri: "$directProxyUri"
+"@) -Ready {
+    param($state)
+    return ($state.Nodes.total_nodes -gt 0 -and $state.Nodes.available_nodes -gt 0)
+} -Assert {
+    param($evidence)
+    if ([int]$evidence.available_nodes -lt 1) {
+        throw "local-direct-proxy did not become available"
+    }
+    if ([int]$evidence.stable_node_proxy_count -lt 1) {
+        throw "local-direct-proxy did not yield a stable direct node proxy"
     }
 }
 

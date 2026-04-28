@@ -1,6 +1,6 @@
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
-    [string]$ProfileId = "easyproxies-ech-test",
+    [string]$ProfileId = "easyproxies-ech-runtime",
     [string]$WorkerUrl = "",
     [string]$CustomDomainUrl = "https://proxyservice-ech-workers.aiaimimi.com:443",
     [string]$AccessToken = "",

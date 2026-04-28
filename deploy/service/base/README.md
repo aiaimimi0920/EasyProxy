@@ -118,35 +118,29 @@ not the same thing as the persistent local node store.
 
 Historical note on `2026-03-26`:
 
-- an earlier private `MiSub` profile for `easyproxies-ech-test` used two
+- an earlier private `MiSub` profile for `easyproxies-ech-runtime` used two
   community snippet connector sources
 - `EasyProxy` bootstrapped and launched local `ech-workers` helpers correctly,
   but both snippet endpoints failed real traffic with `websocket: bad handshake`
 - those snippet-style sources remain historical/private-only evidence and are
   not the current healthy operator baseline
 
-Current preferred-entry-IP validation baseline:
+Current canonical ECH runtime baseline:
 
 - active manifest profile:
-  - `easyproxies-ech-test`
+  - `easyproxies-ech-runtime`
 - active connector count:
-  - `5`
-- selected preferred entry IPs:
-  - `198.41.132.114`
-  - `198.41.140.152`
-  - `104.27.191.104`
-  - `190.93.251.61`
-  - `104.24.105.52`
+  - `1`
 - health-check target:
   - `https://www.google.com/generate_204`
-- preferred managed Worker URL target:
+- managed Worker URL target:
   - `https://proxyservice-ech-workers.aiaimimi.com:443`
 - rollback/debug Worker URL:
   - `https://proxyservice-ech-workers.vmjcv666.workers.dev:443`
 - steady-state result:
   - pool listener returned `204`
   - dedicated node port returned `204`
-  - all `5` connector nodes eventually reported `available = true`
+  - the managed connector reported `available = true`
 - historical transient evidence for this 2026-03-26 run was removed during
   workspace cleanup; the retained operator baseline is the validated runtime
   behavior summarized below and in `docs/progress/`
@@ -191,11 +185,11 @@ Verified scenarios:
 - manifest ECH connector profile:
   - passed
   - manifest URL:
-    - `https://misub.aiaimimi.com/api/manifest/easyproxies-ech-test`
+    - `https://misub.aiaimimi.com/api/manifest/easyproxies-ech-runtime`
   - connector source count:
-    - `5`
+    - `1`
   - connector instance count:
-    - `5`
+    - `1`
   - pool listener returned `204`
 
 Detailed local runtime evidence was intentionally pruned during workspace
@@ -542,7 +536,7 @@ Typical reuse of an existing result file for a `MiSub`-managed profile:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\deploy\service\base\scripts\update_ech_preferred_ips.ps1 `
-  -ProfileId easyproxies-ech-test `
+  -ProfileId easyproxies-ech-runtime `
   -PreferCustomDomain `
   -CustomDomainUrl https://proxyservice-ech-workers.aiaimimi.com:443 `
   -ReuseResultCsvPath .\tmp\ech-workers-cloudflare\preferred-ip\result.csv `
@@ -553,7 +547,7 @@ Typical full run:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\deploy\service\base\scripts\update_ech_preferred_ips.ps1 `
-  -ProfileId easyproxies-ech-test `
+  -ProfileId easyproxies-ech-runtime `
   -PreferCustomDomain `
   -CustomDomainUrl https://proxyservice-ech-workers.aiaimimi.com:443 `
   -TopCount 5 `
@@ -580,7 +574,7 @@ Recommended custom-domain migration order:
 2. Validate that both the custom domain and `workers.dev` still complete the
    authenticated WebSocket handshake.
 3. Run `update_ech_preferred_ips.ps1` with `-PreferCustomDomain -ApplyToMiSub`
-   so the managed `easyproxies-ech-test` profile rewrites its connector
+   so the managed `easyproxies-ech-runtime` profile rewrites its connector
    `input/url` to the custom domain while preserving the selected `server_ip`
    values.
 4. Rerun `deploy/service/base/scripts/validate-easy-proxy-runtime.ps1`.

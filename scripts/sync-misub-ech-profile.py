@@ -30,9 +30,12 @@ def retry(label: str, attempts: int, delay_seconds: float, func):
     raise RuntimeError(f"{label} failed after {attempts} attempts: {last_error}") from last_error
 
 
-def find_profile(profiles: list[dict[str, Any]], profile_id: str) -> dict[str, Any] | None:
+def find_profile(profiles: list[dict[str, Any]], profile_ids: list[str]) -> dict[str, Any] | None:
+    expected = {item.strip() for item in profile_ids if str(item).strip()}
     for profile in profiles:
-        if str(profile.get("customId", "")).strip() == profile_id or str(profile.get("id", "")).strip() == profile_id:
+        profile_custom_id = str(profile.get("customId", "")).strip()
+        profile_id = str(profile.get("id", "")).strip()
+        if profile_custom_id in expected or profile_id in expected:
             return profile
     return None
 
@@ -104,7 +107,13 @@ def main() -> int:
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--admin-password", required=True)
     parser.add_argument("--manifest-token", required=True)
-    parser.add_argument("--profile-id", default="easyproxies-ech-test")
+    parser.add_argument("--profile-id", default="easyproxies-ech-runtime")
+    parser.add_argument("--legacy-profile-id", default="easyproxies-ech-test")
+    parser.add_argument("--profile-name", default="EasyProxies ECH Runtime")
+    parser.add_argument(
+        "--profile-description",
+        default="Private profile for routing EasyProxy-managed ECH connector sources through the current self-hosted ECH Worker",
+    )
     parser.add_argument("--worker-url", required=True)
     parser.add_argument("--access-token", required=True)
     parser.add_argument("--local-protocol", default="socks5")
@@ -141,7 +150,7 @@ def main() -> int:
     ensure(isinstance(misubs, list), "MiSub /api/data did not return a misubs array")
     ensure(isinstance(profiles, list), "MiSub /api/data did not return a profiles array")
 
-    profile = find_profile(profiles, args.profile_id)
+    profile = find_profile(profiles, [args.profile_id, args.legacy_profile_id])
     ensure(profile is not None, f"MiSub profile not found: {args.profile_id}")
 
     existing_sources, existing_server_ips = normalize_existing_sources(misubs, args.source_id_prefix)
@@ -173,11 +182,21 @@ def main() -> int:
     filtered_manual_nodes.extend(source["id"] for source in new_sources)
 
     updated_profile = dict(profile)
+    updated_profile["id"] = args.profile_id.replace("-", "_")
+    updated_profile["customId"] = args.profile_id
+    updated_profile["name"] = args.profile_name
+    updated_profile["description"] = args.profile_description
     updated_profile["manualNodes"] = filtered_manual_nodes
 
     updated_profiles = []
     for candidate in profiles:
-        if candidate is profile or str(candidate.get("customId", "")).strip() == args.profile_id or str(candidate.get("id", "")).strip() == args.profile_id:
+        candidate_custom_id = str(candidate.get("customId", "")).strip()
+        candidate_id = str(candidate.get("id", "")).strip()
+        if (
+            candidate is profile
+            or candidate_custom_id in {args.profile_id, args.legacy_profile_id}
+            or candidate_id in {args.profile_id.replace("-", "_"), args.legacy_profile_id.replace("-", "_")}
+        ):
             updated_profiles.append(updated_profile)
         else:
             updated_profiles.append(candidate)

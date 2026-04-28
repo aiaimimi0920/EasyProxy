@@ -422,7 +422,7 @@ jobs:
             exit 1
           fi
 
-          connector_profile_id="${MISUB_CONNECTOR_PROFILE_ID:-easyproxies-ech-test}"
+          connector_profile_id="${MISUB_CONNECTOR_PROFILE_ID:-easyproxies-ech-runtime}"
 
           if ! python -c "import os, requests, sys; base=os.environ['MISUB_PUBLIC_URL'].rstrip('/') + '/'; response=requests.get(base, timeout=20); response.raise_for_status()"
           then
@@ -450,7 +450,7 @@ jobs:
           {
             echo "## MiSub ECH connector profile synchronized"
             echo
-            echo "- profile id: \`${MISUB_CONNECTOR_PROFILE_ID:-easyproxies-ech-test}\`"
+            echo "- profile id: \`${MISUB_CONNECTOR_PROFILE_ID:-easyproxies-ech-runtime}\`"
             echo "- MiSub base URL: \`${{ vars.EASYPROXY_MISUB_PUBLIC_URL || 'n/a' }}\`"
             echo "- ECH worker URL: \`${{ vars.EASYPROXY_ECH_WORKER_PUBLIC_URL || 'n/a' }}:443\`"
           } >> "$GITHUB_STEP_SUMMARY"

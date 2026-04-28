@@ -92,7 +92,7 @@ misub:
     d1DatabaseName: misub
     d1DatabaseBinding: MISUB_DB
     verifyManifestProfileId: default
-    connectorProfileId: easyproxies-ech-test
+    connectorProfileId: easyproxies-ech-runtime
   docker:
     composeFile: upstreams/misub/docker-compose.yml
     envOutput: upstreams/misub/.env

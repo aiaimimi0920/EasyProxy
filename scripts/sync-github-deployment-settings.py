@@ -10,6 +10,7 @@ import json
 import os
 import secrets
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -233,42 +234,58 @@ def github_headers(token: str) -> dict[str, str]:
     }
 
 
+def github_request(method: str, url: str, *, headers: dict[str, str], json_payload: dict[str, Any] | None = None) -> requests.Response:
+    last_error: Exception | None = None
+    for attempt in range(1, 6):
+        try:
+            response = requests.request(method, url, headers=headers, json=json_payload, timeout=30)
+            response.raise_for_status()
+            return response
+        except requests.RequestException as exc:
+            last_error = exc
+            if attempt == 5:
+                break
+            time.sleep(2 * attempt)
+    raise last_error if last_error else RuntimeError(f"GitHub request failed: {method} {url}")
+
+
 def set_github_secret(token: str, repo: str, name: str, value: str) -> None:
     headers = github_headers(token)
-    pk_resp = requests.get(f"https://api.github.com/repos/{repo}/actions/secrets/public-key", headers=headers, timeout=30)
-    pk_resp.raise_for_status()
+    pk_resp = github_request("GET", f"https://api.github.com/repos/{repo}/actions/secrets/public-key", headers=headers)
     payload = pk_resp.json()
     public_key = public.PublicKey(payload["key"].encode("utf-8"), encoding.Base64Encoder())
     sealed_box = public.SealedBox(public_key)
     encrypted = base64.b64encode(sealed_box.encrypt(value.encode("utf-8"))).decode("ascii")
-    resp = requests.put(
+    github_request(
+        "PUT",
         f"https://api.github.com/repos/{repo}/actions/secrets/{name}",
         headers=headers,
-        json={"encrypted_value": encrypted, "key_id": payload["key_id"]},
-        timeout=30,
+        json_payload={"encrypted_value": encrypted, "key_id": payload["key_id"]},
     )
-    resp.raise_for_status()
 
 
 def set_github_variable(token: str, repo: str, name: str, value: str) -> None:
     headers = github_headers(token)
     patch_payload = {"name": name, "value": value}
-    resp = requests.patch(
-        f"https://api.github.com/repos/{repo}/actions/variables/{name}",
-        headers=headers,
-        json=patch_payload,
-        timeout=30,
-    )
-    if resp.status_code == 404:
-        create = requests.post(
+    try:
+        github_request(
+            "PATCH",
+            f"https://api.github.com/repos/{repo}/actions/variables/{name}",
+            headers=headers,
+            json_payload=patch_payload,
+        )
+        return
+    except requests.HTTPError as exc:
+        response = exc.response
+        if response is None or response.status_code != 404:
+            raise
+        github_request(
+            "POST",
             f"https://api.github.com/repos/{repo}/actions/variables",
             headers=headers,
-            json=patch_payload,
-            timeout=30,
+            json_payload=patch_payload,
         )
-        create.raise_for_status()
         return
-    resp.raise_for_status()
 
 
 def main() -> int:
@@ -319,7 +336,7 @@ def main() -> int:
     misub_d1_name = "misub"
     misub_d1_binding = "MISUB_DB"
     misub_manifest_profile_id = "aggregator-global"
-    misub_connector_profile_id = "easyproxies-ech-test"
+    misub_connector_profile_id = "easyproxies-ech-runtime"
     ech_worker_public_url = "https://proxyservice-ech-workers.aiaimimi.com"
     aggregator_public_base_url = "https://sub.aiaimimi.com"
 
@@ -452,7 +469,10 @@ def main() -> int:
     set_nested(config, ("serviceBase", "runtime", "management", "password"), service_base_management_password)
     set_nested(config, ("serviceBase", "runtime", "source_sync", "manifest_url"), f"{misub_public_url}/api/manifest/{misub_manifest_profile_id}")
     set_nested(config, ("serviceBase", "runtime", "source_sync", "manifest_token"), misub_manifest_token)
-    set_nested(config, ("serviceBase", "runtime", "subscriptions"), [])
+    existing_subscriptions = get_nested(config, "serviceBase", "runtime", "subscriptions", default=[])
+    if not isinstance(existing_subscriptions, list):
+        existing_subscriptions = []
+    set_nested(config, ("serviceBase", "runtime", "subscriptions"), existing_subscriptions)
     connectors = get_nested(config, "serviceBase", "runtime", "connectors", default=[])
     if not isinstance(connectors, list) or not connectors:
         connectors = [
