@@ -228,6 +228,14 @@
                 "bucket": "aggregator",
                 "key": "subs/mixed.txt"
             },
+            "public-effective": {
+                "bucket": "aggregator",
+                "key": "subs/effective.txt"
+            },
+            "public-effective-json": {
+                "bucket": "aggregator",
+                "key": "subs/effective.json"
+            },
             "crawledsubs": {
                 "bucket": "aggregator",
                 "key": "internal/crawledsubs.json"

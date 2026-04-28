@@ -10,6 +10,7 @@ serviceBase:
   image: easyproxy/easy-proxy-monorepo-service:local
   composeFile: deploy/service/base/docker-compose.yaml
   renderedConfigPath: deploy/service/base/config.yaml
+  networkName: EasyAiMi
   runtime:
     mode: hybrid
     log_level: info
@@ -35,10 +36,10 @@ serviceBase:
       enabled: true
       listen: 0.0.0.0:29888
       probe_targets:
-        - tcp://www.google.com:443
-        - tcp://connectivitycheck.gstatic.com:443
-        - tcp://www.msftconnecttest.com:443
-        - tcp://cp.cloudflare.com:443
+      - https://connectivitycheck.gstatic.com/generate_204
+      - https://cp.cloudflare.com/generate_204
+      - https://www.msftconnecttest.com/connecttest.txt
+      - https://www.google.com/generate_204
       password: ""
     subscription_refresh:
       enabled: true
@@ -55,7 +56,7 @@ serviceBase:
       request_timeout: 15s
       default_direct_proxy_scheme: http
       fallback_subscriptions:
-        - https://sub.aiaimimi.com/subs/clash.yaml
+        - https://sub.aiaimimi.com/subs/effective.txt
       connector_runtime:
         enabled: true
         binary_path: /usr/local/bin/ech-workers
@@ -94,6 +95,7 @@ misub:
     d1DatabaseBinding: MISUB_DB
     verifyManifestProfileId: default
     connectorProfileId: easyproxies-ech-runtime
+    additionalSubscriptions: []
   docker:
     composeFile: upstreams/misub/docker-compose.yml
     envOutput: upstreams/misub/.env
@@ -112,6 +114,7 @@ aggregator:
   ref: main
   configPath: deploy/upstreams/aggregator/config/config.actions.r2.json
   publicBaseUrl: https://sub.example.com
+  effectiveUrl: https://sub.example.com/subs/effective.txt
   r2:
     accountId: ""
     accessKeyId: ""

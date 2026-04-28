@@ -592,7 +592,7 @@ func buildVLESSOptions(u *url.URL, skipCertVerify bool) (option.VLESSOutboundOpt
 		Network:       option.NetworkList(""),
 	}
 	if flow := query.Get("flow"); flow != "" {
-		opts.Flow = flow
+		opts.Flow = config.NormalizeVLESSFlow(flow)
 	}
 	if packetEncoding := query.Get("packetEncoding"); packetEncoding != "" {
 		opts.PacketEncoding = &packetEncoding

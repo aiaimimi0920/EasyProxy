@@ -116,7 +116,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          python -m pip install -r upstreams/aggregator/requirements.txt requests
+          python -m pip install -r upstreams/aggregator/requirements.txt requests boto3 PyYAML
 
       - name: Resolve deployment mode
         id: deploy_mode
@@ -236,6 +236,63 @@ jobs:
           python scripts/verify-aggregator-publish.py \
             --base-url "${EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL}" \
             --runtime-config upstreams/aggregator/subscribe/config/config.actions.runtime.json
+
+      - name: Audit shared effective aggregator nodes
+        if: steps.change_gate.outputs.should_deploy == 'true'
+        shell: pwsh
+        env:
+          EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL: ${{ vars.EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL }}
+        run: |
+          $baseUrl = $env:EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL
+          if ([string]::IsNullOrWhiteSpace($baseUrl)) {
+            throw "EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL is required for aggregator effective audit."
+          }
+          $summaryPath = Join-Path $env:RUNNER_TEMP "aggregator-effective-summary.json"
+          python .\scripts\easyproxy_source_audit.py `
+            --audit-id "aggregator-effective-${{ github.run_id }}" `
+            --subscription "$baseUrl/subs/clash.yaml" `
+            --output-path $summaryPath `
+            --docker-network-name "EasyAiMi" `
+            --keep-artifacts
+          "EASYPROXY_AGGREGATOR_EFFECTIVE_AUDIT_SUMMARY=$summaryPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Publish effective aggregator artifact
+        if: steps.change_gate.outputs.should_deploy == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/publish-aggregator-effective.py \
+            --runtime-config upstreams/aggregator/subscribe/config/config.actions.runtime.json \
+            --audit-summary "${EASYPROXY_AGGREGATOR_EFFECTIVE_AUDIT_SUMMARY}"
+
+      - name: Verify effective aggregator artifact
+        if: steps.change_gate.outputs.should_deploy == 'true' && steps.deploy_mode.outputs.run_verification == 'true'
+        shell: bash
+        env:
+          EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL: ${{ vars.EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import requests
+          from pathlib import Path
+
+          runtime = json.loads(Path("upstreams/aggregator/subscribe/config/config.actions.runtime.json").read_text(encoding="utf-8"))
+          base_url = "${EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL}".rstrip("/")
+          items = (runtime.get("storage") or {}).get("items") or {}
+          for item_name in ("public-effective", "public-effective-json"):
+              item = items.get(item_name) or {}
+              key = str(item.get("key") or "").strip()
+              if not key:
+                  raise RuntimeError(f"missing storage key for {item_name}")
+              url = f"{base_url}/{key.lstrip('/')}"
+              response = requests.get(url, timeout=30)
+              response.raise_for_status()
+              body = response.text.strip()
+              if not body:
+                  raise RuntimeError(f"{item_name} is empty: {url}")
+              print(f"verified {url}")
+          PY
 
       - name: Upload aggregator workflow log
         if: always() && steps.change_gate.outputs.should_deploy == 'true'

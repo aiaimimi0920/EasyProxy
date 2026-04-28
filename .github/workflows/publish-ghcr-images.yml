@@ -289,7 +289,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          python -m pip install PyYAML
+          python -m pip install PyYAML requests
 
       - name: Run end-to-end EasyProxy runtime validation
         shell: pwsh

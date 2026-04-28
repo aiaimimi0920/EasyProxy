@@ -97,6 +97,9 @@ def main() -> int:
     if manifest.status_code == 200:
         payload = manifest.json()
         ensure(payload.get("success") is True, "MiSub manifest endpoint did not report success")
+        sources = payload.get("sources") or []
+        ensure(isinstance(sources, list), "MiSub manifest payload does not contain a sources array")
+        ensure(len(sources) > 0, "MiSub manifest payload did not return any sources")
     else:
         try:
             payload = manifest.json()

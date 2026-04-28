@@ -16,7 +16,7 @@ services:
       - ./config.yaml:/etc/easy-proxy/config.yaml
       - ./data:/var/lib/easy-proxy
     networks:
-      - easyproxy-monorepo
+      - easyproxy-service-network
 
     # Optional file-based node source:
     # - ./nodes.txt:/etc/easy-proxy/nodes.txt
@@ -30,5 +30,6 @@ services:
     #   for local preferred Cloudflare entry-IP generation
 
 networks:
-  easyproxy-monorepo:
-    name: easyproxy-monorepo
+  easyproxy-service-network:
+    name: ${EASY_PROXY_SERVICE_NETWORK:-EasyAiMi}
+    external: true

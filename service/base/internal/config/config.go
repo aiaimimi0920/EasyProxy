@@ -101,13 +101,14 @@ type ManagementConfig struct {
 	HealthCheckInterval time.Duration `yaml:"health_check_interval"`
 }
 
-// Use TCP probe targets so health checks validate raw proxy reachability
-// without EasyProxy's own TLS or HTTP client behavior skewing the result.
+// Align runtime health checks with Mihomo URL-Test and sing-box URLTest style
+// HTTP probes so upstream layers only hand off lines that can pass a real
+// external request, not just a raw TCP connect.
 var defaultManagementProbeTargets = []string{
-	"tcp://www.google.com:443",
-	"tcp://connectivitycheck.gstatic.com:443",
-	"tcp://www.msftconnecttest.com:443",
-	"tcp://cp.cloudflare.com:443",
+	"https://connectivitycheck.gstatic.com/generate_204",
+	"https://cp.cloudflare.com/generate_204",
+	"https://www.msftconnecttest.com/connecttest.txt",
+	"https://www.google.com/generate_204",
 }
 
 // DefaultManagementProbeTargets returns the default probe targets used by the
@@ -234,6 +235,20 @@ func NormalizeV2RayTransport(value string) (string, bool) {
 		return "httpupgrade", true
 	default:
 		return "", false
+	}
+}
+
+// NormalizeVLESSFlow canonicalizes historical flow values into the subset
+// accepted by the current sing-box runtime.
+func NormalizeVLESSFlow(value string) string {
+	flow := strings.TrimSpace(value)
+	switch strings.ToLower(flow) {
+	case "", "none":
+		return ""
+	case "xtls-rprx-vision-udp443":
+		return "xtls-rprx-vision"
+	default:
+		return flow
 	}
 }
 
@@ -1106,7 +1121,7 @@ func buildVLESSURI(p clashProxy) string {
 		return ""
 	}
 	if p.Flow != "" {
-		params.Set("flow", p.Flow)
+		params.Set("flow", NormalizeVLESSFlow(p.Flow))
 	}
 	if p.TLS {
 		params.Set("security", "tls")

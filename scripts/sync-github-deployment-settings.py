@@ -22,6 +22,7 @@ from nacl import encoding, public
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG_PATH = REPO_ROOT / "config.yaml"
 DEFAULT_TEMPLATE_PATH = REPO_ROOT / "config.example.yaml"
+PROXY_AVAILABILITY_POLICY_PATH = REPO_ROOT / "shared" / "proxy-availability" / "policy.json"
 DEFAULT_EASYEMAIL_CONFIG = Path(r"C:\Users\Public\nas_home\AI\GameEditor\EasyEmail\config.yaml")
 DEFAULT_OWNER_KEY_DIR = Path.home() / ".easyproxy"
 DEFAULT_OWNER_PUBLIC_KEY_PATH = DEFAULT_OWNER_KEY_DIR / "easyproxy_import_code_owner_public.txt"
@@ -60,6 +61,24 @@ def deep_merge(base: Any, overlay: Any) -> Any:
 def save_yaml(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+
+def load_proxy_availability_probe_targets() -> list[str]:
+    if not PROXY_AVAILABILITY_POLICY_PATH.exists():
+        return []
+    payload = json.loads(PROXY_AVAILABILITY_POLICY_PATH.read_text(encoding="utf-8"))
+    targets = [
+        str(item).strip()
+        for item in (payload.get("management_probe_targets") or [])
+        if str(item).strip()
+    ]
+    if targets:
+        return targets
+    return [
+        str(item.get("url") or "").strip()
+        for item in (payload.get("http_probe_targets") or [])
+        if str(item.get("url") or "").strip()
+    ]
 
 
 def ensure_dict(parent: dict[str, Any], key: str) -> dict[str, Any]:
@@ -300,6 +319,8 @@ def delete_github_variable(token: str, repo: str, name: str) -> None:
         response = exc.response
         if response is None or response.status_code != 404:
             raise
+    except requests.RequestException as exc:
+        print(f"warning: failed to delete GitHub variable {name}: {exc}", file=sys.stderr)
 
 
 def main() -> int:
@@ -353,6 +374,9 @@ def main() -> int:
     misub_connector_profile_id = "easyproxies-ech-runtime"
     ech_worker_public_url = "https://proxyservice-ech-workers.aiaimimi.com"
     aggregator_public_base_url = "https://sub.aiaimimi.com"
+    aggregator_effective_url = "https://sub.aiaimimi.com/subs/effective.txt"
+    service_base_network_name = "EasyAiMi"
+    shared_management_probe_targets = load_proxy_availability_probe_targets()
     default_preferred_entry_ips = [
         "198.41.185.161",
         "198.41.230.22",
@@ -466,6 +490,10 @@ def main() -> int:
     set_nested(config, ("misub", "pages", "d1DatabaseBinding"), misub_d1_binding)
     set_nested(config, ("misub", "pages", "verifyManifestProfileId"), misub_manifest_profile_id)
     set_nested(config, ("misub", "pages", "connectorProfileId"), misub_connector_profile_id)
+    existing_misub_additional_subscriptions = get_nested(config, "misub", "pages", "additionalSubscriptions", default=[])
+    if not isinstance(existing_misub_additional_subscriptions, list):
+        existing_misub_additional_subscriptions = []
+    set_nested(config, ("misub", "pages", "additionalSubscriptions"), existing_misub_additional_subscriptions)
     misub_pages = ensure_dict(ensure_dict(config, "misub"), "pages")
     misub_pages.pop("verifyConnectorProfileId", None)
     set_nested(config, ("misub", "docker", "env", "ADMIN_PASSWORD"), misub_admin_password)
@@ -479,6 +507,7 @@ def main() -> int:
     set_nested(config, ("aggregator", "ref"), "main")
     set_nested(config, ("aggregator", "configPath"), "deploy/upstreams/aggregator/config/config.actions.r2.json")
     set_nested(config, ("aggregator", "publicBaseUrl"), aggregator_public_base_url)
+    set_nested(config, ("aggregator", "effectiveUrl"), aggregator_effective_url)
     set_nested(config, ("aggregator", "r2", "accessKeyId"), agg_access_key_id)
     set_nested(config, ("aggregator", "r2", "secretAccessKey"), agg_secret_access_key)
     set_nested(config, ("aggregator", "r2", "accountId"), account_id)
@@ -493,9 +522,14 @@ def main() -> int:
     set_nested(config, ("echWorkersCloudflare", "preferredEntryIps"), preferred_entry_ips)
     set_nested(config, ("echWorkersCloudflare", "secrets", "ECH_TOKEN"), ech_token)
 
+    set_nested(config, ("serviceBase", "networkName"), service_base_network_name)
     set_nested(config, ("serviceBase", "runtime", "management", "password"), service_base_management_password)
+    if shared_management_probe_targets:
+        set_nested(config, ("serviceBase", "runtime", "management", "probe_targets"), shared_management_probe_targets)
+        set_nested(config, ("serviceBase", "runtime", "management", "probe_target"), "")
     set_nested(config, ("serviceBase", "runtime", "source_sync", "manifest_url"), f"{misub_public_url}/api/manifest/{misub_manifest_profile_id}")
     set_nested(config, ("serviceBase", "runtime", "source_sync", "manifest_token"), misub_manifest_token)
+    set_nested(config, ("serviceBase", "runtime", "source_sync", "fallback_subscriptions"), [aggregator_effective_url])
     set_nested(config, ("serviceBase", "runtime", "source_sync", "connector_runtime", "startup_timeout"), "30s")
     existing_subscriptions = get_nested(config, "serviceBase", "runtime", "subscriptions", default=[])
     if not isinstance(existing_subscriptions, list):
@@ -570,9 +604,11 @@ def main() -> int:
         }
         variables_map = {
             "EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL": aggregator_public_base_url,
+            "EASYPROXY_AGGREGATOR_EFFECTIVE_URL": aggregator_effective_url,
             "EASYPROXY_ECH_PREFERRED_ENTRY_IPS": ",".join(str(item).strip() for item in preferred_entry_ips if str(item).strip()),
             "EASYPROXY_ECH_WORKER_PUBLIC_URL": ech_worker_public_url,
             "EASYPROXY_MISUB_CALLBACK_URL": misub_callback_url,
+            "EASYPROXY_MISUB_ADDITIONAL_SUBSCRIPTIONS_JSON": json.dumps(existing_misub_additional_subscriptions, ensure_ascii=False),
             "EASYPROXY_MISUB_CONNECTOR_PROFILE_ID": misub_connector_profile_id,
             "EASYPROXY_MISUB_D1_DATABASE_BINDING": misub_d1_binding,
             "EASYPROXY_MISUB_D1_DATABASE_NAME": misub_d1_name,

@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "description": "Shared proxy availability policy aligned with Mihomo URL-Test and sing-box URLTest style multi-target probing.",
+  "http_probe_targets": [
+    {
+      "url": "https://connectivitycheck.gstatic.com/generate_204",
+      "expected_status": [200, 204]
+    },
+    {
+      "url": "https://cp.cloudflare.com/generate_204",
+      "expected_status": [200, 204]
+    },
+    {
+      "url": "https://www.msftconnecttest.com/connecttest.txt",
+      "expected_status": [200, 204]
+    },
+    {
+      "url": "https://www.google.com/generate_204",
+      "expected_status": [200, 204]
+    }
+  ],
+  "management_probe_targets": [
+    "https://connectivitycheck.gstatic.com/generate_204",
+    "https://cp.cloudflare.com/generate_204",
+    "https://www.msftconnecttest.com/connecttest.txt",
+    "https://www.google.com/generate_204"
+  ],
+  "request_timeout_seconds": 25,
+  "scenario_timeout_seconds": 720,
+  "minimum_available_nodes": 1
+}

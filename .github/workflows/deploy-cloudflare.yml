@@ -285,7 +285,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          python -m pip install requests
+          python -m pip install requests PyYAML
           if [[ "${{ steps.misub_resources.outputs.branch_name }}" == "${{ inputs.misub_branch }}" && "${{ steps.misub_resources.outputs.branch_name }}" == "main" ]]; then
             base_url="https://${{ steps.misub_resources.outputs.project_name }}.pages.dev"
           else
@@ -425,10 +425,13 @@ jobs:
         shell: bash
         env:
           DEPLOY_TARGET: ${{ inputs.target }}
+          AGGREGATOR_EFFECTIVE_URL: ${{ vars.EASYPROXY_AGGREGATOR_EFFECTIVE_URL }}
           MISUB_PUBLIC_URL: ${{ vars.EASYPROXY_MISUB_PUBLIC_URL }}
+          MISUB_ADDITIONAL_SUBSCRIPTIONS_JSON: ${{ vars.EASYPROXY_MISUB_ADDITIONAL_SUBSCRIPTIONS_JSON }}
           MISUB_ADMIN_PASSWORD: ${{ secrets.MISUB_ADMIN_PASSWORD }}
           MISUB_MANIFEST_TOKEN: ${{ secrets.MISUB_MANIFEST_TOKEN }}
           MISUB_CONNECTOR_PROFILE_ID: ${{ vars.EASYPROXY_MISUB_CONNECTOR_PROFILE_ID }}
+          MISUB_MANIFEST_PROFILE_ID: ${{ vars.EASYPROXY_MISUB_MANIFEST_PROFILE_ID }}
           ECH_WORKER_PUBLIC_URL: ${{ vars.EASYPROXY_ECH_WORKER_PUBLIC_URL }}
           ECH_TOKEN: ${{ secrets.ECH_TOKEN }}
         run: |
@@ -436,12 +439,13 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install requests
 
-          if [[ -z "${MISUB_PUBLIC_URL:-}" || -z "${MISUB_ADMIN_PASSWORD:-}" || -z "${MISUB_MANIFEST_TOKEN:-}" || -z "${ECH_WORKER_PUBLIC_URL:-}" || -z "${ECH_TOKEN:-}" ]]; then
-            echo "::error::MiSub/ECH profile sync requires MISUB_PUBLIC_URL, MISUB_ADMIN_PASSWORD, MISUB_MANIFEST_TOKEN, ECH_WORKER_PUBLIC_URL, and ECH_TOKEN."
+          if [[ -z "${MISUB_PUBLIC_URL:-}" || -z "${MISUB_ADMIN_PASSWORD:-}" || -z "${MISUB_MANIFEST_TOKEN:-}" || -z "${ECH_WORKER_PUBLIC_URL:-}" || -z "${ECH_TOKEN:-}" || -z "${AGGREGATOR_EFFECTIVE_URL:-}" ]]; then
+            echo "::error::MiSub profile sync requires MISUB_PUBLIC_URL, MISUB_ADMIN_PASSWORD, MISUB_MANIFEST_TOKEN, ECH_WORKER_PUBLIC_URL, ECH_TOKEN, and AGGREGATOR_EFFECTIVE_URL."
             exit 1
           fi
 
           connector_profile_id="${MISUB_CONNECTOR_PROFILE_ID:-easyproxies-ech-runtime}"
+          runtime_profile_id="${MISUB_MANIFEST_PROFILE_ID:-aggregator-global}"
 
           if ! python -c "import os, requests, sys; base=os.environ['MISUB_PUBLIC_URL'].rstrip('/') + '/'; response=requests.get(base, timeout=20); response.raise_for_status()"
           then
@@ -452,6 +456,35 @@ jobs:
             echo "::error::MiSub public URL is not reachable, cannot synchronize connector profile."
             exit 1
           fi
+
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+
+          command = [
+              sys.executable,
+              "scripts/sync-misub-runtime-sources.py",
+              "--base-url", os.environ["MISUB_PUBLIC_URL"],
+              "--admin-password", os.environ["MISUB_ADMIN_PASSWORD"],
+              "--manifest-token", os.environ["MISUB_MANIFEST_TOKEN"],
+              "--profile-id", os.environ.get("MISUB_MANIFEST_PROFILE_ID", "aggregator-global"),
+              "--profile-name", "Aggregator Global",
+              "--subscription-url", os.environ["AGGREGATOR_EFFECTIVE_URL"],
+          ]
+
+          extras = json.loads(os.environ.get("MISUB_ADDITIONAL_SUBSCRIPTIONS_JSON") or "[]")
+          if not isinstance(extras, list):
+              raise SystemExit("MISUB_ADDITIONAL_SUBSCRIPTIONS_JSON must be a JSON array")
+          for item in extras:
+              value = str(item or "").strip()
+              if value:
+                  command.extend(["--subscription-url", value])
+
+          completed = subprocess.run(command, check=False)
+          raise SystemExit(completed.returncode)
+          PY
 
           python scripts/sync-misub-ech-profile.py \
             --base-url "${MISUB_PUBLIC_URL}" \

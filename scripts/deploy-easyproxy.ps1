@@ -16,6 +16,7 @@ $config = Read-EasyProxyConfig -ConfigPath $ConfigPath
 $serviceBase = Get-EasyProxyConfigSection -Config $config -Name 'serviceBase'
 $composeFile = Resolve-EasyProxyPath -Path (Get-EasyProxyConfigValue -Object $serviceBase -Name 'composeFile' -Default 'deploy/service/base/docker-compose.yaml')
 $serviceOutput = Resolve-EasyProxyPath -Path (Get-EasyProxyConfigValue -Object $serviceBase -Name 'renderedConfigPath' -Default 'deploy/service/base/config.yaml')
+$networkName = [string](Get-EasyProxyConfigValue -Object $serviceBase -Name 'networkName' -Default 'EasyAiMi')
 
 Ensure-EasyProxyPathExists -Path $composeFile -Message "Missing EasyProxy docker compose file: $composeFile"
 
@@ -31,6 +32,13 @@ if (-not $SkipRender) {
 }
 
 Ensure-EasyProxyPathExists -Path $serviceOutput -Message "Missing rendered EasyProxy runtime config: $serviceOutput"
+
+$env:EASY_PROXY_SERVICE_NETWORK = $networkName
+& docker network inspect $networkName *> $null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Creating docker network: $networkName" -ForegroundColor Cyan
+    Invoke-EasyProxyExternalCommand -FilePath 'docker' -Arguments @('network', 'create', $networkName) -FailureMessage "Failed to create docker network $networkName"
+}
 
 $composeArgs = @('compose', '-f', $composeFile, 'up', '-d')
 if (-not $NoBuild) {

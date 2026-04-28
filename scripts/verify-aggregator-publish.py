@@ -47,6 +47,9 @@ def fetch_and_validate(base_url: str, path: str, validator: Callable[[bytes], No
 def fetch_and_check_optional(base_url: str, path: str, validator: Callable[[bytes], None]) -> None:
     url = f"{base_url.rstrip('/')}/{path.lstrip('/')}"
     response = requests.get(url, timeout=30)
+    if response.status_code == 404:
+        print(f"warning: optional artifact not published yet, skipping validation: {url}")
+        return
     response.raise_for_status()
     content = response.content
     if not content.strip():
@@ -74,6 +77,8 @@ def main() -> int:
     }
     optional = {
         "public-v2ray": validate_v2ray_payload,
+        "public-effective": validate_non_empty_text,
+        "public-effective-json": validate_json_document,
     }
 
     for item_name, validator in required.items():

@@ -60,10 +60,10 @@ func TestApplyDefaultsSetsNeutralProbeTargets(t *testing.T) {
 		t.Fatal("expected default probe targets to be populated")
 	}
 	wantTargets := []string{
-		"tcp://www.google.com:443",
-		"tcp://connectivitycheck.gstatic.com:443",
-		"tcp://www.msftconnecttest.com:443",
-		"tcp://cp.cloudflare.com:443",
+		"https://connectivitycheck.gstatic.com/generate_204",
+		"https://cp.cloudflare.com/generate_204",
+		"https://www.msftconnecttest.com/connecttest.txt",
+		"https://www.google.com/generate_204",
 	}
 	for _, want := range wantTargets {
 		found := false
@@ -79,6 +79,15 @@ func TestApplyDefaultsSetsNeutralProbeTargets(t *testing.T) {
 	}
 	if cfg.Pool.Mode != "auto" {
 		t.Fatalf("unexpected default pool mode: %q", cfg.Pool.Mode)
+	}
+}
+
+func TestNormalizeVLESSFlowCanonicalizesLegacyUDP443Variant(t *testing.T) {
+	if got := NormalizeVLESSFlow("xtls-rprx-vision-udp443"); got != "xtls-rprx-vision" {
+		t.Fatalf("expected legacy UDP443 flow to normalize, got %q", got)
+	}
+	if got := NormalizeVLESSFlow("xtls-rprx-vision"); got != "xtls-rprx-vision" {
+		t.Fatalf("expected plain vision flow to remain unchanged, got %q", got)
 	}
 }
 
