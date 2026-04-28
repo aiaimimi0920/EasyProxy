@@ -11,6 +11,7 @@ import socket
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -509,6 +510,121 @@ def normalize_proxy_url_for_host(value: str) -> str:
     return text.replace("://0.0.0.0:", "://127.0.0.1:")
 
 
+def build_direct_proxy_url(node: dict[str, Any], default_scheme: str = "http") -> str:
+    port = int(node.get("port") or 0)
+    if port <= 0:
+        return ""
+    listen_address = str(node.get("listen_address") or "").strip()
+    host = "127.0.0.1"
+    if listen_address and listen_address not in ("0.0.0.0", "::", "[::]"):
+        host = listen_address
+    scheme = str(default_scheme or "http").strip() or "http"
+    return f"{scheme}://{host}:{port}"
+
+
+def candidate_priority(node: dict[str, Any]) -> tuple[int, int, int, int]:
+    effective = 1 if node.get("effective_available") is True else 0
+    available = 1 if node.get("available") is True else 0
+    score = int(node.get("availability_score") or 0)
+    latency = int(node.get("last_latency_ms") or -1)
+    if latency <= 0:
+        latency = 1_000_000
+    return (
+        -effective,
+        -available,
+        -score,
+        latency,
+    )
+
+
+def collect_direct_probe_candidates(nodes: list[dict[str, Any]], *, default_scheme: str = "http") -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    for node in nodes:
+        if bool(node.get("blacklisted")):
+            continue
+        proxy_url = build_direct_proxy_url(node, default_scheme=default_scheme)
+        if not proxy_url:
+            continue
+        candidate = dict(node)
+        candidate["direct_proxy_url"] = proxy_url
+        candidates.append(candidate)
+    candidates.sort(key=candidate_priority)
+    return candidates
+
+
+def discover_directly_usable_nodes(
+    candidates: list[dict[str, Any]],
+    policy: dict[str, Any],
+    *,
+    network_container: str,
+    max_workers: int = 12,
+) -> tuple[list[str], list[dict[str, Any]]]:
+    if not candidates:
+        return [], []
+
+    stable_uris: list[str] = []
+    stable_results: list[dict[str, Any]] = []
+    retries = max(1, int(policy.get("direct_probe_retries", 1)))
+    retry_delay = max(0, int(policy.get("direct_probe_retry_delay_seconds", 1)))
+
+    def probe_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
+        last_result: dict[str, Any] = {"ok": False, "attempts": [], "error": "probe not started"}
+        for attempt_index in range(retries):
+            last_result = probe_http_proxy(
+                str(candidate.get("direct_proxy_url") or ""),
+                policy,
+                network_container=network_container,
+            )
+            if last_result.get("ok"):
+                return last_result
+            if attempt_index < retries - 1 and retry_delay > 0:
+                time.sleep(retry_delay)
+        return last_result
+
+    worker_count = max(1, min(max_workers, len(candidates)))
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        future_to_candidate = {
+            executor.submit(probe_candidate, candidate): candidate
+            for candidate in candidates
+        }
+        for future in as_completed(future_to_candidate):
+            candidate = future_to_candidate[future]
+            probe_result: dict[str, Any]
+            try:
+                probe_result = future.result()
+            except Exception as exc:
+                probe_result = {"ok": False, "attempts": [], "error": str(exc)}
+
+            if not probe_result.get("ok"):
+                continue
+
+            uri = str(candidate.get("uri") or "").strip()
+            if not uri:
+                continue
+
+            stable_uris.append(uri)
+            stable_results.append(
+                {
+                    "tag": str(candidate.get("tag") or ""),
+                    "name": str(candidate.get("name") or ""),
+                    "port": int(candidate.get("port") or 0),
+                    "uri": uri,
+                    "direct_proxy_url": str(candidate.get("direct_proxy_url") or ""),
+                    "effective_available": bool(candidate.get("effective_available") is True),
+                    "availability_source": str(candidate.get("availability_source") or ""),
+                    "traffic_proven_usable": bool(candidate.get("traffic_proven_usable") is True),
+                    "availability_score": int(candidate.get("availability_score") or 0),
+                    "last_latency_ms": int(candidate.get("last_latency_ms") or 0),
+                    "last_error": str(candidate.get("last_error") or ""),
+                    "direct_probe": probe_result,
+                }
+            )
+
+    stable_uris = sorted(dict.fromkeys(stable_uris))
+    stable_results.sort(key=lambda item: (int(item.get("last_latency_ms") or 1_000_000), str(item.get("tag") or "")))
+    return stable_uris, stable_results
+
+
 def stop_container(container_name: str) -> None:
     subprocess.run(["docker", "rm", "-f", container_name], capture_output=True, text=True, check=False)
 
@@ -602,27 +718,12 @@ def main() -> int:
         while time.time() < probe_deadline:
             last_nodes, last_source_sync = fetch_nodes_and_source_sync(base_url)
             all_nodes = list(last_nodes.get("nodes") or [])
-            candidate_nodes = [item for item in all_nodes if item.get("effective_available") is True]
-            if not candidate_nodes:
-                candidate_nodes = [item for item in all_nodes if item.get("available") is True]
-            stable_results = []
-            stable_uris = []
-            for node in candidate_nodes:
-                uri = str(node.get("uri") or "").strip()
-                stable_results.append({
-                    "tag": str(node.get("tag") or ""),
-                    "name": str(node.get("name") or ""),
-                    "port": int(node.get("port") or 0),
-                    "uri": uri,
-                    "effective_available": bool(node.get("effective_available") is True),
-                    "availability_source": str(node.get("availability_source") or ""),
-                    "traffic_proven_usable": bool(node.get("traffic_proven_usable") is True),
-                    "availability_score": int(node.get("availability_score") or 0),
-                    "last_latency_ms": int(node.get("last_latency_ms") or 0),
-                    "last_error": str(node.get("last_error") or ""),
-                })
-                if uri:
-                    stable_uris.append(uri)
+            candidate_nodes = collect_direct_probe_candidates(all_nodes, default_scheme="http")
+            stable_uris, stable_results = discover_directly_usable_nodes(
+                candidate_nodes,
+                policy,
+                network_container=container_name,
+            )
 
             last_pool_probe = probe_http_proxy("http://127.0.0.1:22323", policy, network_container=container_name)
             try:

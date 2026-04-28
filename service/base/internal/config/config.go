@@ -109,6 +109,8 @@ var defaultManagementProbeTargets = []string{
 	"https://cp.cloudflare.com/generate_204",
 	"https://www.msftconnecttest.com/connecttest.txt",
 	"https://www.google.com/generate_204",
+	"https://www.google.com/robots.txt",
+	"https://www.youtube.com/robots.txt",
 }
 
 // DefaultManagementProbeTargets returns the default probe targets used by the

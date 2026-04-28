@@ -64,6 +64,8 @@ func TestApplyDefaultsSetsNeutralProbeTargets(t *testing.T) {
 		"https://cp.cloudflare.com/generate_204",
 		"https://www.msftconnecttest.com/connecttest.txt",
 		"https://www.google.com/generate_204",
+		"https://www.google.com/robots.txt",
+		"https://www.youtube.com/robots.txt",
 	}
 	for _, want := range wantTargets {
 		found := false

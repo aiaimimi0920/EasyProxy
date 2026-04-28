@@ -17,15 +17,27 @@
     {
       "url": "https://www.google.com/generate_204",
       "expected_status": [200, 204]
+    },
+    {
+      "url": "https://www.google.com/robots.txt",
+      "expected_status": [200]
+    },
+    {
+      "url": "https://www.youtube.com/robots.txt",
+      "expected_status": [200]
     }
   ],
   "management_probe_targets": [
     "https://connectivitycheck.gstatic.com/generate_204",
     "https://cp.cloudflare.com/generate_204",
     "https://www.msftconnecttest.com/connecttest.txt",
-    "https://www.google.com/generate_204"
+    "https://www.google.com/generate_204",
+    "https://www.google.com/robots.txt",
+    "https://www.youtube.com/robots.txt"
   ],
   "request_timeout_seconds": 25,
+  "direct_probe_retries": 1,
+  "direct_probe_retry_delay_seconds": 1,
   "scenario_timeout_seconds": 720,
   "minimum_available_nodes": 1
 }
