@@ -138,6 +138,7 @@ echWorkersCloudflare:
   wranglerConfig: workers/ech-workers-cloudflare/wrangler.jsonc
   devVarsOutput: workers/ech-workers-cloudflare/.dev.vars
   publicUrl: https://proxyservice-ech-workers.example.com
+  preferredEntryIps: []
   secrets:
     ECH_TOKEN: ""
 

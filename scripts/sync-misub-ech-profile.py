@@ -122,6 +122,8 @@ def main() -> int:
     parser.add_argument("--source-group", default="ECH Connectors")
     parser.add_argument("--notes-prefix", default="Preferred Cloudflare entry IP")
     parser.add_argument("--preserve-server-ips", action="store_true")
+    parser.add_argument("--server-ip", action="append", default=[])
+    parser.add_argument("--remove-profile-id", action="append", default=[])
     args = parser.parse_args()
 
     base_url = args.base_url.rstrip("/") + "/"
@@ -151,10 +153,15 @@ def main() -> int:
     ensure(isinstance(profiles, list), "MiSub /api/data did not return a profiles array")
 
     profile = find_profile(profiles, [args.profile_id, args.legacy_profile_id])
-    ensure(profile is not None, f"MiSub profile not found: {args.profile_id}")
 
     existing_sources, existing_server_ips = normalize_existing_sources(misubs, args.source_id_prefix)
-    selected_server_ips = existing_server_ips if args.preserve_server_ips else []
+    explicit_server_ips = [str(item).strip() for item in args.server_ip if str(item).strip()]
+    if explicit_server_ips:
+        selected_server_ips = explicit_server_ips
+    elif args.preserve_server_ips:
+        selected_server_ips = existing_server_ips
+    else:
+        selected_server_ips = []
     new_sources = build_sources(
         worker_url=args.worker_url,
         access_token=args.access_token,
@@ -173,7 +180,7 @@ def main() -> int:
     ]
     updated_misubs = retained_misubs + new_sources
 
-    existing_manual_nodes = profile.get("manualNodes") or []
+    existing_manual_nodes = (profile or {}).get("manualNodes") or []
     filtered_manual_nodes = [
         node_id
         for node_id in existing_manual_nodes
@@ -181,17 +188,33 @@ def main() -> int:
     ]
     filtered_manual_nodes.extend(source["id"] for source in new_sources)
 
-    updated_profile = dict(profile)
+    updated_profile = dict(profile or {})
     updated_profile["id"] = args.profile_id.replace("-", "_")
     updated_profile["customId"] = args.profile_id
     updated_profile["name"] = args.profile_name
+    updated_profile["enabled"] = bool(updated_profile.get("enabled", True))
+    updated_profile["subscriptions"] = list(updated_profile.get("subscriptions") or [])
+    updated_profile["expiresAt"] = str(updated_profile.get("expiresAt", "") or "")
+    updated_profile["isPublic"] = bool(updated_profile.get("isPublic", False))
     updated_profile["description"] = args.profile_description
+    if "prefixSettings" not in updated_profile or not isinstance(updated_profile.get("prefixSettings"), dict):
+        updated_profile["prefixSettings"] = {
+            "enableManualNodes": None,
+            "enableSubscriptions": None,
+            "manualNodePrefix": "",
+            "prependGroupName": None,
+        }
+    if "nodeTransform" not in updated_profile:
+        updated_profile["nodeTransform"] = None
     updated_profile["manualNodes"] = filtered_manual_nodes
 
+    profile_ids_to_remove = {str(item).strip() for item in args.remove_profile_id if str(item).strip()}
     updated_profiles = []
     for candidate in profiles:
         candidate_custom_id = str(candidate.get("customId", "")).strip()
         candidate_id = str(candidate.get("id", "")).strip()
+        if candidate_custom_id in profile_ids_to_remove or candidate_id in {item.replace("-", "_") for item in profile_ids_to_remove}:
+            continue
         if (
             candidate is profile
             or candidate_custom_id in {args.profile_id, args.legacy_profile_id}
@@ -200,6 +223,8 @@ def main() -> int:
             updated_profiles.append(updated_profile)
         else:
             updated_profiles.append(candidate)
+    if profile is None:
+        updated_profiles.append(updated_profile)
 
     update_payload = {
         "misubs": updated_misubs,
@@ -242,6 +267,7 @@ def main() -> int:
         "profile_id": args.profile_id,
         "worker_url": args.worker_url,
         "preserve_server_ips": args.preserve_server_ips,
+        "removed_profile_ids": sorted(profile_ids_to_remove),
         "source_count": len(new_sources),
         "server_ips": selected_server_ips,
         "updated_source_ids": [source["id"] for source in new_sources],

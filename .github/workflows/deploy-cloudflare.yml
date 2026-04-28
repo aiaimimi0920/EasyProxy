@@ -439,18 +439,21 @@ jobs:
             --admin-password "${MISUB_ADMIN_PASSWORD}" \
             --manifest-token "${MISUB_MANIFEST_TOKEN}" \
             --profile-id "${connector_profile_id}" \
+            --legacy-profile-id "easyproxies-ech-test" \
+            --remove-profile-id "easyproxies-ech-preferred" \
+            --profile-name "EasyProxies ECH Runtime" \
+            --profile-description "Private profile for routing EasyProxy-managed ECH connector sources through the current self-hosted ECH Worker; host-local preferred IP fanout is generated on each EasyProxy runtime independently." \
             --worker-url "${ECH_WORKER_PUBLIC_URL}:443" \
             --access-token "${ECH_TOKEN}"
 
       - name: MiSub connector profile sync summary
         shell: bash
-        env:
-          MISUB_CONNECTOR_PROFILE_ID: ${{ vars.EASYPROXY_MISUB_CONNECTOR_PROFILE_ID }}
         run: |
           {
             echo "## MiSub ECH connector profile synchronized"
             echo
-            echo "- profile id: \`${MISUB_CONNECTOR_PROFILE_ID:-easyproxies-ech-runtime}\`"
+            echo "- runtime profile id: \`${{ vars.EASYPROXY_MISUB_CONNECTOR_PROFILE_ID || 'easyproxies-ech-runtime' }}\`"
             echo "- MiSub base URL: \`${{ vars.EASYPROXY_MISUB_PUBLIC_URL || 'n/a' }}\`"
             echo "- ECH worker URL: \`${{ vars.EASYPROXY_ECH_WORKER_PUBLIC_URL || 'n/a' }}:443\`"
+            echo "- preferred IP fanout: generated per-host by EasyProxy; not published through MiSub"
           } >> "$GITHUB_STEP_SUMMARY"

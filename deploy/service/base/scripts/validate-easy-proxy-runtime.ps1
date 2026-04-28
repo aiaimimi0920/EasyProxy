@@ -1,8 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$ValidationId = ("runtime-" + (Get-Date -Format "yyyyMMdd-HHmmss")),
-    [string]$Image = "easyproxy/easy-proxy-monorepo-service:validation-20260426",
-    [string]$ConfigPath = (Join-Path $PSScriptRoot "..\..\..\..\config.yaml"),
+    [string]$Image = "",
+    [string]$ConfigPath = "",
     [int]$ScenarioTimeoutSeconds = 720,
     [switch]$KeepArtifacts,
     [switch]$SkipCleanup
@@ -13,6 +13,16 @@ $ErrorActionPreference = "Stop"
 
 function Get-RepoRoot {
     return (Resolve-Path (Join-Path $PSScriptRoot "..\..\..\..")).Path
+}
+
+function Test-DockerImageExists {
+    param([Parameter(Mandatory = $true)][string]$ImageName)
+
+    $images = & docker image ls --format "{{.Repository}}:{{.Tag}}" 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        return $false
+    }
+    return @($images) -contains $ImageName
 }
 
 . (Join-Path (Get-RepoRoot) "scripts\lib\easyproxy-common.ps1")
@@ -336,7 +346,7 @@ function Run-Scenario {
         "-p", "${multiBase}-${multiRangeEnd}:${multiBase}-${multiRangeEnd}",
         "-v", ("{0}:/etc/easy-proxy/config.yaml" -f (Resolve-Path $configPath).Path),
         "-v", ("{0}:/var/lib/easy-proxy" -f (Resolve-Path $dataDir).Path),
-        $Image
+        $effectiveImage
     )
 
     Write-Host "[runtime:$Name] starting container $containerName"
@@ -378,10 +388,25 @@ function Run-Scenario {
 }
 
 $repoRoot = Get-RepoRoot
+$effectiveConfigPath = $ConfigPath
+if ([string]::IsNullOrWhiteSpace($effectiveConfigPath)) {
+    $effectiveConfigPath = Join-Path $repoRoot "config.yaml"
+}
+$effectiveImage = $Image
+if ([string]::IsNullOrWhiteSpace($effectiveImage)) {
+    $effectiveImage = "easyproxy/easy-proxy-monorepo-service:${ValidationId}"
+    if (-not (Test-DockerImageExists -ImageName $effectiveImage)) {
+        Write-Host "[runtime] building validation image $effectiveImage"
+        & docker build -f (Join-Path $repoRoot "deploy/service/base/Dockerfile") -t $effectiveImage $repoRoot
+        if ($LASTEXITCODE -ne 0) {
+            throw "docker build failed for runtime validation image $effectiveImage"
+        }
+    }
+}
 $artifactDir = Join-Path $repoRoot ("tmp\easy-proxy-runtime-validation\" + $ValidationId)
 New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
 
-$rootConfig = Read-EasyProxyConfig -ConfigPath $ConfigPath
+$rootConfig = Read-EasyProxyConfig -ConfigPath $effectiveConfigPath
 $serviceBase = Get-EasyProxyConfigSection -Config $rootConfig -Name 'serviceBase'
 $serviceRuntime = Get-EasyProxyConfigSection -Config $serviceBase -Name 'runtime'
 $sourceSyncConfig = Get-EasyProxyConfigSection -Config $serviceRuntime -Name 'source_sync'

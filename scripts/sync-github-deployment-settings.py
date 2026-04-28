@@ -288,6 +288,20 @@ def set_github_variable(token: str, repo: str, name: str, value: str) -> None:
         return
 
 
+def delete_github_variable(token: str, repo: str, name: str) -> None:
+    headers = github_headers(token)
+    try:
+        github_request(
+            "DELETE",
+            f"https://api.github.com/repos/{repo}/actions/variables/{name}",
+            headers=headers,
+        )
+    except requests.HTTPError as exc:
+        response = exc.response
+        if response is None or response.status_code != 404:
+            raise
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Regenerate local config.yaml and sync GitHub deployment settings.")
     parser.add_argument("--config-path", default=str(DEFAULT_CONFIG_PATH))
@@ -339,6 +353,13 @@ def main() -> int:
     misub_connector_profile_id = "easyproxies-ech-runtime"
     ech_worker_public_url = "https://proxyservice-ech-workers.aiaimimi.com"
     aggregator_public_base_url = "https://sub.aiaimimi.com"
+    default_preferred_entry_ips = [
+        "198.41.185.161",
+        "198.41.230.22",
+        "198.41.251.20",
+        "162.158.3.95",
+        "198.41.247.52",
+    ]
 
     misub_admin_password = get_or_generate(config, ("misub", "docker", "env", "ADMIN_PASSWORD"), lambda: secrets.token_urlsafe(24))
     misub_cookie_secret = get_or_generate(config, ("misub", "docker", "env", "COOKIE_SECRET"), lambda: secrets.token_hex(32))
@@ -445,6 +466,8 @@ def main() -> int:
     set_nested(config, ("misub", "pages", "d1DatabaseBinding"), misub_d1_binding)
     set_nested(config, ("misub", "pages", "verifyManifestProfileId"), misub_manifest_profile_id)
     set_nested(config, ("misub", "pages", "connectorProfileId"), misub_connector_profile_id)
+    misub_pages = ensure_dict(ensure_dict(config, "misub"), "pages")
+    misub_pages.pop("verifyConnectorProfileId", None)
     set_nested(config, ("misub", "docker", "env", "ADMIN_PASSWORD"), misub_admin_password)
     set_nested(config, ("misub", "docker", "env", "COOKIE_SECRET"), misub_cookie_secret)
     set_nested(config, ("misub", "docker", "env", "MANIFEST_TOKEN"), misub_manifest_token)
@@ -464,6 +487,10 @@ def main() -> int:
             config["aggregator"].pop(obsolete_key, None)
 
     set_nested(config, ("echWorkersCloudflare", "publicUrl"), ech_worker_public_url)
+    preferred_entry_ips = get_nested(config, "echWorkersCloudflare", "preferredEntryIps", default=default_preferred_entry_ips)
+    if not isinstance(preferred_entry_ips, list) or len(preferred_entry_ips) == 0:
+        preferred_entry_ips = default_preferred_entry_ips
+    set_nested(config, ("echWorkersCloudflare", "preferredEntryIps"), preferred_entry_ips)
     set_nested(config, ("echWorkersCloudflare", "secrets", "ECH_TOKEN"), ech_token)
 
     set_nested(config, ("serviceBase", "runtime", "management", "password"), service_base_management_password)
@@ -542,6 +569,7 @@ def main() -> int:
         }
         variables_map = {
             "EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL": aggregator_public_base_url,
+            "EASYPROXY_ECH_PREFERRED_ENTRY_IPS": ",".join(str(item).strip() for item in preferred_entry_ips if str(item).strip()),
             "EASYPROXY_ECH_WORKER_PUBLIC_URL": ech_worker_public_url,
             "EASYPROXY_MISUB_CALLBACK_URL": misub_callback_url,
             "EASYPROXY_MISUB_CONNECTOR_PROFILE_ID": misub_connector_profile_id,
@@ -554,6 +582,7 @@ def main() -> int:
             set_github_secret(gh_token, args.repo, name, str(value))
         for name, value in variables_map.items():
             set_github_variable(gh_token, args.repo, name, str(value))
+        delete_github_variable(gh_token, args.repo, "EASYPROXY_MISUB_VERIFY_CONNECTOR_PROFILE_ID")
 
     summary = {
         "configPath": str(config_path),
