@@ -458,6 +458,16 @@ def checkout_proxy_lease(base_url: str) -> dict[str, Any]:
     return lease
 
 
+def is_retryable_proxy_lease_error(message: str) -> bool:
+    text = str(message or "").strip().lower()
+    if not text:
+        return False
+    return (
+        "initial_proxy_probe_pending" in text
+        or "timeout waiting for initial probe completion" in text
+    )
+
+
 def report_proxy_lease(base_url: str, lease_id: str, *, success: bool, latency_ms: int = 0, error_code: str = "") -> None:
     response = requests.post(
         f"{base_url}/proxy/leases/report",
@@ -656,6 +666,9 @@ def main() -> int:
                             "proxy_url": "",
                             "probe": {"ok": False, "attempts": [], "error": str(exc)},
                         })
+                        if is_retryable_proxy_lease_error(str(exc)):
+                            time.sleep(5)
+                            continue
                         break
                     lease_id = str(lease.get("id") or "").strip()
                     proxy_url = normalize_proxy_url_for_host(str(lease.get("proxyUrl") or "").strip())

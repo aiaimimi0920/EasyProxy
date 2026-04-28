@@ -178,7 +178,7 @@ if ([string]::IsNullOrWhiteSpace($workerAccessToken)) {
 }
 
 $summary = @()
-$connectorPayload = @(
+$connectorPayload = ConvertTo-Json -InputObject @(
     @{
         name = "ECH Local Preferred"
         input = $workerUrl
@@ -190,7 +190,7 @@ $connectorPayload = @(
             access_token   = $workerAccessToken
         }
     }
-) | ConvertTo-Json -Depth 20 -Compress
+) -Depth 20 -Compress
 
 $localSubscription = Invoke-Audit -ScenarioName "local-subscription" -Subscriptions $configuredLocalSubscriptions
 $manifestSubscription = Invoke-Audit `
