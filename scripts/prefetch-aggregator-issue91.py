@@ -8,6 +8,7 @@ import pathlib
 import subprocess
 import urllib.request
 
+import requests
 import yaml
 
 
@@ -24,6 +25,16 @@ def fetch_text_urllib(url: str, timeout: int) -> str:
         return response.read().decode("utf-8", errors="replace").strip()
 
 
+def fetch_text_requests(url: str, timeout: int) -> str:
+    response = requests.get(
+        url,
+        headers={"User-Agent": USER_AGENT},
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    return response.text.strip()
+
+
 def fetch_text_curl(url: str, timeout: int) -> str:
     completed = subprocess.run(
         [
@@ -31,6 +42,7 @@ def fetch_text_curl(url: str, timeout: int) -> str:
             "-L",
             "--max-time",
             str(timeout),
+            "--compressed",
             "-A",
             USER_AGENT,
             url,
@@ -48,11 +60,35 @@ def fetch_text_curl(url: str, timeout: int) -> str:
 
 def fetch_text(url: str, timeout: int) -> str:
     errors: list[str] = []
-    for label, fetcher in (("urllib", fetch_text_urllib), ("curl", fetch_text_curl)):
+
+    def summarize(text: str) -> str:
+        head = (text or "").replace("\r", " ").replace("\n", "\\n")
+        return head[:200]
+
+    for label, fetcher in (
+        ("urllib", fetch_text_urllib),
+        ("requests", fetch_text_requests),
+        ("curl", fetch_text_curl),
+    ):
+        text = ""
         try:
-            return fetcher(url, timeout)
+            text = fetcher(url, timeout)
+            proxy_count = ensure_proxy_count(text)
+            print(
+                json.dumps(
+                    {
+                        "strategy": label,
+                        "validated_proxy_count": proxy_count,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return text
         except Exception as exc:
-            errors.append(f"{label}: {exc}")
+            preview = ""
+            if "text" in locals():
+                preview = summarize(text)
+            errors.append(f"{label}: {exc} preview={preview}")
     raise RuntimeError("issue91 prefetch failed via all strategies: " + " | ".join(errors))
 
 
