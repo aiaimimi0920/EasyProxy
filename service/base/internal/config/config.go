@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1203,7 +1204,71 @@ func buildTrojanURI(p clashProxy) string {
 func buildShadowsocksURI(p clashProxy) string {
 	// Encode method:password in base64
 	userInfo := base64.StdEncoding.EncodeToString([]byte(p.Cipher + ":" + p.Password))
-	return fmt.Sprintf("ss://%s@%s:%d#%s", userInfo, p.Server, p.Port, url.QueryEscape(p.Name))
+	params := url.Values{}
+	if plugin, pluginOptions := serializeClashShadowsocksPlugin(p.Plugin, p.PluginOpts); plugin != "" {
+		params.Set("plugin", plugin)
+		if pluginOptions != "" {
+			params.Set("plugin-opts", pluginOptions)
+		}
+	}
+
+	query := ""
+	if len(params) > 0 {
+		query = "?" + params.Encode()
+	}
+
+	return fmt.Sprintf("ss://%s@%s:%d%s#%s", userInfo, p.Server, p.Port, query, url.QueryEscape(p.Name))
+}
+
+func serializeClashShadowsocksPlugin(plugin string, pluginOpts map[string]interface{}) (string, string) {
+	normalizedPlugin := strings.TrimSpace(strings.ToLower(plugin))
+	if normalizedPlugin == "" {
+		return "", ""
+	}
+
+	switch normalizedPlugin {
+	case "obfs":
+		normalizedPlugin = "obfs-local"
+	}
+
+	if len(pluginOpts) == 0 {
+		return normalizedPlugin, ""
+	}
+
+	pairs := make([]string, 0, len(pluginOpts))
+	keys := make([]string, 0, len(pluginOpts))
+	for key := range pluginOpts {
+		trimmed := strings.TrimSpace(key)
+		if trimmed == "" {
+			continue
+		}
+		keys = append(keys, trimmed)
+	}
+	sort.Strings(keys)
+
+	for _, key := range keys {
+		rawValue, ok := pluginOpts[key]
+		if !ok || rawValue == nil {
+			continue
+		}
+		value := strings.TrimSpace(fmt.Sprint(rawValue))
+		if value == "" {
+			continue
+		}
+
+		normalizedKey := key
+		if normalizedPlugin == "obfs-local" {
+			switch strings.ToLower(key) {
+			case "mode":
+				normalizedKey = "obfs"
+			case "host":
+				normalizedKey = "obfs-host"
+			}
+		}
+		pairs = append(pairs, normalizedKey+"="+value)
+	}
+
+	return normalizedPlugin, strings.Join(pairs, ";")
 }
 
 func buildHysteria2URI(p clashProxy) string {

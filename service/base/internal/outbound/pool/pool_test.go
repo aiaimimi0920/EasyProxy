@@ -1,9 +1,12 @@
 package pool
 
 import (
+	"context"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -82,6 +85,133 @@ func TestHTTPProbeTargetUsesFullPathAndAcceptsRedirect(t *testing.T) {
 	}
 	if _, err := httpProbeTarget(conn, target, true); err != nil {
 		t.Fatalf("httpProbeTarget() error = %v", err)
+	}
+}
+
+type failingOutbound struct{}
+
+func (failingOutbound) Type() string { return "test" }
+func (failingOutbound) Tag() string  { return "test-outbound" }
+func (failingOutbound) Network() []string {
+	return []string{"tcp"}
+}
+func (failingOutbound) Dependencies() []string { return nil }
+func (failingOutbound) DialContext(context.Context, string, M.Socksaddr) (net.Conn, error) {
+	return nil, E.New("raw outbound intentionally unavailable")
+}
+func (failingOutbound) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, E.New("raw outbound intentionally unavailable")
+}
+
+func startConnectProxy(t *testing.T) (string, func()) {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodConnect {
+			t.Fatalf("unexpected proxy method: %s", r.Method)
+		}
+		targetConn, err := net.Dial("tcp", r.Host)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			targetConn.Close()
+			t.Fatal("response writer does not support hijacking")
+		}
+		clientConn, _, err := hijacker.Hijack()
+		if err != nil {
+			targetConn.Close()
+			t.Fatalf("hijack proxy connection: %v", err)
+		}
+		if _, err := clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
+			clientConn.Close()
+			targetConn.Close()
+			t.Fatalf("write CONNECT response: %v", err)
+		}
+		go func() {
+			defer clientConn.Close()
+			defer targetConn.Close()
+			_, _ = io.Copy(targetConn, clientConn)
+		}()
+		go func() {
+			defer clientConn.Close()
+			defer targetConn.Close()
+			_, _ = io.Copy(clientConn, targetConn)
+		}()
+	}))
+	return server.Listener.Addr().String(), server.Close
+}
+
+func TestRunProbeTargetsForMemberPrefersLocalHTTPProxy(t *testing.T) {
+	tlsServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/generate_204" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer tlsServer.Close()
+
+	proxyAddress, stopProxy := startConnectProxy(t)
+	defer stopProxy()
+
+	host, portText, err := net.SplitHostPort(proxyAddress)
+	if err != nil {
+		t.Fatalf("split proxy address: %v", err)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatalf("parse proxy port: %v", err)
+	}
+
+	targetHost, targetPortText, err := net.SplitHostPort(tlsServer.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("split target address: %v", err)
+	}
+	targetPort, err := strconv.Atoi(targetPortText)
+	if err != nil {
+		t.Fatalf("parse target port: %v", err)
+	}
+
+	mgr, err := monitor.NewManager(monitor.Config{SkipCertVerify: true})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	p := &poolOutbound{
+		monitor: mgr,
+		options: Options{
+			Metadata: map[string]MemberMeta{
+				"commercial-node": {
+					ListenAddress: host,
+					Port:          uint16(port),
+				},
+			},
+		},
+	}
+
+	member := &memberState{
+		tag:      "commercial-node",
+		outbound: failingOutbound{},
+	}
+	targets := []monitor.ProbeTargetSpec{
+		{
+			Original: "https://commercial-node.example/generate_204",
+			Scheme:   "https",
+			Host:     targetHost,
+			Port:     uint16(targetPort),
+			Path:     "/generate_204",
+			HostHdr:  targetHost,
+			Dst:      M.ParseSocksaddrHostPort(targetHost, uint16(targetPort)),
+		},
+	}
+
+	duration, err := p.runProbeTargetsForMember(context.Background(), member, targets)
+	if err != nil {
+		t.Fatalf("runProbeTargetsForMember() error = %v", err)
+	}
+	if duration <= 0 {
+		t.Fatalf("expected positive probe duration, got %v", duration)
 	}
 }
 

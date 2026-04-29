@@ -58,6 +58,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-path", default="")
     parser.add_argument("--artifact-dir", default="")
     parser.add_argument("--docker-network-name", default="EasyAiMi")
+    parser.add_argument("--dns-server", action="append", default=[])
     parser.add_argument("--scenario-timeout-seconds", type=int, default=0)
     parser.add_argument("--minimum-available-nodes", type=int, default=-1)
     parser.add_argument("--require-manifest-healthy", action="store_true")
@@ -345,6 +346,7 @@ def fetch_nodes_and_source_sync(base_url: str) -> tuple[dict[str, Any], dict[str
 def probe_http_proxy(proxy_url: str, policy: dict[str, Any], *, network_container: str = "") -> dict[str, Any]:
     attempts: list[dict[str, Any]] = []
     timeout = str(int(policy.get("request_timeout_seconds", 25)))
+    accept_status_below_500 = bool(policy.get("accept_http_status_below_500", True))
     for item in policy.get("http_probe_targets", []):
         url = str(item.get("url") or "").strip()
         expected = {int(code) for code in item.get("expected_status") or []}
@@ -396,14 +398,22 @@ def probe_http_proxy(proxy_url: str, policy: dict[str, Any], *, network_containe
                 check=False,
             )
             status_code = int((result.stdout or "0").strip() or "0")
+            status_ok = result.returncode == 0 and (
+                status_code in expected
+                or (
+                    accept_status_below_500
+                    and 200 <= status_code < 500
+                    and status_code != 407
+                )
+            )
             attempts.append({
                 "target": url,
                 "status_code": status_code,
                 "exit_code": int(result.returncode),
-                "ok": result.returncode == 0 and status_code in expected,
+                "ok": status_ok,
                 "stderr": (result.stderr or "").strip()[:400],
             })
-            if result.returncode == 0 and status_code in expected:
+            if status_ok:
                 return {
                     "ok": True,
                     "attempts": attempts,
@@ -637,6 +647,7 @@ def main() -> int:
     subscriptions = normalize_list(args.subscription)
     proxy_uris = normalize_list(args.proxy_uri)
     fallback_subscriptions = normalize_list(args.fallback_subscription)
+    dns_servers = normalize_list(args.dns_server)
     connectors = load_connectors(args.connectors_json)
 
     if not subscriptions and not proxy_uris and not connectors and not args.manifest_url.strip():
@@ -690,6 +701,8 @@ def main() -> int:
     ]
     if args.docker_network_name.strip():
         docker_args.extend(["--network", args.docker_network_name.strip()])
+    for dns_server in dns_servers:
+        docker_args.extend(["--dns", dns_server])
     docker_args.append(effective_image)
     run(docker_args, capture=False, check=True)
 
@@ -847,6 +860,7 @@ def main() -> int:
             "artifact_dir": str(artifact_dir),
             "config_path": str(config_path),
             "docker_networks": container_networks,
+            "dns_servers": dns_servers,
             "inputs": {
                 "subscriptions": subscriptions,
                 "proxy_uris": proxy_uris,
@@ -888,6 +902,7 @@ def main() -> int:
             "pool_proxy_url": f"http://127.0.0.1:{pool_port}",
             "docker_network_name": args.docker_network_name.strip(),
             "docker_networks": collect_container_networks(container_name),
+            "dns_servers": dns_servers,
             "nodes": {
                 "total_nodes": int((last_nodes or {}).get("total_nodes") or 0) if 'last_nodes' in locals() else 0,
                 "available_nodes": int((last_nodes or {}).get("available_nodes") or 0) if 'last_nodes' in locals() else 0,

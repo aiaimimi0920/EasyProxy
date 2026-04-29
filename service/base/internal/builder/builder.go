@@ -1,17 +1,22 @@
 package builder
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/netip"
+	"net/http"
 	"net/url"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"easy_proxies/internal/config"
@@ -22,6 +27,12 @@ import (
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/auth"
 	"github.com/sagernet/sing/common/json/badoption"
+	mDNS "github.com/miekg/dns"
+)
+
+var (
+	echConfigCache      sync.Map
+	resolveECHConfigPEM = resolveECHConfigPEMFromQuery
 )
 
 // Build converts high level config into sing-box Options tree.
@@ -679,6 +690,16 @@ func buildTLSOptions(query url.Values, skipCertVerify bool) (*option.OutboundTLS
 	if fp != "" {
 		tlsOptions.UTLS = &option.OutboundUTLSOptions{Enabled: true, Fingerprint: fp}
 	}
+	if echValue := query.Get("ech"); echValue != "" {
+		echOptions := &option.OutboundECHOptions{Enabled: true}
+		configPEM, err := resolveECHConfigPEM(echValue)
+		if err != nil {
+			log.Printf("⚠️  Failed to prefetch ECH config for %q: %v (falling back to runtime DNS)", echValue, err)
+		} else if strings.TrimSpace(configPEM) != "" {
+			echOptions.Config = badoption.Listable[string](splitNonEmptyLines(configPEM))
+		}
+		tlsOptions.ECH = echOptions
+	}
 	if security == "reality" {
 		tlsOptions.Reality = &option.OutboundRealityOptions{Enabled: true, PublicKey: query.Get("pbk"), ShortID: query.Get("sid")}
 		// Reality requires uTLS; use default fingerprint if not specified
@@ -692,6 +713,115 @@ func buildTLSOptions(query url.Values, skipCertVerify bool) (*option.OutboundTLS
 	return tlsOptions, nil
 }
 
+func splitNonEmptyLines(content string) []string {
+	lines := strings.Split(content, "\n")
+	result := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		result = append(result, trimmed)
+	}
+	return result
+}
+
+func parseECHQueryValue(value string) (string, string, bool) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "", "", false
+	}
+	parts := strings.SplitN(trimmed, "+", 2)
+	queryServerName := strings.TrimSpace(parts[0])
+	if queryServerName == "" {
+		return "", "", false
+	}
+	dohURL := ""
+	if len(parts) == 2 {
+		dohURL = strings.TrimSpace(parts[1])
+	}
+	return queryServerName, dohURL, true
+}
+
+func resolveECHConfigPEMFromQuery(value string) (string, error) {
+	queryServerName, dohURL, ok := parseECHQueryValue(value)
+	if !ok {
+		return "", fmt.Errorf("invalid ech query value %q", value)
+	}
+	if dohURL == "" {
+		return "", nil
+	}
+	cacheKey := queryServerName + "|" + dohURL
+	if cached, ok := echConfigCache.Load(cacheKey); ok {
+		return cached.(string), nil
+	}
+	configList, err := fetchECHConfigList(queryServerName, dohURL, 15*time.Second)
+	if err != nil {
+		return "", err
+	}
+	configPEM := string(pem.EncodeToMemory(&pem.Block{
+		Type:  "ECH CONFIGS",
+		Bytes: configList,
+	}))
+	echConfigCache.Store(cacheKey, configPEM)
+	return configPEM, nil
+}
+
+func fetchECHConfigList(queryServerName string, dohURL string, timeout time.Duration) ([]byte, error) {
+	message := new(mDNS.Msg)
+	message.SetQuestion(mDNS.Fqdn(queryServerName), mDNS.TypeHTTPS)
+	message.RecursionDesired = true
+	wire, err := message.Pack()
+	if err != nil {
+		return nil, fmt.Errorf("pack HTTPS RR query: %w", err)
+	}
+	request, err := http.NewRequest(http.MethodPost, dohURL, bytes.NewReader(wire))
+	if err != nil {
+		return nil, fmt.Errorf("create doh request: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/dns-message")
+	request.Header.Set("Accept", "application/dns-message")
+	client := &http.Client{Timeout: timeout}
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("execute doh request: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, fmt.Errorf("doh returned status %d", response.StatusCode)
+	}
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read doh response: %w", err)
+	}
+	var dnsResponse mDNS.Msg
+	if err := dnsResponse.Unpack(body); err != nil {
+		return nil, fmt.Errorf("unpack doh response: %w", err)
+	}
+	if dnsResponse.Rcode != mDNS.RcodeSuccess {
+		return nil, fmt.Errorf("doh rcode %s", mDNS.RcodeToString[dnsResponse.Rcode])
+	}
+	for _, rr := range dnsResponse.Answer {
+		httpsRR, ok := rr.(*mDNS.HTTPS)
+		if !ok {
+			continue
+		}
+		for _, value := range httpsRR.Value {
+			if value.Key().String() != "ech" {
+				continue
+			}
+			if echValue, ok := value.(*mDNS.SVCBECHConfig); ok && len(echValue.ECH) > 0 {
+				return echValue.ECH, nil
+			}
+			decoded, err := base64.StdEncoding.DecodeString(value.String())
+			if err == nil && len(decoded) > 0 {
+				return decoded, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("no ECH config found for %s via %s", queryServerName, dohURL)
+}
+
 func buildV2RayTransport(query url.Values) (*option.V2RayTransportOptions, error) {
 	transportType, ok := config.NormalizeV2RayTransport(query.Get("type"))
 	if !ok {
@@ -703,24 +833,21 @@ func buildV2RayTransport(query url.Values) (*option.V2RayTransportOptions, error
 	options := &option.V2RayTransportOptions{Type: transportType}
 	switch transportType {
 	case C.V2RayTransportTypeWebsocket:
-		wsPath := query.Get("path")
-		// 解析 path 中的 early data 参数，如 /path?ed=2048
-		if idx := strings.Index(wsPath, "?ed="); idx != -1 {
-			edPart := wsPath[idx+4:]
-			wsPath = wsPath[:idx]
-			// 解析 ed 值
-			edValue := edPart
-			if ampIdx := strings.Index(edPart, "&"); ampIdx != -1 {
-				edValue = edPart[:ampIdx]
-			}
-			if ed, err := strconv.Atoi(edValue); err == nil && ed > 0 {
-				options.WebsocketOptions.MaxEarlyData = uint32(ed)
-				options.WebsocketOptions.EarlyDataHeaderName = "Sec-WebSocket-Protocol"
-			}
-		}
+		wsPath, earlyDataSize, earlyDataHeader := parseWebSocketPathAndEarlyData(query)
 		options.WebsocketOptions.Path = wsPath
+		if earlyDataSize > 0 {
+			options.WebsocketOptions.MaxEarlyData = earlyDataSize
+			options.WebsocketOptions.EarlyDataHeaderName = earlyDataHeader
+		}
+		headers := badoption.HTTPHeader{}
 		if host := query.Get("host"); host != "" {
-			options.WebsocketOptions.Headers = badoption.HTTPHeader{"Host": {host}}
+			headers["Host"] = []string{host}
+		}
+		if userAgent := websocketDefaultUserAgent(query.Get("fp")); userAgent != "" {
+			headers["User-Agent"] = []string{userAgent}
+		}
+		if len(headers) > 0 {
+			options.WebsocketOptions.Headers = headers
 		}
 	case C.V2RayTransportTypeHTTP:
 		options.HTTPOptions.Path = query.Get("path")
@@ -735,6 +862,64 @@ func buildV2RayTransport(query url.Values) (*option.V2RayTransportOptions, error
 		return nil, fmt.Errorf("unsupported transport type %q", transportType)
 	}
 	return options, nil
+}
+
+func parseWebSocketPathAndEarlyData(query url.Values) (string, uint32, string) {
+	rawPath := strings.TrimSpace(query.Get("path"))
+	if rawPath == "" {
+		rawPath = "/"
+	} else if !strings.HasPrefix(rawPath, "/") {
+		rawPath = "/" + rawPath
+	}
+
+	earlyDataHeader := strings.TrimSpace(query.Get("eh"))
+	var embeddedQuery url.Values
+	if idx := strings.Index(rawPath, "?"); idx != -1 && idx+1 < len(rawPath) {
+		parsedQuery, err := url.ParseQuery(rawPath[idx+1:])
+		if err == nil {
+			embeddedQuery = parsedQuery
+			if earlyDataHeader == "" {
+				earlyDataHeader = strings.TrimSpace(parsedQuery.Get("eh"))
+			}
+		}
+	}
+	if earlyDataHeader == "" {
+		earlyDataHeader = "Sec-WebSocket-Protocol"
+	}
+
+	earlyDataValue := strings.TrimSpace(query.Get("ed"))
+	if earlyDataValue == "" && embeddedQuery != nil {
+		earlyDataValue = strings.TrimSpace(embeddedQuery.Get("ed"))
+	}
+	if earlyDataValue == "" {
+		return rawPath, 0, earlyDataHeader
+	}
+
+	earlyDataSize, err := strconv.Atoi(earlyDataValue)
+	if err != nil || earlyDataSize <= 0 {
+		return rawPath, 0, earlyDataHeader
+	}
+
+	return rawPath, uint32(earlyDataSize), earlyDataHeader
+}
+
+func websocketDefaultUserAgent(fingerprint string) string {
+	switch strings.ToLower(strings.TrimSpace(fingerprint)) {
+	case "firefox":
+		return "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:137.0) Gecko/20100101 Firefox/137.0"
+	case "safari":
+		return "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Safari/605.1.15"
+	case "edge":
+		return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36 Edg/135.0.0.0"
+	case "ios":
+		return "Mozilla/5.0 (iPhone; CPU iPhone OS 18_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Mobile/15E148 Safari/604.1"
+	case "android":
+		return "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Mobile Safari/537.36"
+	case "chrome", "random", "randomized", "":
+		return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
+	default:
+		return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
+	}
 }
 
 func buildShadowsocksOptions(u *url.URL) (option.ShadowsocksOutboundOptions, error) {

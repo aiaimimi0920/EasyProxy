@@ -15,6 +15,10 @@ services:
     volumes:
       - ./config.yaml:/etc/easy-proxy/config.yaml
       - ./data:/var/lib/easy-proxy
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+      - 223.5.5.5
     networks:
       - easyproxy-service-network
 

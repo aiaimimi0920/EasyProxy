@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -298,7 +299,7 @@ func (p *poolOutbound) probeAllMembersOnStartup() {
 		// Create a timeout context for each probe
 		ctx, cancel := context.WithTimeout(p.ctx, 15*time.Second)
 
-		latency, err := p.runProbeTargets(ctx, member.outbound, targets)
+		latency, err := p.runProbeTargetsForMember(ctx, member, targets)
 		if err != nil {
 			p.logger.Warn("initial probe failed for ", member.tag, ": ", err)
 			failedCount++
@@ -884,7 +885,7 @@ func (p *poolOutbound) makeProbeFunc(member *memberState) func(ctx context.Conte
 			return 0, E.New("probe target not configured")
 		}
 
-		duration, err := p.runProbeTargets(ctx, member.outbound, targets)
+		duration, err := p.runProbeTargetsForMember(ctx, member, targets)
 		if err != nil {
 			if member.entry != nil {
 				member.entry.RecordFailure(err, strings.Join(probeTargetLabels(targets), ","))
@@ -938,7 +939,7 @@ func (p *poolOutbound) makeProbeByTagFunc(tag string) func(ctx context.Context) 
 			return 0, E.New("member not found: ", tag)
 		}
 
-		duration, err := p.runProbeTargets(ctx, member.outbound, targets)
+		duration, err := p.runProbeTargetsForMember(ctx, member, targets)
 		if err != nil {
 			if member.entry != nil {
 				member.entry.RecordFailure(err, strings.Join(probeTargetLabels(targets), ","))
@@ -963,6 +964,135 @@ func probeTargetLabels(targets []monitor.ProbeTargetSpec) []string {
 		labels = append(labels, target.Dst.String())
 	}
 	return labels
+}
+
+func normalizeLocalProbeHost(host string) string {
+	trimmed := strings.TrimSpace(host)
+	switch trimmed {
+	case "", "0.0.0.0", "::", "[::]":
+		return "127.0.0.1"
+	default:
+		return trimmed
+	}
+}
+
+func (p *poolOutbound) memberProbeProxyAddress(member *memberState) string {
+	if member == nil {
+		return ""
+	}
+	meta, ok := p.options.Metadata[member.tag]
+	if !ok || meta.Port == 0 {
+		return ""
+	}
+	host := normalizeLocalProbeHost(meta.ListenAddress)
+	return net.JoinHostPort(host, strconv.Itoa(int(meta.Port)))
+}
+
+func (p *poolOutbound) runProbeTargetsForMember(ctx context.Context, member *memberState, targets []monitor.ProbeTargetSpec) (time.Duration, error) {
+	var errs []string
+
+	if proxyAddress := p.memberProbeProxyAddress(member); proxyAddress != "" {
+		duration, err := p.runProbeTargetsViaHTTPProxy(ctx, proxyAddress, targets)
+		if err == nil {
+			return duration, nil
+		}
+		errs = append(errs, fmt.Sprintf("local proxy probe via %s: %v", proxyAddress, err))
+	}
+
+	if member != nil && member.outbound != nil {
+		duration, err := p.runProbeTargets(ctx, member.outbound, targets)
+		if err == nil {
+			return duration, nil
+		}
+		errs = append(errs, fmt.Sprintf("raw outbound probe: %v", err))
+	}
+
+	if len(errs) == 0 {
+		return 0, E.New("member probe failed: missing outbound and local proxy metadata")
+	}
+	return 0, E.New(strings.Join(errs, " | "))
+}
+
+func dialContextTCP(ctx context.Context, address string) (net.Conn, error) {
+	dialer := &net.Dialer{}
+	return dialer.DialContext(ctx, "tcp", address)
+}
+
+func connectHTTPProxy(conn net.Conn, target monitor.ProbeTargetSpec) error {
+	host := target.Host
+	if host == "" {
+		host = target.Dst.AddrString()
+	}
+	port := target.Port
+	if port == 0 {
+		port = target.Dst.Port
+	}
+	authority := net.JoinHostPort(host, strconv.Itoa(int(port)))
+	req := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\nProxy-Connection: Keep-Alive\r\nUser-Agent: EasyProxy-Probe/1.0\r\n\r\n", authority, authority)
+
+	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	if _, err := conn.Write([]byte(req)); err != nil {
+		return fmt.Errorf("write CONNECT request: %w", err)
+	}
+
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	reader := bufio.NewReader(conn)
+	statusLine, err := reader.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("read CONNECT response: %w", err)
+	}
+	parts := strings.Fields(strings.TrimSpace(statusLine))
+	if len(parts) < 2 {
+		return fmt.Errorf("invalid CONNECT status line: %q", strings.TrimSpace(statusLine))
+	}
+	var status int
+	if _, err := fmt.Sscanf(parts[1], "%d", &status); err != nil {
+		return fmt.Errorf("parse CONNECT status %q: %w", strings.TrimSpace(statusLine), err)
+	}
+	if status < 200 || status >= 300 {
+		return fmt.Errorf("unexpected CONNECT status %d for %s", status, authority)
+	}
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("read CONNECT headers: %w", err)
+		}
+		if line == "\r\n" || line == "\n" {
+			break
+		}
+	}
+	_ = conn.SetDeadline(time.Time{})
+	return nil
+}
+
+func (p *poolOutbound) runProbeTargetsViaHTTPProxy(ctx context.Context, proxyAddress string, targets []monitor.ProbeTargetSpec) (time.Duration, error) {
+	var errs []string
+	for _, target := range targets {
+		start := time.Now()
+		conn, err := dialContextTCP(ctx, proxyAddress)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s proxy dial: %v", target.Original, err))
+			continue
+		}
+		err = connectHTTPProxy(conn, target)
+		if err != nil {
+			conn.Close()
+			errs = append(errs, fmt.Sprintf("%s proxy connect: %v", target.Original, err))
+			continue
+		}
+		if target.Scheme == "tcp" {
+			conn.Close()
+			return time.Since(start), nil
+		}
+		_, err = httpProbeTarget(conn, target, p.shouldSkipProbeTLSVerify())
+		conn.Close()
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s proxy probe: %v", target.Original, err))
+			continue
+		}
+		return time.Since(start), nil
+	}
+	return 0, E.New("all proxy probe targets failed: ", strings.Join(errs, " | "))
 }
 
 func (p *poolOutbound) runProbeTargets(ctx context.Context, outbound adapter.Outbound, targets []monitor.ProbeTargetSpec) (time.Duration, error) {

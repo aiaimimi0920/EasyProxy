@@ -122,6 +122,41 @@ proxies:
 	}
 }
 
+func TestParseSubscriptionContentParsesClashYAMLShadowsocksObfsPlugin(t *testing.T) {
+	content := strings.TrimSpace(`
+proxies:
+  - name: "Glados SS"
+    type: ss
+    server: b497b27.r8.glados-config.net
+    port: 2377
+    cipher: chacha20-ietf-poly1305
+    password: t0srmdxrm3xyjnvqz9ewlxb2myq7rjuv
+    plugin: obfs
+    plugin-opts:
+      mode: tls
+      host: b497b27.default.microsoft.lt:100531
+`)
+
+	nodes, err := ParseSubscriptionContent(content)
+	if err != nil {
+		t.Fatalf("ParseSubscriptionContent() error = %v", err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("expected 1 parsed node, got %d", len(nodes))
+	}
+	if !strings.HasPrefix(nodes[0].URI, "ss://") {
+		t.Fatalf("expected parsed Clash YAML to produce an SS URI, got %q", nodes[0].URI)
+	}
+	if !strings.Contains(nodes[0].URI, "plugin=obfs-local") {
+		t.Fatalf("expected shadowsocks plugin to normalize to obfs-local, got %q", nodes[0].URI)
+	}
+	if !strings.Contains(nodes[0].URI, "plugin-opts=") ||
+		!strings.Contains(nodes[0].URI, "obfs%3Dtls") ||
+		!strings.Contains(nodes[0].URI, "obfs-host%3Db497b27.default.microsoft.lt%3A100531") {
+		t.Fatalf("expected plugin opts to preserve obfs mode/host, got %q", nodes[0].URI)
+	}
+}
+
 func TestLoadForReloadIncludesNodesFile(t *testing.T) {
 	dir := t.TempDir()
 	nodesPath := filepath.Join(dir, "nodes.txt")

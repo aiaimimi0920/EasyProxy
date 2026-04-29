@@ -1,0 +1,7 @@
+.git
+.github
+tmp
+**/__pycache__
+**/*.pyc
+service/base/frontend/node_modules
+upstreams/misub/node_modules

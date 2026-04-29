@@ -11,6 +11,10 @@ serviceBase:
   composeFile: deploy/service/base/docker-compose.yaml
   renderedConfigPath: deploy/service/base/config.yaml
   networkName: EasyAiMi
+  dnsServers:
+    - 1.1.1.1
+    - 8.8.8.8
+    - 223.5.5.5
   runtime:
     mode: hybrid
     log_level: info
@@ -115,6 +119,8 @@ aggregator:
   configPath: deploy/upstreams/aggregator/config/config.actions.r2.json
   publicBaseUrl: https://sub.example.com
   effectiveUrl: https://sub.example.com/subs/effective.txt
+  seedSubKey: ""
+  sharedToken: ""
   r2:
     accountId: ""
     accessKeyId: ""

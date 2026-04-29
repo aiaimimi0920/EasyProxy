@@ -25,6 +25,7 @@ function Invoke-Audit {
         [string[]]$Subscriptions = @(),
         [string[]]$ProxyUris = @(),
         [string[]]$FallbackSubscriptions = @(),
+        [string[]]$DnsServers = @(),
         [string]$ManifestUrl = "",
         [string]$ManifestToken = "",
         [string]$ConnectorsJson = "",
@@ -58,6 +59,9 @@ function Invoke-Audit {
     }
     foreach ($sub in @($FallbackSubscriptions | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
         $args += @("--fallback-subscription", $sub)
+    }
+    foreach ($dnsServer in @($DnsServers | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
+        $args += @("--dns-server", $dnsServer)
     }
     if (-not [string]::IsNullOrWhiteSpace($ManifestUrl)) {
         $args += @("--manifest-url", $ManifestUrl)
@@ -135,6 +139,7 @@ if ([string]::IsNullOrWhiteSpace($effectiveImage)) {
 $rootConfig = Read-EasyProxyConfig -ConfigPath $effectiveConfigPath
 $serviceBase = Get-EasyProxyConfigSection -Config $rootConfig -Name 'serviceBase'
 $serviceRuntime = Get-EasyProxyConfigSection -Config $serviceBase -Name 'runtime'
+$configuredDnsServers = @(Get-EasyProxyConfigValue -Object $serviceBase -Name 'dnsServers' -Default @())
 $sourceSyncConfig = Get-EasyProxyConfigSection -Config $serviceRuntime -Name 'source_sync'
 $misub = Get-EasyProxyConfigSection -Config $rootConfig -Name 'misub'
 $misubPages = Get-EasyProxyConfigSection -Config $misub -Name 'pages'
@@ -192,9 +197,10 @@ $connectorPayload = ConvertTo-Json -InputObject @(
     }
 ) -Depth 20 -Compress
 
-$localSubscription = Invoke-Audit -ScenarioName "local-subscription" -Subscriptions $configuredLocalSubscriptions
+$localSubscription = Invoke-Audit -ScenarioName "local-subscription" -Subscriptions $configuredLocalSubscriptions -DnsServers $configuredDnsServers
 $manifestSubscription = Invoke-Audit `
     -ScenarioName "manifest-subscription" `
+    -DnsServers $configuredDnsServers `
     -ManifestUrl "$misubPublicUrl/api/manifest/aggregator-global" `
     -ManifestToken $manifestToken `
     -RequireManifestHealthy
@@ -216,7 +222,7 @@ $directValidated = $false
 $directErrors = @()
 foreach ($candidate in $directProxyCandidates) {
     try {
-        $null = Invoke-Audit -ScenarioName "local-direct-proxy" -ProxyUris @($candidate)
+        $null = Invoke-Audit -ScenarioName "local-direct-proxy" -ProxyUris @($candidate) -DnsServers $configuredDnsServers
         $directValidated = $true
         break
     }
@@ -234,6 +240,7 @@ if ($fallbackSubscriptions.Count -lt 1) {
 }
 $null = Invoke-Audit `
     -ScenarioName "fallback-subscription" `
+    -DnsServers $configuredDnsServers `
     -ManifestUrl "http://127.0.0.1:1/api/manifest/broken" `
     -ManifestToken $manifestToken `
     -FallbackSubscriptions $fallbackSubscriptions `
@@ -241,11 +248,13 @@ $null = Invoke-Audit `
 
 $null = Invoke-Audit `
     -ScenarioName "local-connector" `
+    -DnsServers $configuredDnsServers `
     -ConnectorsJson $connectorPayload `
     -RequireConnectorInstanceCount 5
 
 $null = Invoke-Audit `
     -ScenarioName "manifest-connector" `
+    -DnsServers $configuredDnsServers `
     -ManifestUrl "$misubPublicUrl/api/manifest/$misubConnectorProfileId" `
     -ManifestToken $manifestToken `
     -RequireManifestHealthy `

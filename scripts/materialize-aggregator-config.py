@@ -28,6 +28,7 @@ def replace_placeholders(value: str, env_map: Dict[str, str]) -> Tuple[str, bool
 
 def sanitize_domain_entry(entry: Dict[str, Any], env_map: Dict[str, str]) -> Tuple[Dict[str, Any], bool]:
     unresolved = False
+    placeholder_backed = False
     sanitized = dict(entry)
 
     subs = sanitized.get("sub")
@@ -37,6 +38,8 @@ def sanitize_domain_entry(entry: Dict[str, Any], env_map: Dict[str, str]) -> Tup
             if not isinstance(item, str):
                 new_subs.append(item)
                 continue
+            if any(placeholder in item for placeholder in env_map):
+                placeholder_backed = True
             replaced, item_unresolved = replace_placeholders(item, env_map)
             if item_unresolved:
                 unresolved = True
@@ -47,6 +50,8 @@ def sanitize_domain_entry(entry: Dict[str, Any], env_map: Dict[str, str]) -> Tup
     for key, value in list(sanitized.items()):
         if key == "sub" or not isinstance(value, str):
             continue
+        if any(placeholder in value for placeholder in env_map):
+            placeholder_backed = True
         replaced, item_unresolved = replace_placeholders(value, env_map)
         if item_unresolved:
             unresolved = True
@@ -57,6 +62,10 @@ def sanitize_domain_entry(entry: Dict[str, Any], env_map: Dict[str, str]) -> Tup
         sanitized["enable"] = False
         if isinstance(sanitized.get("name"), str) and "[disabled-missing-secret]" not in sanitized["name"]:
             sanitized["name"] = f'{sanitized["name"]} [disabled-missing-secret]'
+    elif placeholder_backed:
+        sanitized["enable"] = True
+        if isinstance(sanitized.get("name"), str):
+            sanitized["name"] = sanitized["name"].replace(" [disabled-missing-secret]", "")
 
     return sanitized, unresolved
 

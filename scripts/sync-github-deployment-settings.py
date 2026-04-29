@@ -8,11 +8,13 @@ import copy
 import hashlib
 import json
 import os
+import re
 import secrets
 import subprocess
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import requests
 import yaml
@@ -24,6 +26,9 @@ DEFAULT_CONFIG_PATH = REPO_ROOT / "config.yaml"
 DEFAULT_TEMPLATE_PATH = REPO_ROOT / "config.example.yaml"
 PROXY_AVAILABILITY_POLICY_PATH = REPO_ROOT / "shared" / "proxy-availability" / "policy.json"
 DEFAULT_EASYEMAIL_CONFIG = Path(r"C:\Users\Public\nas_home\AI\GameEditor\EasyEmail\config.yaml")
+DEFAULT_LEGACY_AGGREGATOR_CLASH_CONFIG = Path(
+    r"C:\Users\Public\nas_home\AI\GameEditor\ProxyService\repos\aggregator\clash\config.yaml"
+)
 DEFAULT_OWNER_KEY_DIR = Path.home() / ".easyproxy"
 DEFAULT_OWNER_PUBLIC_KEY_PATH = DEFAULT_OWNER_KEY_DIR / "easyproxy_import_code_owner_public.txt"
 DEFAULT_OWNER_PRIVATE_KEY_PATH = DEFAULT_OWNER_KEY_DIR / "easyproxy_import_code_owner_private.txt"
@@ -114,6 +119,34 @@ def is_placeholder(value: str) -> bool:
     )
     lowered = text.lower()
     return any(marker in lowered for marker in placeholder_markers)
+
+
+def read_legacy_aggregator_seed_values(path: Path) -> tuple[str, str]:
+    if not path.exists():
+        return "", ""
+    text = path.read_text(encoding="utf-8")
+    seed_match = re.search(r"https://bujidao\.cc/sub\?key=([^&\s]+)", text)
+    shared_match = re.search(r"https://raoku-pm\.hf\.space/api/v1/subscribe\?token=([^&\s]+)", text)
+    seed_sub_key = seed_match.group(1).strip() if seed_match else ""
+    shared_token = shared_match.group(1).strip() if shared_match else ""
+    return seed_sub_key, shared_token
+
+
+def resolve_optional_secret(
+    config: dict[str, Any],
+    path: tuple[str, ...],
+    env_name: str,
+    fallback_value: str = "",
+) -> str:
+    configured = str(get_nested(config, *path, default="")).strip()
+    if configured and not is_placeholder(configured):
+        return configured
+    env_value = os.environ.get(env_name, "").strip()
+    if env_value and not is_placeholder(env_value):
+        return env_value
+    if fallback_value and not is_placeholder(fallback_value):
+        return fallback_value
+    return ""
 
 
 def get_or_generate(config: dict[str, Any], path: tuple[str, ...], factory) -> str:
@@ -223,6 +256,19 @@ def resolve_account_id(session: requests.Session, config: dict[str, Any]) -> str
 def fetch_workers_subdomain(session: requests.Session, account_id: str) -> str:
     payload = cf_request(session, "GET", f"https://api.cloudflare.com/client/v4/accounts/{account_id}/workers/subdomain")
     return str(payload["result"].get("subdomain") or "").strip()
+
+
+def infer_workers_subdomain(config: dict[str, Any]) -> str:
+    candidate = str(get_nested(config, "echWorkersCloudflare", "publicUrl", default="")).strip()
+    if not candidate:
+        return ""
+    host = urlparse(candidate).hostname or ""
+    if not host:
+        return ""
+    parts = host.split(".")
+    if len(parts) >= 3 and parts[-2:] == ["aiaimimi", "com"]:
+        return parts[0]
+    return parts[0] if parts else ""
 
 
 def ensure_owner_keypair(public_key_path: Path, private_key_path: Path, bundle_path: Path) -> None:
@@ -362,7 +408,10 @@ def main() -> int:
         }
     )
     account_id = resolve_account_id(cf_session, config)
-    workers_subdomain = fetch_workers_subdomain(cf_session, account_id)
+    try:
+        workers_subdomain = fetch_workers_subdomain(cf_session, account_id)
+    except requests.RequestException:
+        workers_subdomain = infer_workers_subdomain(config)
 
     misub_public_url = "https://misub.aiaimimi.com"
     misub_callback_url = "https://misub.aiaimimi.com"
@@ -376,6 +425,7 @@ def main() -> int:
     aggregator_public_base_url = "https://sub.aiaimimi.com"
     aggregator_effective_url = "https://sub.aiaimimi.com/subs/effective.txt"
     service_base_network_name = "EasyAiMi"
+    service_base_dns_servers = ["1.1.1.1", "8.8.8.8", "223.5.5.5"]
     shared_management_probe_targets = load_proxy_availability_probe_targets()
     default_preferred_entry_ips = [
         "198.41.185.161",
@@ -384,11 +434,24 @@ def main() -> int:
         "162.158.3.95",
         "198.41.247.52",
     ]
+    legacy_seed_sub_key, legacy_shared_token = read_legacy_aggregator_seed_values(DEFAULT_LEGACY_AGGREGATOR_CLASH_CONFIG)
 
     misub_admin_password = get_or_generate(config, ("misub", "docker", "env", "ADMIN_PASSWORD"), lambda: secrets.token_urlsafe(24))
     misub_cookie_secret = get_or_generate(config, ("misub", "docker", "env", "COOKIE_SECRET"), lambda: secrets.token_hex(32))
     misub_manifest_token = get_or_generate(config, ("misub", "docker", "env", "MANIFEST_TOKEN"), lambda: secrets.token_urlsafe(32))
     ech_token = get_or_generate(config, ("echWorkersCloudflare", "secrets", "ECH_TOKEN"), lambda: secrets.token_urlsafe(32))
+    aggregator_seed_sub_key = resolve_optional_secret(
+        config,
+        ("aggregator", "seedSubKey"),
+        "EASYPROXY_AGGREGATOR_SEED_SUB_KEY",
+        legacy_seed_sub_key,
+    )
+    aggregator_shared_token = resolve_optional_secret(
+        config,
+        ("aggregator", "sharedToken"),
+        "EASYPROXY_AGGREGATOR_SHARED_TOKEN",
+        legacy_shared_token,
+    )
     service_base_management_password = get_or_generate(
         config, ("serviceBase", "runtime", "management", "password"), lambda: secrets.token_urlsafe(24)
     )
@@ -508,6 +571,8 @@ def main() -> int:
     set_nested(config, ("aggregator", "configPath"), "deploy/upstreams/aggregator/config/config.actions.r2.json")
     set_nested(config, ("aggregator", "publicBaseUrl"), aggregator_public_base_url)
     set_nested(config, ("aggregator", "effectiveUrl"), aggregator_effective_url)
+    set_nested(config, ("aggregator", "seedSubKey"), aggregator_seed_sub_key)
+    set_nested(config, ("aggregator", "sharedToken"), aggregator_shared_token)
     set_nested(config, ("aggregator", "r2", "accessKeyId"), agg_access_key_id)
     set_nested(config, ("aggregator", "r2", "secretAccessKey"), agg_secret_access_key)
     set_nested(config, ("aggregator", "r2", "accountId"), account_id)
@@ -523,6 +588,10 @@ def main() -> int:
     set_nested(config, ("echWorkersCloudflare", "secrets", "ECH_TOKEN"), ech_token)
 
     set_nested(config, ("serviceBase", "networkName"), service_base_network_name)
+    existing_dns_servers = get_nested(config, "serviceBase", "dnsServers", default=service_base_dns_servers)
+    if not isinstance(existing_dns_servers, list) or len(existing_dns_servers) == 0:
+        existing_dns_servers = service_base_dns_servers
+    set_nested(config, ("serviceBase", "dnsServers"), existing_dns_servers)
     set_nested(config, ("serviceBase", "runtime", "management", "password"), service_base_management_password)
     if shared_management_probe_targets:
         set_nested(config, ("serviceBase", "runtime", "management", "probe_targets"), shared_management_probe_targets)
@@ -602,6 +671,10 @@ def main() -> int:
             "EASYPROXY_SERVICE_BASE_MANAGEMENT_PASSWORD": service_base_management_password,
             "EASYPROXY_IMPORT_CODE_OWNER_PUBLIC_KEY": owner_public_key,
         }
+        if aggregator_seed_sub_key:
+            secrets_map["EASYPROXY_AGGREGATOR_SEED_SUB_KEY"] = aggregator_seed_sub_key
+        if aggregator_shared_token:
+            secrets_map["EASYPROXY_AGGREGATOR_SHARED_TOKEN"] = aggregator_shared_token
         variables_map = {
             "EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL": aggregator_public_base_url,
             "EASYPROXY_AGGREGATOR_EFFECTIVE_URL": aggregator_effective_url,
@@ -629,6 +702,8 @@ def main() -> int:
         "misubPublicUrl": misub_public_url,
         "echWorkerPublicUrl": ech_worker_public_url,
         "aggregatorPublicBaseUrl": aggregator_public_base_url,
+        "aggregatorSeedSubConfigured": bool(aggregator_seed_sub_key),
+        "aggregatorSharedTokenConfigured": bool(aggregator_shared_token),
         "serviceBaseDistributionBucket": "easyproxy-private",
     }
     print(json.dumps(summary, ensure_ascii=False, indent=2))

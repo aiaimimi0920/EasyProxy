@@ -36,6 +36,7 @@
     "https://www.youtube.com/robots.txt"
   ],
   "request_timeout_seconds": 25,
+  "accept_http_status_below_500": true,
   "direct_probe_retries": 1,
   "direct_probe_retry_delay_seconds": 1,
   "scenario_timeout_seconds": 720,
