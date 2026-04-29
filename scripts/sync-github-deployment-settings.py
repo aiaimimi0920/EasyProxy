@@ -163,6 +163,11 @@ def build_issue91_relay_url(workers_subdomain: str) -> str:
     return f"https://easyproxy-aggregator-seed-relay.{workers_subdomain}.workers.dev/issue91"
 
 
+def is_relay_issue91_url(value: str) -> bool:
+    text = str(value or "").strip().lower()
+    return text.startswith("https://easyproxy-aggregator-seed-relay.") and text.endswith("/issue91")
+
+
 def get_or_generate(config: dict[str, Any], path: tuple[str, ...], factory) -> str:
     current = get_nested(config, *path, default="")
     if isinstance(current, str) and not is_placeholder(current):
@@ -467,12 +472,18 @@ def main() -> int:
         build_issue91_subscription_url(aggregator_shared_token),
     )
     aggregator_issue91_relay_url = build_issue91_relay_url(workers_subdomain)
-    aggregator_issue91_subscription_url = resolve_optional_secret(
-        config,
-        ("aggregator", "issue91SubscriptionUrl"),
-        "EASYPROXY_AGGREGATOR_ISSUE91_SUB_URL",
-        aggregator_issue91_relay_url,
-    )
+    configured_issue91_subscription_url = str(get_nested(config, "aggregator", "issue91SubscriptionUrl", default="")).strip()
+    if is_relay_issue91_url(configured_issue91_subscription_url):
+        aggregator_issue91_subscription_url = configured_issue91_subscription_url
+    elif aggregator_issue91_relay_url:
+        aggregator_issue91_subscription_url = aggregator_issue91_relay_url
+    else:
+        aggregator_issue91_subscription_url = resolve_optional_secret(
+            config,
+            ("aggregator", "issue91SubscriptionUrl"),
+            "EASYPROXY_AGGREGATOR_ISSUE91_SUB_URL",
+            aggregator_issue91_upstream_url,
+        )
     service_base_management_password = get_or_generate(
         config, ("serviceBase", "runtime", "management", "password"), lambda: secrets.token_urlsafe(24)
     )

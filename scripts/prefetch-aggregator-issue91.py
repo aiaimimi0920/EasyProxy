@@ -17,6 +17,8 @@ import yaml
 USER_AGENT = "Mozilla/5.0; Clash.Meta; Mihomo; Shadowrocket;"
 ISSUE91_DOMAIN_NAME = "seed-sub-issue91-shared"
 FILEPATH_PROTOCOL = "file:///"
+R2_BUCKET_NAME = "aggregator"
+R2_CACHE_OBJECT_KEY = "internal/issue91.shared.yaml"
 
 
 def fetch_text_urllib(url: str, timeout: int) -> str:
@@ -126,6 +128,54 @@ def decode_optional_base64_env(env_name: str) -> str:
         raise RuntimeError(f"failed to decode {env_name}: {exc}") from exc
 
 
+def build_r2_client():
+    access_key_id = os.environ.get("R2_ACCESS_KEY_ID", "").strip()
+    secret_access_key = os.environ.get("R2_SECRET_ACCESS_KEY", "").strip()
+    account_id = os.environ.get("R2_ACCOUNT_ID", "").strip()
+    if not access_key_id or not secret_access_key or not account_id:
+        return None
+    try:
+        import boto3
+    except Exception:
+        return None
+    return boto3.client(
+        "s3",
+        endpoint_url=f"https://{account_id}.r2.cloudflarestorage.com",
+        aws_access_key_id=access_key_id,
+        aws_secret_access_key=secret_access_key,
+        region_name="auto",
+    )
+
+
+def download_cached_snapshot() -> tuple[str, str]:
+    client = build_r2_client()
+    if client is None:
+        return "", ""
+    try:
+        response = client.get_object(Bucket=R2_BUCKET_NAME, Key=R2_CACHE_OBJECT_KEY)
+        body = response["Body"].read().decode("utf-8", errors="replace").strip()
+        proxy_count = ensure_proxy_count(body)
+        return body, f"r2://{R2_BUCKET_NAME}/{R2_CACHE_OBJECT_KEY}#{proxy_count}"
+    except Exception:
+        return "", ""
+
+
+def upload_cached_snapshot(text: str) -> None:
+    client = build_r2_client()
+    if client is None:
+        return
+    try:
+        client.put_object(
+            Bucket=R2_BUCKET_NAME,
+            Key=R2_CACHE_OBJECT_KEY,
+            Body=text.encode("utf-8"),
+            ContentType="text/yaml; charset=utf-8",
+            CacheControl="max-age=300",
+        )
+    except Exception as exc:
+        print(json.dumps({"cache_upload_warning": str(exc)}), flush=True)
+
+
 def ensure_proxy_count(text: str) -> int:
     payload = yaml.safe_load(text)
     if not isinstance(payload, dict):
@@ -189,13 +239,22 @@ def main() -> int:
         except Exception as exc:
             fetch_errors.append(f"{candidate_url}: {exc}")
 
+    source_mode = "live"
     if not text:
-        raise RuntimeError("issue91 prefetch failed: " + " | ".join(fetch_errors))
+        cached_text, cached_source = download_cached_snapshot()
+        if cached_text:
+            text = cached_text
+            source_url = cached_source
+            source_mode = "cache"
+        else:
+            raise RuntimeError("issue91 prefetch failed: " + " | ".join(fetch_errors))
 
     proxy_count = ensure_proxy_count(text)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(text, encoding="utf-8")
+    if source_mode == "live":
+        upload_cached_snapshot(text)
 
     target["sub"] = [f"{FILEPATH_PROTOCOL}{output_path.resolve().as_posix()}"]
     runtime_path.write_text(json.dumps(runtime, ensure_ascii=False, indent=4), encoding="utf-8")
@@ -204,6 +263,7 @@ def main() -> int:
         json.dumps(
             {
                 "domain": ISSUE91_DOMAIN_NAME,
+                "source_mode": source_mode,
                 "source_url": source_url,
                 "prefetched_file": str(output_path.resolve()),
                 "proxy_count": proxy_count,
