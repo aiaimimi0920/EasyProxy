@@ -1,0 +1,10 @@
+{
+  "$schema": "https://raw.githubusercontent.com/cloudflare/workers-sdk/main/packages/wrangler/config-schema.json",
+  "name": "easyproxy-aggregator-seed-relay",
+  "main": "src/index.js",
+  "compatibility_date": "2026-04-29",
+  "workers_dev": true,
+  "observability": {
+    "enabled": true
+  }
+}

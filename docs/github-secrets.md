@@ -48,14 +48,15 @@ workflow:
 
 | Secret | Required For | Purpose |
 | --- | --- | --- |
-| `CLOUDFLARE_API_TOKEN` | MiSub Pages, ech-workers-cloudflare | Preferred Cloudflare deployment auth |
-| `CLOUDFLARE_AUTH_EMAIL` | MiSub Pages, ech-workers-cloudflare | Fallback auth email when using Cloudflare Global API Key |
-| `CLOUDFLARE_GLOBAL_API_KEY` | MiSub Pages, ech-workers-cloudflare | Fallback deployment auth when API token is unavailable |
-| `CLOUDFLARE_ACCOUNT_ID` | MiSub Pages, ech-workers-cloudflare | Cloudflare account targeting |
+| `CLOUDFLARE_API_TOKEN` | MiSub Pages, ech-workers-cloudflare, aggregator-seed-relay | Preferred Cloudflare deployment auth |
+| `CLOUDFLARE_AUTH_EMAIL` | MiSub Pages, ech-workers-cloudflare, aggregator-seed-relay | Fallback auth email when using Cloudflare Global API Key |
+| `CLOUDFLARE_GLOBAL_API_KEY` | MiSub Pages, ech-workers-cloudflare, aggregator-seed-relay | Fallback deployment auth when API token is unavailable |
+| `CLOUDFLARE_ACCOUNT_ID` | MiSub Pages, ech-workers-cloudflare, aggregator-seed-relay | Cloudflare account targeting |
 | `MISUB_ADMIN_PASSWORD` | MiSub Pages | MiSub admin login secret |
 | `MISUB_COOKIE_SECRET` | MiSub Pages | MiSub session signing secret |
 | `MISUB_MANIFEST_TOKEN` | MiSub Pages | MiSub manifest API token |
 | `ECH_TOKEN` | ech-workers-cloudflare | Worker-side access token |
+| `EASYPROXY_AGGREGATOR_ISSUE91_UPSTREAM_URL_B64` | aggregator-seed-relay | Base64-encoded upstream Issue #91 subscription URL fetched by the relay worker |
 
 Notes:
 
@@ -73,10 +74,14 @@ Notes:
   - `EASYPROXY_MISUB_MANIFEST_PROFILE_ID`
 - ech-workers-cloudflare verification expects repository variable:
   - `EASYPROXY_ECH_WORKER_PUBLIC_URL`
+- aggregator-seed-relay verification expects repository variable:
+  - `EASYPROXY_AGGREGATOR_ISSUE91_RELAY_URL`
 - `deploy-cloudflare.yml` syncs MiSub secrets into the Cloudflare Pages project
   before deploying the latest build output.
 - `deploy-cloudflare.yml` syncs `ECH_TOKEN` into the Worker secret store during
   deploy.
+- `deploy-cloudflare.yml` syncs `ISSUE91_UPSTREAM_URL_B64` into the relay Worker
+  secret store during deploy.
 
 ## Local Operator Scripts
 
@@ -101,13 +106,14 @@ Add these repository secrets before using that workflow:
 | `EASYPROXY_AGGREGATOR_R2_ACCESS_KEY_ID` | R2 write credential for published artifacts |
 | `EASYPROXY_AGGREGATOR_R2_SECRET_ACCESS_KEY` | R2 write credential secret |
 | `EASYPROXY_AGGREGATOR_R2_ACCOUNT_ID` | Cloudflare account ID for the target R2 bucket |
-| `EASYPROXY_AGGREGATOR_ISSUE91_SUB_URL_B64` | Base64-encoded full Issue #91 shared subscription URL used to avoid special-character truncation in tokenized URLs |
+| `EASYPROXY_AGGREGATOR_ISSUE91_SUB_URL_B64` | Base64-encoded relay URL used by GitHub-hosted aggregator runs for the Issue #91 shared seed |
 
 Optional repository variables:
 
 | Variable | Purpose |
 | --- | --- |
 | `EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL` | Public base URL used for post-deploy artifact verification |
+| `EASYPROXY_AGGREGATOR_ISSUE91_RELAY_URL` | Public Cloudflare relay URL used to proxy the Issue #91 shared seed for GitHub-hosted runs |
 | `EASYPROXY_AGGREGATOR_ENABLE_SCHEDULE` | Set to `true` to enable scheduled native aggregator runs |
 | `EASYPROXY_AGGREGATOR_SKIP_ALIVE_CHECK` | Optional passthrough to the upstream runtime |
 | `EASYPROXY_AGGREGATOR_SKIP_REMARK` | Optional passthrough to the upstream runtime |

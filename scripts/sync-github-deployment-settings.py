@@ -156,6 +156,13 @@ def build_issue91_subscription_url(token: str) -> str:
     )
 
 
+def build_issue91_relay_url(workers_subdomain: str) -> str:
+    workers_subdomain = str(workers_subdomain or "").strip()
+    if not workers_subdomain:
+        return ""
+    return f"https://easyproxy-aggregator-seed-relay.{workers_subdomain}.workers.dev/issue91"
+
+
 def get_or_generate(config: dict[str, Any], path: tuple[str, ...], factory) -> str:
     current = get_nested(config, *path, default="")
     if isinstance(current, str) and not is_placeholder(current):
@@ -453,11 +460,18 @@ def main() -> int:
         "EASYPROXY_AGGREGATOR_SHARED_TOKEN",
         legacy_shared_token,
     )
+    aggregator_issue91_upstream_url = resolve_optional_secret(
+        config,
+        ("aggregator", "issue91UpstreamUrl"),
+        "EASYPROXY_AGGREGATOR_ISSUE91_UPSTREAM_URL",
+        build_issue91_subscription_url(aggregator_shared_token),
+    )
+    aggregator_issue91_relay_url = build_issue91_relay_url(workers_subdomain)
     aggregator_issue91_subscription_url = resolve_optional_secret(
         config,
         ("aggregator", "issue91SubscriptionUrl"),
         "EASYPROXY_AGGREGATOR_ISSUE91_SUB_URL",
-        build_issue91_subscription_url(aggregator_shared_token),
+        aggregator_issue91_relay_url,
     )
     service_base_management_password = get_or_generate(
         config, ("serviceBase", "runtime", "management", "password"), lambda: secrets.token_urlsafe(24)
@@ -580,6 +594,10 @@ def main() -> int:
     set_nested(config, ("aggregator", "effectiveUrl"), aggregator_effective_url)
     set_nested(config, ("aggregator", "sharedToken"), aggregator_shared_token)
     set_nested(config, ("aggregator", "issue91SubscriptionUrl"), aggregator_issue91_subscription_url)
+    set_nested(config, ("aggregator", "issue91UpstreamUrl"), aggregator_issue91_upstream_url)
+    set_nested(config, ("aggregator", "relay", "projectRoot"), "workers/aggregator-seed-relay")
+    set_nested(config, ("aggregator", "relay", "wranglerConfig"), "workers/aggregator-seed-relay/wrangler.jsonc")
+    set_nested(config, ("aggregator", "relay", "publicUrl"), aggregator_issue91_relay_url)
     set_nested(config, ("aggregator", "r2", "accessKeyId"), agg_access_key_id)
     set_nested(config, ("aggregator", "r2", "secretAccessKey"), agg_secret_access_key)
     set_nested(config, ("aggregator", "r2", "accountId"), account_id)
@@ -680,6 +698,10 @@ def main() -> int:
         }
         if aggregator_shared_token:
             secrets_map["EASYPROXY_AGGREGATOR_SHARED_TOKEN"] = aggregator_shared_token
+        if aggregator_issue91_upstream_url:
+            secrets_map["EASYPROXY_AGGREGATOR_ISSUE91_UPSTREAM_URL_B64"] = base64.b64encode(
+                aggregator_issue91_upstream_url.encode("utf-8")
+            ).decode("ascii")
         if aggregator_issue91_subscription_url:
             secrets_map["EASYPROXY_AGGREGATOR_ISSUE91_SUB_URL_B64"] = base64.b64encode(
                 aggregator_issue91_subscription_url.encode("utf-8")
@@ -687,6 +709,7 @@ def main() -> int:
         variables_map = {
             "EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL": aggregator_public_base_url,
             "EASYPROXY_AGGREGATOR_EFFECTIVE_URL": aggregator_effective_url,
+            "EASYPROXY_AGGREGATOR_ISSUE91_RELAY_URL": aggregator_issue91_relay_url,
             "EASYPROXY_ECH_PREFERRED_ENTRY_IPS": ",".join(str(item).strip() for item in preferred_entry_ips if str(item).strip()),
             "EASYPROXY_ECH_WORKER_PUBLIC_URL": ech_worker_public_url,
             "EASYPROXY_MISUB_CALLBACK_URL": misub_callback_url,
@@ -711,6 +734,7 @@ def main() -> int:
         "misubPublicUrl": misub_public_url,
         "echWorkerPublicUrl": ech_worker_public_url,
         "aggregatorPublicBaseUrl": aggregator_public_base_url,
+        "aggregatorIssue91RelayUrl": aggregator_issue91_relay_url,
         "aggregatorSharedTokenConfigured": bool(aggregator_shared_token),
         "serviceBaseDistributionBucket": "easyproxy-private",
     }

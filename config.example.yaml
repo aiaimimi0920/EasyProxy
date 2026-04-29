@@ -121,6 +121,11 @@ aggregator:
   effectiveUrl: https://sub.example.com/subs/effective.txt
   sharedToken: ""
   issue91SubscriptionUrl: ""
+  issue91UpstreamUrl: ""
+  relay:
+    projectRoot: workers/aggregator-seed-relay
+    wranglerConfig: workers/aggregator-seed-relay/wrangler.jsonc
+    publicUrl: https://easyproxy-aggregator-seed-relay.example.workers.dev/issue91
   r2:
     accountId: ""
     accessKeyId: ""

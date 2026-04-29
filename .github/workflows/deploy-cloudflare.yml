@@ -15,6 +15,7 @@ env:
           - both
           - misub-pages
           - ech-workers-cloudflare
+          - aggregator-seed-relay
       deployment_mode:
         description: Bootstrap missing resources or update existing resources
         required: true
@@ -402,6 +403,89 @@ jobs:
             echo "- mode: \`${{ inputs.deployment_mode }}\`"
             echo "- worker config: \`workers/ech-workers-cloudflare/wrangler.jsonc\`"
             echo "- public url: \`${{ vars.EASYPROXY_ECH_WORKER_PUBLIC_URL || 'n/a' }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy-aggregator-seed-relay:
+    name: Deploy aggregator seed relay
+    runs-on: ubuntu-latest
+    needs: preflight
+    if: ${{ inputs.target == 'both' || inputs.target == 'aggregator-seed-relay' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Assert relay deployment secrets
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_AUTH_EMAIL: ${{ secrets.CLOUDFLARE_AUTH_EMAIL }}
+          CLOUDFLARE_GLOBAL_API_KEY: ${{ secrets.CLOUDFLARE_GLOBAL_API_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ISSUE91_UPSTREAM_URL_B64: ${{ secrets.EASYPROXY_AGGREGATOR_ISSUE91_UPSTREAM_URL_B64 }}
+          RELAY_URL: ${{ vars.EASYPROXY_AGGREGATOR_ISSUE91_RELAY_URL }}
+        run: |
+          set -euo pipefail
+          for name in CLOUDFLARE_ACCOUNT_ID ISSUE91_UPSTREAM_URL_B64 RELAY_URL; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "::error::$name is required for aggregator seed relay deployment."
+              exit 1
+            fi
+          done
+          if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
+            if [[ -z "${CLOUDFLARE_AUTH_EMAIL:-}" || -z "${CLOUDFLARE_GLOBAL_API_KEY:-}" ]]; then
+              echo "::error::Provide either CLOUDFLARE_API_TOKEN or CLOUDFLARE_AUTH_EMAIL+CLOUDFLARE_GLOBAL_API_KEY for relay deployment."
+              exit 1
+            fi
+          fi
+
+      - name: Sync relay upstream secret
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_EMAIL: ${{ secrets.CLOUDFLARE_AUTH_EMAIL }}
+          CLOUDFLARE_API_KEY: ${{ secrets.CLOUDFLARE_GLOBAL_API_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ISSUE91_UPSTREAM_URL_B64: ${{ secrets.EASYPROXY_AGGREGATOR_ISSUE91_UPSTREAM_URL_B64 }}
+        run: |
+          set -euo pipefail
+          printf "%s" "${ISSUE91_UPSTREAM_URL_B64}" | npx wrangler secret put ISSUE91_UPSTREAM_URL_B64 --config workers/aggregator-seed-relay/wrangler.jsonc
+
+      - name: Deploy aggregator seed relay
+        uses: cloudflare/wrangler-action@v3
+        with:
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy --config workers/aggregator-seed-relay/wrangler.jsonc
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_EMAIL: ${{ secrets.CLOUDFLARE_AUTH_EMAIL }}
+          CLOUDFLARE_API_KEY: ${{ secrets.CLOUDFLARE_GLOBAL_API_KEY }}
+
+      - name: Verify aggregator seed relay deployment
+        if: ${{ inputs.run_verification }}
+        shell: bash
+        env:
+          RELAY_URL: ${{ vars.EASYPROXY_AGGREGATOR_ISSUE91_RELAY_URL }}
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install requests PyYAML
+          python scripts/verify-aggregator-seed-relay.py --base-url "${RELAY_URL%/issue91}"
+
+      - name: Relay deploy summary
+        shell: bash
+        run: |
+          {
+            echo "## aggregator seed relay deploy completed"
+            echo
+            echo "- mode: \`${{ inputs.deployment_mode }}\`"
+            echo "- worker config: \`workers/aggregator-seed-relay/wrangler.jsonc\`"
+            echo "- relay url: \`${{ vars.EASYPROXY_AGGREGATOR_ISSUE91_RELAY_URL || 'n/a' }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
   sync-misub-ech-profile:
