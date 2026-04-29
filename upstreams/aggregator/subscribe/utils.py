@@ -53,6 +53,24 @@ DEFAULT_HTTP_HEADERS = {
 }
 
 
+def is_huggingface_space_booting(content: str, status_code: int, content_type: str = "") -> bool:
+    if not content:
+        return False
+
+    content_type = trim(content_type).lower()
+    if "text/html" not in content_type and status_code == 200:
+        return False
+
+    lowered = content.lower()
+    markers = [
+        "preparing space",
+        "hugging face – the ai community building the future",
+        "hugging face - the ai community building the future",
+        "spinner-wrapper",
+    ]
+    return any(marker in lowered for marker in markers)
+
+
 def random_chars(length: int, punctuation: bool = False) -> str:
     length = max(length, 1)
     if punctuation:
@@ -87,6 +105,9 @@ def http_get(
     interval = max(0, interval)
     timeout = max(1, timeout)
     length = None if max_size is None or max_size <= 0 else max_size
+    if "hf.space" in url:
+        retry = max(retry, 6)
+        interval = max(interval, 10)
 
     url = encoding_url(url=url)
     if params and isinstance(params, dict):
@@ -134,7 +155,18 @@ def http_get(
 
             response = urllib.request.urlopen(request, timeout=timeout, context=CTX)
             status_code = response.getcode()
+            content_type = ""
+            try:
+                content_type = response.headers.get("Content-Type", "")
+            except Exception:
+                content_type = ""
             content = _decode_body(response.read(length), response.headers)
+            if is_huggingface_space_booting(content=content, status_code=status_code, content_type=content_type):
+                last_error = RuntimeError("huggingface space is still preparing")
+                if attempt < retry - 1:
+                    time.sleep(max(interval, 10))
+                    continue
+                return ""
             if status_code != 200:
                 if trace:
                     logger.error(f"request failed, url: {hide(url)}, code: {status_code}, message: {content}")

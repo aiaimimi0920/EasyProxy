@@ -34,7 +34,7 @@ class AggregatorMaterializeTests(unittest.TestCase):
             template = Path(temp_dir) / "config.template.json"
             output = Path(temp_dir) / "config.runtime.json"
             template.write_text(
-                '{"sub":"https://example.com?key=__KEY_PLACEHOLDER__","token":"__TOKEN_PLACEHOLDER__"}',
+                '{"sub":"https://example.com?token=__TOKEN_PLACEHOLDER__","token":"__TOKEN_PLACEHOLDER__"}',
                 encoding="utf-8",
             )
 
@@ -42,14 +42,12 @@ class AggregatorMaterializeTests(unittest.TestCase):
                 template,
                 output,
                 env={
-                    "EASYPROXY_AGGREGATOR_SEED_SUB_KEY": "seed-key",
                     "EASYPROXY_AGGREGATOR_SHARED_TOKEN": "shared-token",
                 },
             )
 
             self.assertEqual(result.returncode, 0, msg=result.stderr or result.stdout)
             rendered = output.read_text(encoding="utf-8")
-            self.assertIn("seed-key", rendered)
             self.assertIn("shared-token", rendered)
             self.assertNotIn("PLACEHOLDER", rendered)
 

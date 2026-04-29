@@ -7,7 +7,6 @@ from typing import Any, Dict, Tuple
 
 
 PLACEHOLDER_ENV_MAP: Dict[str, str] = {
-    "__KEY_PLACEHOLDER__": "EASYPROXY_AGGREGATOR_SEED_SUB_KEY",
     "__TOKEN_PLACEHOLDER__": "EASYPROXY_AGGREGATOR_SHARED_TOKEN",
 }
 

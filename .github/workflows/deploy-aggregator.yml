@@ -209,7 +209,6 @@ jobs:
         if: steps.change_gate.outputs.should_deploy == 'true'
         shell: bash
         env:
-          EASYPROXY_AGGREGATOR_SEED_SUB_KEY: ${{ secrets.EASYPROXY_AGGREGATOR_SEED_SUB_KEY }}
           EASYPROXY_AGGREGATOR_SHARED_TOKEN: ${{ secrets.EASYPROXY_AGGREGATOR_SHARED_TOKEN }}
         run: |
           set -euo pipefail

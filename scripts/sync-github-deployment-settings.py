@@ -121,15 +121,12 @@ def is_placeholder(value: str) -> bool:
     return any(marker in lowered for marker in placeholder_markers)
 
 
-def read_legacy_aggregator_seed_values(path: Path) -> tuple[str, str]:
+def read_legacy_aggregator_shared_token(path: Path) -> str:
     if not path.exists():
-        return "", ""
+        return ""
     text = path.read_text(encoding="utf-8")
-    seed_match = re.search(r"https://bujidao\.cc/sub\?key=([^&\s]+)", text)
     shared_match = re.search(r"https://raoku-pm\.hf\.space/api/v1/subscribe\?token=([^&\s]+)", text)
-    seed_sub_key = seed_match.group(1).strip() if seed_match else ""
-    shared_token = shared_match.group(1).strip() if shared_match else ""
-    return seed_sub_key, shared_token
+    return shared_match.group(1).strip() if shared_match else ""
 
 
 def resolve_optional_secret(
@@ -434,18 +431,12 @@ def main() -> int:
         "162.158.3.95",
         "198.41.247.52",
     ]
-    legacy_seed_sub_key, legacy_shared_token = read_legacy_aggregator_seed_values(DEFAULT_LEGACY_AGGREGATOR_CLASH_CONFIG)
+    legacy_shared_token = read_legacy_aggregator_shared_token(DEFAULT_LEGACY_AGGREGATOR_CLASH_CONFIG)
 
     misub_admin_password = get_or_generate(config, ("misub", "docker", "env", "ADMIN_PASSWORD"), lambda: secrets.token_urlsafe(24))
     misub_cookie_secret = get_or_generate(config, ("misub", "docker", "env", "COOKIE_SECRET"), lambda: secrets.token_hex(32))
     misub_manifest_token = get_or_generate(config, ("misub", "docker", "env", "MANIFEST_TOKEN"), lambda: secrets.token_urlsafe(32))
     ech_token = get_or_generate(config, ("echWorkersCloudflare", "secrets", "ECH_TOKEN"), lambda: secrets.token_urlsafe(32))
-    aggregator_seed_sub_key = resolve_optional_secret(
-        config,
-        ("aggregator", "seedSubKey"),
-        "EASYPROXY_AGGREGATOR_SEED_SUB_KEY",
-        legacy_seed_sub_key,
-    )
     aggregator_shared_token = resolve_optional_secret(
         config,
         ("aggregator", "sharedToken"),
@@ -571,12 +562,11 @@ def main() -> int:
     set_nested(config, ("aggregator", "configPath"), "deploy/upstreams/aggregator/config/config.actions.r2.json")
     set_nested(config, ("aggregator", "publicBaseUrl"), aggregator_public_base_url)
     set_nested(config, ("aggregator", "effectiveUrl"), aggregator_effective_url)
-    set_nested(config, ("aggregator", "seedSubKey"), aggregator_seed_sub_key)
     set_nested(config, ("aggregator", "sharedToken"), aggregator_shared_token)
     set_nested(config, ("aggregator", "r2", "accessKeyId"), agg_access_key_id)
     set_nested(config, ("aggregator", "r2", "secretAccessKey"), agg_secret_access_key)
     set_nested(config, ("aggregator", "r2", "accountId"), account_id)
-    for obsolete_key in ("githubRepo", "workflow", "secretName"):
+    for obsolete_key in ("githubRepo", "workflow", "secretName", "seedSubKey"):
         if isinstance(config.get("aggregator"), dict):
             config["aggregator"].pop(obsolete_key, None)
 
@@ -671,8 +661,6 @@ def main() -> int:
             "EASYPROXY_SERVICE_BASE_MANAGEMENT_PASSWORD": service_base_management_password,
             "EASYPROXY_IMPORT_CODE_OWNER_PUBLIC_KEY": owner_public_key,
         }
-        if aggregator_seed_sub_key:
-            secrets_map["EASYPROXY_AGGREGATOR_SEED_SUB_KEY"] = aggregator_seed_sub_key
         if aggregator_shared_token:
             secrets_map["EASYPROXY_AGGREGATOR_SHARED_TOKEN"] = aggregator_shared_token
         variables_map = {
@@ -702,7 +690,6 @@ def main() -> int:
         "misubPublicUrl": misub_public_url,
         "echWorkerPublicUrl": ech_worker_public_url,
         "aggregatorPublicBaseUrl": aggregator_public_base_url,
-        "aggregatorSeedSubConfigured": bool(aggregator_seed_sub_key),
         "aggregatorSharedTokenConfigured": bool(aggregator_shared_token),
         "serviceBaseDistributionBucket": "easyproxy-private",
     }

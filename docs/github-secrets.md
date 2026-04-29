@@ -118,7 +118,6 @@ Optional repository secrets:
 
 | Secret | Purpose |
 | --- | --- |
-| `EASYPROXY_AGGREGATOR_SEED_SUB_KEY` | Enables the tracked disabled seed-sub template entries when present |
 | `EASYPROXY_AGGREGATOR_SHARED_TOKEN` | Enables the tracked Issue #91 shared fallback seed when present |
 
 If the placeholder-backed aggregator secrets are missing, the native

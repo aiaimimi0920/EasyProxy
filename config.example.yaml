@@ -119,7 +119,6 @@ aggregator:
   configPath: deploy/upstreams/aggregator/config/config.actions.r2.json
   publicBaseUrl: https://sub.example.com
   effectiveUrl: https://sub.example.com/subs/effective.txt
-  seedSubKey: ""
   sharedToken: ""
   r2:
     accountId: ""
