@@ -146,6 +146,16 @@ def resolve_optional_secret(
     return ""
 
 
+def build_issue91_subscription_url(token: str) -> str:
+    token = str(token or "").strip()
+    if not token:
+        return ""
+    return (
+        "https://bglyquhwuqaz.us-west-1.clawcloudrun.com/api/v1/subscribe"
+        f"?token={token}&target=clash&list=1"
+    )
+
+
 def get_or_generate(config: dict[str, Any], path: tuple[str, ...], factory) -> str:
     current = get_nested(config, *path, default="")
     if isinstance(current, str) and not is_placeholder(current):
@@ -443,6 +453,12 @@ def main() -> int:
         "EASYPROXY_AGGREGATOR_SHARED_TOKEN",
         legacy_shared_token,
     )
+    aggregator_issue91_subscription_url = resolve_optional_secret(
+        config,
+        ("aggregator", "issue91SubscriptionUrl"),
+        "EASYPROXY_AGGREGATOR_ISSUE91_SUB_URL",
+        build_issue91_subscription_url(aggregator_shared_token),
+    )
     service_base_management_password = get_or_generate(
         config, ("serviceBase", "runtime", "management", "password"), lambda: secrets.token_urlsafe(24)
     )
@@ -563,6 +579,7 @@ def main() -> int:
     set_nested(config, ("aggregator", "publicBaseUrl"), aggregator_public_base_url)
     set_nested(config, ("aggregator", "effectiveUrl"), aggregator_effective_url)
     set_nested(config, ("aggregator", "sharedToken"), aggregator_shared_token)
+    set_nested(config, ("aggregator", "issue91SubscriptionUrl"), aggregator_issue91_subscription_url)
     set_nested(config, ("aggregator", "r2", "accessKeyId"), agg_access_key_id)
     set_nested(config, ("aggregator", "r2", "secretAccessKey"), agg_secret_access_key)
     set_nested(config, ("aggregator", "r2", "accountId"), account_id)
@@ -663,6 +680,10 @@ def main() -> int:
         }
         if aggregator_shared_token:
             secrets_map["EASYPROXY_AGGREGATOR_SHARED_TOKEN"] = aggregator_shared_token
+        if aggregator_issue91_subscription_url:
+            secrets_map["EASYPROXY_AGGREGATOR_ISSUE91_SUB_URL_B64"] = base64.b64encode(
+                aggregator_issue91_subscription_url.encode("utf-8")
+            ).decode("ascii")
         variables_map = {
             "EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL": aggregator_public_base_url,
             "EASYPROXY_AGGREGATOR_EFFECTIVE_URL": aggregator_effective_url,

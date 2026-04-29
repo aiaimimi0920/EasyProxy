@@ -210,6 +210,7 @@ jobs:
         shell: bash
         env:
           EASYPROXY_AGGREGATOR_SHARED_TOKEN: ${{ secrets.EASYPROXY_AGGREGATOR_SHARED_TOKEN }}
+          EASYPROXY_AGGREGATOR_ISSUE91_SUB_URL_B64: ${{ secrets.EASYPROXY_AGGREGATOR_ISSUE91_SUB_URL_B64 }}
         run: |
           set -euo pipefail
           python scripts/materialize-aggregator-config.py \

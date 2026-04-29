@@ -120,6 +120,7 @@ aggregator:
   publicBaseUrl: https://sub.example.com
   effectiveUrl: https://sub.example.com/subs/effective.txt
   sharedToken: ""
+  issue91SubscriptionUrl: ""
   r2:
     accountId: ""
     accessKeyId: ""

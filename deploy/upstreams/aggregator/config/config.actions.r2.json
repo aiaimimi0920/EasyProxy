@@ -18,7 +18,7 @@
         },
         {
             "name": "seed-sub-issue91-shared",
-            "sub": ["https://bglyquhwuqaz.us-west-1.clawcloudrun.com/api/v1/subscribe?token=__TOKEN_PLACEHOLDER__&target=clash&list=1"],
+            "sub": ["__ISSUE91_SUB_URL_PLACEHOLDER__"],
             "domain": "",
             "enable": true,
             "rename": "",

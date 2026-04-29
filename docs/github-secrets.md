@@ -101,6 +101,7 @@ Add these repository secrets before using that workflow:
 | `EASYPROXY_AGGREGATOR_R2_ACCESS_KEY_ID` | R2 write credential for published artifacts |
 | `EASYPROXY_AGGREGATOR_R2_SECRET_ACCESS_KEY` | R2 write credential secret |
 | `EASYPROXY_AGGREGATOR_R2_ACCOUNT_ID` | Cloudflare account ID for the target R2 bucket |
+| `EASYPROXY_AGGREGATOR_ISSUE91_SUB_URL_B64` | Base64-encoded full Issue #91 shared subscription URL used to avoid special-character truncation in tokenized URLs |
 
 Optional repository variables:
 

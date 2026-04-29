@@ -1,4 +1,5 @@
 import argparse
+import base64
 import json
 import os
 import pathlib
@@ -8,7 +9,22 @@ from typing import Any, Dict, Tuple
 
 PLACEHOLDER_ENV_MAP: Dict[str, str] = {
     "__TOKEN_PLACEHOLDER__": "EASYPROXY_AGGREGATOR_SHARED_TOKEN",
+    "__ISSUE91_SUB_URL_PLACEHOLDER__": "EASYPROXY_AGGREGATOR_ISSUE91_SUB_URL_B64",
 }
+
+
+def resolve_env_value(env_name: str) -> str:
+    value = os.environ.get(env_name, "").strip()
+    if not value:
+        return ""
+
+    if env_name.endswith("_B64"):
+        try:
+            return base64.b64decode(value).decode("utf-8").strip()
+        except Exception as exc:
+            raise RuntimeError(f"Failed to decode base64 environment value for {env_name}: {exc}") from exc
+
+    return value
 
 
 def replace_placeholders(value: str, env_map: Dict[str, str]) -> Tuple[str, bool]:
@@ -17,7 +33,7 @@ def replace_placeholders(value: str, env_map: Dict[str, str]) -> Tuple[str, bool
     for placeholder, env_name in env_map.items():
         if placeholder not in replaced:
             continue
-        env_value = os.environ.get(env_name, "").strip()
+        env_value = resolve_env_value(env_name)
         if env_value:
             replaced = replaced.replace(placeholder, env_value)
         else:

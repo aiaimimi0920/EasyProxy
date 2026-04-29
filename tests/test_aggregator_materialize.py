@@ -1,3 +1,4 @@
+import base64
 import os
 import subprocess
 import tempfile
@@ -49,6 +50,32 @@ class AggregatorMaterializeTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, msg=result.stderr or result.stdout)
             rendered = output.read_text(encoding="utf-8")
             self.assertIn("shared-token", rendered)
+            self.assertNotIn("PLACEHOLDER", rendered)
+
+    def test_materialize_replaces_base64_url_placeholders(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            template = Path(temp_dir) / "config.template.json"
+            output = Path(temp_dir) / "config.runtime.json"
+            template.write_text(
+                '{"sub":"__ISSUE91_SUB_URL_PLACEHOLDER__"}',
+                encoding="utf-8",
+            )
+
+            issue91_url = "https://example.com/api/v1/subscribe?token=g6ra!bujhj9vx*gyw4b-l1yh&target=clash&list=1"
+
+            result = self.run_script(
+                template,
+                output,
+                env={
+                    "EASYPROXY_AGGREGATOR_ISSUE91_SUB_URL_B64": base64.b64encode(issue91_url.encode("utf-8")).decode(
+                        "ascii"
+                    ),
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, msg=result.stderr or result.stdout)
+            rendered = output.read_text(encoding="utf-8")
+            self.assertIn(issue91_url, rendered)
             self.assertNotIn("PLACEHOLDER", rendered)
 
     def test_materialize_fails_when_required_secret_missing(self):
