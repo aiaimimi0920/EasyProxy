@@ -217,6 +217,15 @@ jobs:
             --template deploy/upstreams/aggregator/config/config.actions.r2.json \
             --output upstreams/aggregator/subscribe/config/config.actions.runtime.json
 
+      - name: Prefetch Issue #91 shared seed
+        if: steps.change_gate.outputs.should_deploy == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/prefetch-aggregator-issue91.py \
+            --runtime-config upstreams/aggregator/subscribe/config/config.actions.runtime.json \
+            --output upstreams/aggregator/subscribe/config/issue91.shared.yaml
+
       - name: Run aggregator publish
         if: steps.change_gate.outputs.should_deploy == 'true'
         working-directory: upstreams/aggregator
