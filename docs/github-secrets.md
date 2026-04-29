@@ -107,6 +107,7 @@ Add these repository secrets before using that workflow:
 | `EASYPROXY_AGGREGATOR_R2_SECRET_ACCESS_KEY` | R2 write credential secret |
 | `EASYPROXY_AGGREGATOR_R2_ACCOUNT_ID` | Cloudflare account ID for the target R2 bucket |
 | `EASYPROXY_AGGREGATOR_ISSUE91_SUB_URL_B64` | Base64-encoded relay URL used by GitHub-hosted aggregator runs for the Issue #91 shared seed |
+| `EASYPROXY_AGGREGATOR_ISSUE91_UPSTREAM_URL_B64` | Base64-encoded upstream Issue #91 URL used as a browser-impersonated prefetch fallback when the relay cannot fetch directly |
 
 Optional repository variables:
 
