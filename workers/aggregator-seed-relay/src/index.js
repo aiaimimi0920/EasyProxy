@@ -1,5 +1,6 @@
 const ISSUE91_PATH = "/issue91";
 const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36";
+const DEFAULT_CACHE_URL = "https://sub.aiaimimi.com/internal/issue91.shared.yaml";
 
 function decodeBase64Utf8(value) {
   try {
@@ -49,6 +50,42 @@ async function fetchIssue91Payload(upstreamUrl) {
   return body;
 }
 
+async function fetchIssue91WithFallback(env) {
+  const upstreamUrl = resolveUpstreamUrl(env);
+  try {
+    const body = await fetchIssue91Payload(upstreamUrl);
+    return { body, source: "upstream" };
+  } catch (upstreamError) {
+    const cacheUrl = String(env.ISSUE91_CACHE_URL || DEFAULT_CACHE_URL).trim();
+    const cacheResponse = await fetch(cacheUrl, {
+      method: "GET",
+      headers: {
+        "User-Agent": USER_AGENT,
+        Accept: "text/yaml, application/yaml, text/plain, */*",
+        "Cache-Control": "no-cache",
+        Pragma: "no-cache",
+      },
+      redirect: "follow",
+      cf: {
+        cacheTtl: 0,
+        cacheEverything: false,
+      },
+    });
+    const cacheBody = await cacheResponse.text();
+    if (!cacheResponse.ok) {
+      throw new Error(
+        `upstream failed (${upstreamError instanceof Error ? upstreamError.message : String(upstreamError)}); cache returned ${cacheResponse.status}: ${cacheBody.slice(0, 200)}`,
+      );
+    }
+    if (!cacheBody.includes("proxies:")) {
+      throw new Error(
+        `upstream failed (${upstreamError instanceof Error ? upstreamError.message : String(upstreamError)}); cache body does not contain a Clash proxies list: ${cacheBody.slice(0, 200)}`,
+      );
+    }
+    return { body: cacheBody, source: "cache" };
+  }
+}
+
 function jsonResponse(status, payload) {
   return new Response(JSON.stringify(payload, null, 2), {
     status,
@@ -76,14 +113,14 @@ export default {
     }
 
     try {
-      const upstreamUrl = resolveUpstreamUrl(env);
-      const body = await fetchIssue91Payload(upstreamUrl);
+      const { body, source } = await fetchIssue91WithFallback(env);
       return new Response(body, {
         status: 200,
         headers: {
           "content-type": "text/yaml; charset=utf-8",
           "cache-control": "public, max-age=60",
           "x-easyproxy-relay": "issue91",
+          "x-easyproxy-relay-source": source,
         },
       });
     } catch (error) {
