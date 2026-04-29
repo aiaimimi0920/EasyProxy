@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
+import subprocess
 import urllib.request
 
 import yaml
@@ -15,12 +16,44 @@ ISSUE91_DOMAIN_NAME = "seed-sub-issue91-shared"
 FILEPATH_PROTOCOL = "file:///"
 
 
-def fetch_text(url: str, timeout: int) -> str:
+def fetch_text_urllib(url: str, timeout: int) -> str:
     request = urllib.request.Request(url=url, headers={"User-Agent": USER_AGENT})
     with urllib.request.urlopen(request, timeout=timeout) as response:
         if response.getcode() != 200:
             raise RuntimeError(f"issue91 prefetch failed with status={response.getcode()}")
         return response.read().decode("utf-8", errors="replace").strip()
+
+
+def fetch_text_curl(url: str, timeout: int) -> str:
+    completed = subprocess.run(
+        [
+            "curl",
+            "-L",
+            "--max-time",
+            str(timeout),
+            "-A",
+            USER_AGENT,
+            url,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(f"curl prefetch failed with exit code={completed.returncode}: {completed.stderr.strip()}")
+    return completed.stdout.strip()
+
+
+def fetch_text(url: str, timeout: int) -> str:
+    errors: list[str] = []
+    for label, fetcher in (("urllib", fetch_text_urllib), ("curl", fetch_text_curl)):
+        try:
+            return fetcher(url, timeout)
+        except Exception as exc:
+            errors.append(f"{label}: {exc}")
+    raise RuntimeError("issue91 prefetch failed via all strategies: " + " | ".join(errors))
 
 
 def ensure_proxy_count(text: str) -> int:
