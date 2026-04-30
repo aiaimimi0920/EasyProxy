@@ -20,7 +20,9 @@ services:
       - 8.8.8.8
       - 223.5.5.5
     networks:
-      - easyproxy-service-network
+      easyproxy-service-network:
+        aliases:
+          - easy-proxy-service
 
     # Optional file-based node source:
     # - ./nodes.txt:/etc/easy-proxy/nodes.txt

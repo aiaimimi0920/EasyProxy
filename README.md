@@ -10,6 +10,12 @@ deployment assets.
 This repository intentionally avoids root-level submodules. External
 contributors only need one repository and one pull request target.
 
+## Development Workflow
+
+See `docs/development-workflow.md` for the shared cross-repository development
+rules used for local-first iteration, temporary test assets, and final
+GHCR-based validation.
+
 ## What Ships
 
 The public repository now owns the full operator surface:
