@@ -823,11 +823,16 @@ func (m *Manager) fetchSubscriptionSources(sources []RuntimeSource) ([]config.No
 	var lastErr error
 
 	timeout := m.currentFetchTimeout()
+	cacheDir, localCacheTTL, sourceSyncCacheTTL := m.currentSubscriptionCacheSettings()
 	for _, source := range sources {
 		if source.Kind != SourceKindSubscription {
 			continue
 		}
-		nodes, err := m.fetchSubscription(source.Input, timeout)
+		cacheTTL := sourceSyncCacheTTL
+		if source.Origin == "local" {
+			cacheTTL = localCacheTTL
+		}
+		nodes, err := m.fetchSubscription(source.Input, timeout, cacheDir, cacheTTL)
 		if err != nil {
 			m.logger.Warnf("failed to fetch %s: %v", source.Input, err)
 			lastErr = err
@@ -965,40 +970,26 @@ func (m *Manager) currentFetchTimeout() time.Duration {
 	return timeout
 }
 
+func (m *Manager) currentSubscriptionCacheSettings() (string, time.Duration, time.Duration) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.baseCfg == nil {
+		return "", time.Hour, 5 * time.Minute
+	}
+	localCacheTTL := m.baseCfg.SubscriptionRefresh.Interval
+	if localCacheTTL <= 0 {
+		localCacheTTL = time.Hour
+	}
+	sourceSyncCacheTTL := m.baseCfg.SourceSync.RefreshInterval
+	if sourceSyncCacheTTL <= 0 {
+		sourceSyncCacheTTL = 5 * time.Minute
+	}
+	return m.baseCfg.SubscriptionCacheDir(), localCacheTTL, sourceSyncCacheTTL
+}
+
 // fetchSubscription fetches and parses a single subscription URL.
-func (m *Manager) fetchSubscription(subURL string, timeout time.Duration) ([]config.NodeConfig, error) {
-	ctx, cancel := context.WithTimeout(m.ctx, timeout)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, "GET", subURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-	req.Header.Set("Accept", "*/*")
-
-	// Use custom HTTP client with connection pooling
-	resp, err := m.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("fetch: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("status %d", resp.StatusCode)
-	}
-
-	// Limit read size to prevent memory exhaustion
-	const maxBodySize = 10 * 1024 * 1024 // 10MB
-	limitedReader := io.LimitReader(resp.Body, maxBodySize)
-
-	body, err := io.ReadAll(limitedReader)
-	if err != nil {
-		return nil, fmt.Errorf("read body: %w", err)
-	}
-
-	return config.ParseSubscriptionContent(string(body))
+func (m *Manager) fetchSubscription(subURL string, timeout time.Duration, cacheDir string, cacheTTL time.Duration) ([]config.NodeConfig, error) {
+	return config.FetchSubscriptionNodesWithClient(subURL, timeout, cacheDir, cacheTTL, m.httpClient)
 }
 
 // createNewConfig creates a new config with runtime-generated nodes while

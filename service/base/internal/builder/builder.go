@@ -3,6 +3,7 @@ package builder
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -10,8 +11,8 @@ import (
 	"io"
 	"log"
 	"net"
-	"net/netip"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"sort"
 	"strconv"
@@ -23,11 +24,11 @@ import (
 	"easy_proxies/internal/geoip"
 	poolout "easy_proxies/internal/outbound/pool"
 
+	mDNS "github.com/miekg/dns"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/auth"
 	"github.com/sagernet/sing/common/json/badoption"
-	mDNS "github.com/miekg/dns"
 )
 
 var (
@@ -701,7 +702,11 @@ func buildTLSOptions(query url.Values, skipCertVerify bool) (*option.OutboundTLS
 		tlsOptions.ECH = echOptions
 	}
 	if security == "reality" {
-		tlsOptions.Reality = &option.OutboundRealityOptions{Enabled: true, PublicKey: query.Get("pbk"), ShortID: query.Get("sid")}
+		shortID, err := normalizeRealityShortID(query.Get("sid"))
+		if err != nil {
+			return nil, err
+		}
+		tlsOptions.Reality = &option.OutboundRealityOptions{Enabled: true, PublicKey: query.Get("pbk"), ShortID: shortID}
 		// Reality requires uTLS; use default fingerprint if not specified
 		if tlsOptions.UTLS == nil {
 			if fp == "" {
@@ -711,6 +716,17 @@ func buildTLSOptions(query url.Values, skipCertVerify bool) (*option.OutboundTLS
 		}
 	}
 	return tlsOptions, nil
+}
+
+func normalizeRealityShortID(value string) (string, error) {
+	shortID := strings.TrimSpace(value)
+	if shortID == "" {
+		return "", nil
+	}
+	if _, err := hex.DecodeString(shortID); err != nil {
+		return "", fmt.Errorf("invalid reality short_id %q: %w", shortID, err)
+	}
+	return strings.ToLower(shortID), nil
 }
 
 func splitNonEmptyLines(content string) []string {

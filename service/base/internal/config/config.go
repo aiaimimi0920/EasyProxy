@@ -1,7 +1,10 @@
 package config
 
 import (
+	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -20,6 +23,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 )
+
+const maxSubscriptionBodyBytes = 10 * 1024 * 1024
 
 // Config describes the high level settings for the proxy pool server.
 type Config struct {
@@ -300,6 +305,13 @@ type NodeConfig struct {
 	SourceRef  string     `yaml:"-" json:"source_ref,omitempty"`
 }
 
+type subscriptionCacheEntry struct {
+	URL       string       `json:"url"`
+	FetchedAt time.Time    `json:"fetched_at"`
+	LastError string       `json:"last_error,omitempty"`
+	Nodes     []NodeConfig `json:"nodes"`
+}
+
 // NodeKey returns a unique identifier for the node based on its URI.
 // This is used to preserve port assignments across reloads.
 func (n *NodeConfig) NodeKey() string {
@@ -561,8 +573,10 @@ func (c *Config) normalizeInternal(skipSubscriptionFetch bool) error {
 		if len(c.Subscriptions) > 0 {
 			var subNodes []NodeConfig
 			subTimeout := c.SubscriptionRefresh.Timeout
+			cacheDir := c.SubscriptionCacheDir()
+			cacheTTL := c.SubscriptionRefresh.Interval
 			for _, subURL := range c.Subscriptions {
-				nodes, err := loadNodesFromSubscription(subURL, subTimeout)
+				nodes, err := FetchSubscriptionNodes(subURL, subTimeout, cacheDir, cacheTTL)
 				if err != nil {
 					log.Printf("⚠️ Failed to load subscription %q: %v (skipping)", subURL, err)
 					continue
@@ -791,32 +805,105 @@ func loadNodesFromFile(path string) ([]NodeConfig, error) {
 	return parseNodesFromContent(string(data))
 }
 
+// FetchSubscriptionNodes fetches and parses nodes from a subscription URL.
+// When a cache directory is provided, successful results are persisted and
+// reused until cacheTTL expires so startup reloads do not hammer upstreams.
+func FetchSubscriptionNodes(subURL string, timeout time.Duration, cacheDir string, cacheTTL time.Duration) ([]NodeConfig, error) {
+	return FetchSubscriptionNodesWithClient(subURL, timeout, cacheDir, cacheTTL, nil)
+}
+
+// FetchSubscriptionNodesWithClient fetches and parses nodes from a subscription
+// URL while allowing callers to reuse a shared HTTP client.
+func FetchSubscriptionNodesWithClient(
+	subURL string,
+	timeout time.Duration,
+	cacheDir string,
+	cacheTTL time.Duration,
+	client *http.Client,
+) ([]NodeConfig, error) {
+	if entry, err := readSubscriptionCache(cacheDir, subURL); err != nil {
+		log.Printf("⚠️ Failed to read subscription cache for %q: %v", subURL, err)
+	} else if entry != nil && cacheTTL > 0 && time.Since(entry.FetchedAt) < cacheTTL {
+		if len(entry.Nodes) > 0 {
+			log.Printf("♻️ Reusing cached subscription %q (age=%s)", subURL, time.Since(entry.FetchedAt).Round(time.Second))
+			return cloneSubscriptionCacheNodes(entry.Nodes), nil
+		}
+		return nil, fmt.Errorf("subscription recently failed and is cooling down: %s", strings.TrimSpace(entry.LastError))
+	}
+
+	nodes, err := fetchSubscriptionNodesRemote(subURL, timeout, client)
+	if err == nil {
+		if cacheDir != "" {
+			if writeErr := writeSubscriptionCache(cacheDir, subURL, nodes, ""); writeErr != nil {
+				log.Printf("⚠️ Failed to persist subscription cache for %q: %v", subURL, writeErr)
+			}
+		}
+		return nodes, nil
+	}
+
+	if entry, cacheErr := readSubscriptionCache(cacheDir, subURL); cacheErr != nil {
+		log.Printf("⚠️ Failed to read stale subscription cache for %q: %v", subURL, cacheErr)
+	} else if entry != nil {
+		if cacheDir != "" {
+			if writeErr := writeSubscriptionCache(cacheDir, subURL, entry.Nodes, err.Error()); writeErr != nil {
+				log.Printf("⚠️ Failed to refresh subscription failure cache for %q: %v", subURL, writeErr)
+			}
+		}
+		if len(entry.Nodes) == 0 {
+			return nil, err
+		}
+		log.Printf(
+			"⚠️ Subscription %q refresh failed: %v; using stale cache from %s",
+			subURL,
+			err,
+			entry.FetchedAt.UTC().Format(time.RFC3339),
+		)
+		return cloneSubscriptionCacheNodes(entry.Nodes), nil
+	}
+
+	if cacheDir != "" {
+		if writeErr := writeSubscriptionCache(cacheDir, subURL, nil, err.Error()); writeErr != nil {
+			log.Printf("⚠️ Failed to persist subscription failure cache for %q: %v", subURL, writeErr)
+		}
+	}
+
+	return nil, err
+}
+
 // loadNodesFromSubscription fetches and parses nodes from a subscription URL
 // Supports multiple formats: base64 encoded, plain text, clash yaml, etc.
 func loadNodesFromSubscription(subURL string, timeout time.Duration) ([]NodeConfig, error) {
+	return FetchSubscriptionNodes(subURL, timeout, "", 0)
+}
+
+func fetchSubscriptionNodesRemote(subURL string, timeout time.Duration, client *http.Client) ([]NodeConfig, error) {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	transport := &http.Transport{
-		Proxy: nil,
-		DialContext: (&net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          100,
-		MaxIdleConnsPerHost:   10,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-		ResponseHeaderTimeout: 10 * time.Second,
-	}
-	client := &http.Client{
-		Timeout:   timeout,
-		Transport: transport,
+	if client == nil {
+		transport := &http.Transport{
+			Proxy: nil,
+			DialContext: (&net.Dialer{
+				Timeout:   30 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          100,
+			MaxIdleConnsPerHost:   10,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+			ResponseHeaderTimeout: 10 * time.Second,
+		}
+		client = &http.Client{
+			Transport: transport,
+		}
 	}
 
-	req, err := http.NewRequest("GET", subURL, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", subURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -835,15 +922,94 @@ func loadNodesFromSubscription(subURL string, timeout time.Duration) ([]NodeConf
 		return nil, fmt.Errorf("subscription returned status %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxSubscriptionBodyBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
+	}
+	if len(body) > maxSubscriptionBodyBytes {
+		return nil, fmt.Errorf("subscription response exceeds %d bytes", maxSubscriptionBodyBytes)
 	}
 
 	content := string(body)
 
 	// Try to detect and parse different formats
-	return ParseSubscriptionContent(content)
+	nodes, err := ParseSubscriptionContent(content)
+	if err != nil {
+		return nil, err
+	}
+	if len(nodes) == 0 {
+		return nil, fmt.Errorf("subscription contained no usable nodes")
+	}
+	return nodes, nil
+}
+
+func subscriptionCachePath(cacheDir string, subURL string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(subURL)))
+	return filepath.Join(cacheDir, fmt.Sprintf("%x.json", sum))
+}
+
+func readSubscriptionCache(cacheDir string, subURL string) (*subscriptionCacheEntry, error) {
+	if strings.TrimSpace(cacheDir) == "" || strings.TrimSpace(subURL) == "" {
+		return nil, nil
+	}
+	data, err := os.ReadFile(subscriptionCachePath(cacheDir, subURL))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var entry subscriptionCacheEntry
+	if err := json.Unmarshal(data, &entry); err != nil {
+		return nil, err
+	}
+	if len(entry.Nodes) == 0 && strings.TrimSpace(entry.LastError) == "" {
+		return nil, nil
+	}
+	return &entry, nil
+}
+
+func writeSubscriptionCache(cacheDir string, subURL string, nodes []NodeConfig, lastError string) error {
+	if strings.TrimSpace(cacheDir) == "" || strings.TrimSpace(subURL) == "" {
+		return nil
+	}
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		return err
+	}
+	entry := subscriptionCacheEntry{
+		URL:       strings.TrimSpace(subURL),
+		FetchedAt: time.Now().UTC(),
+		LastError: strings.TrimSpace(lastError),
+		Nodes:     cloneSubscriptionCacheNodes(nodes),
+	}
+	payload, err := json.Marshal(entry)
+	if err != nil {
+		return err
+	}
+	targetPath := subscriptionCachePath(cacheDir, subURL)
+	tempPath := targetPath + ".tmp"
+	if err := os.WriteFile(tempPath, payload, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tempPath, targetPath)
+}
+
+func cloneSubscriptionCacheNodes(nodes []NodeConfig) []NodeConfig {
+	if len(nodes) == 0 {
+		return nil
+	}
+	cloned := make([]NodeConfig, 0, len(nodes))
+	for _, node := range nodes {
+		uri := strings.TrimSpace(node.URI)
+		if uri == "" {
+			continue
+		}
+		cloned = append(cloned, NodeConfig{
+			Name: strings.TrimSpace(node.Name),
+			URI:  uri,
+		})
+	}
+	return cloned
 }
 
 // ParseSubscriptionContent tries to parse subscription content in various
@@ -1380,6 +1546,24 @@ func (c *Config) FilePath() string {
 		return ""
 	}
 	return c.filePath
+}
+
+// SubscriptionCacheDir returns the directory used to cache subscription fetch results.
+func (c *Config) SubscriptionCacheDir() string {
+	if c == nil {
+		return filepath.Join("data", "subscription-cache")
+	}
+	if c.DatabasePath != "" {
+		dbPath := c.DatabasePath
+		if c.filePath != "" && !filepath.IsAbs(dbPath) {
+			dbPath = filepath.Join(filepath.Dir(c.filePath), dbPath)
+		}
+		return filepath.Join(filepath.Dir(dbPath), "subscription-cache")
+	}
+	if c.filePath != "" {
+		return filepath.Join(filepath.Dir(c.filePath), "data", "subscription-cache")
+	}
+	return filepath.Join("data", "subscription-cache")
 }
 
 // SetFilePath sets the config file path (used when creating config programmatically).

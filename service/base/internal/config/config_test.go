@@ -1,10 +1,13 @@
 package config
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestIsProxyURIRecognizesHTTPAndSOCKS5(t *testing.T) {
@@ -181,5 +184,114 @@ func TestLoadForReloadIncludesNodesFile(t *testing.T) {
 	}
 	if cfg.Nodes[0].Source != NodeSourceFile {
 		t.Fatalf("expected nodes_file source, got %q", cfg.Nodes[0].Source)
+	}
+}
+
+func TestFetchSubscriptionNodesReusesFreshCache(t *testing.T) {
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		_, _ = w.Write([]byte("ss://YWVzLTI1Ni1nY206c2VjcmV0QDE5OC41MS4xMDAuMTA6ODM4OA==#cached-node\n"))
+	}))
+	defer server.Close()
+
+	cacheDir := filepath.Join(t.TempDir(), "subscription-cache")
+	nodes, err := FetchSubscriptionNodes(server.URL, time.Second, cacheDir, time.Hour)
+	if err != nil {
+		t.Fatalf("FetchSubscriptionNodes() first call error = %v", err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("expected 1 node from first fetch, got %d", len(nodes))
+	}
+
+	nodes, err = FetchSubscriptionNodes(server.URL, time.Second, cacheDir, time.Hour)
+	if err != nil {
+		t.Fatalf("FetchSubscriptionNodes() second call error = %v", err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("expected 1 node from cached fetch, got %d", len(nodes))
+	}
+	if requestCount != 1 {
+		t.Fatalf("expected remote subscription to be fetched once, got %d requests", requestCount)
+	}
+}
+
+func TestFetchSubscriptionNodesFallsBackToStaleCacheOnFailure(t *testing.T) {
+	shouldFail := false
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		if shouldFail {
+			http.Error(w, "temporarily blocked", http.StatusTooManyRequests)
+			return
+		}
+		_, _ = w.Write([]byte("ss://YWVzLTI1Ni1nY206c2VjcmV0QDE5OC41MS4xMDAuMTA6ODM4OA==#stale-node\n"))
+	}))
+	defer server.Close()
+
+	cacheDir := filepath.Join(t.TempDir(), "subscription-cache")
+	nodes, err := FetchSubscriptionNodes(server.URL, time.Second, cacheDir, time.Millisecond)
+	if err != nil {
+		t.Fatalf("FetchSubscriptionNodes() warm cache error = %v", err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("expected 1 node from warm fetch, got %d", len(nodes))
+	}
+
+	time.Sleep(5 * time.Millisecond)
+	shouldFail = true
+
+	nodes, err = FetchSubscriptionNodes(server.URL, time.Second, cacheDir, time.Millisecond)
+	if err != nil {
+		t.Fatalf("expected stale cache fallback, got error = %v", err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("expected cached node on fallback, got %d", len(nodes))
+	}
+	if requestCount != 2 {
+		t.Fatalf("expected two remote attempts (warm + failed refresh), got %d", requestCount)
+	}
+}
+
+func TestFetchSubscriptionNodesCachesRecentFailures(t *testing.T) {
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		http.Error(w, "temporarily blocked", http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+
+	cacheDir := filepath.Join(t.TempDir(), "subscription-cache")
+	_, err := FetchSubscriptionNodes(server.URL, time.Second, cacheDir, time.Hour)
+	if err == nil {
+		t.Fatal("expected initial fetch failure")
+	}
+	if requestCount != 1 {
+		t.Fatalf("expected 1 remote attempt after initial failure, got %d", requestCount)
+	}
+
+	_, err = FetchSubscriptionNodes(server.URL, time.Second, cacheDir, time.Hour)
+	if err == nil {
+		t.Fatal("expected cached failure to be surfaced")
+	}
+	if !strings.Contains(err.Error(), "cooling down") {
+		t.Fatalf("expected failure cache cooldown error, got %v", err)
+	}
+	if requestCount != 1 {
+		t.Fatalf("expected recent failure cache to suppress refetch, got %d remote attempts", requestCount)
+	}
+}
+
+func TestSubscriptionCacheDirResolvesRelativeDatabasePathAgainstConfigFile(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &Config{
+		DatabasePath: filepath.Join("data", "runtime.db"),
+	}
+	cfg.SetFilePath(filepath.Join(dir, "config.yaml"))
+
+	got := cfg.SubscriptionCacheDir()
+	want := filepath.Join(dir, "data", "subscription-cache")
+	if got != want {
+		t.Fatalf("SubscriptionCacheDir() = %q, want %q", got, want)
 	}
 }

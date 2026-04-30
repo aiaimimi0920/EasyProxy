@@ -214,3 +214,15 @@ func TestBuildNodeOutboundPreservesWebSocketPathWithEarlyDataQuery(t *testing.T)
 		t.Fatalf("expected browser-like user agent header, got %#v", opts.Transport.WebsocketOptions.Headers)
 	}
 }
+
+func TestBuildNodeOutboundRejectsInvalidRealityShortID(t *testing.T) {
+	uri := "vless://11111111-1111-1111-1111-111111111111@example.com:443?encryption=none&security=reality&pbk=public-key&sid=INVALID"
+
+	_, err := buildNodeOutbound("vless-reality-invalid-sid", uri, false)
+	if err == nil {
+		t.Fatal("expected invalid reality short_id to be rejected")
+	}
+	if !strings.Contains(err.Error(), "invalid reality short_id") {
+		t.Fatalf("expected invalid short_id error, got %v", err)
+	}
+}
