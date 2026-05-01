@@ -151,7 +151,8 @@ At startup the image will:
 1. inspect the bootstrap source
 2. download the manifest and rendered config
 3. verify the expected hash when present
-4. write `/etc/easy-proxy/config.yaml`
+4. write the runtime config file referenced by `EASY_PROXY_CONFIG_PATH`
+   (default `/etc/easy-proxy/config.yaml`)
 5. start `easy-proxy`
 
 After startup a sync loop continues to watch the manifest fingerprint and

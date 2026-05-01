@@ -221,7 +221,11 @@ Historical published GHCR release from the source workspace:
 
 The current container path contract is:
 
-- config mount: `/etc/easy-proxy/config.yaml`
+- runtime config path:
+  - resolved from `EASY_PROXY_CONFIG_PATH`
+  - defaults to `/etc/easy-proxy/config.yaml`
+  - GHCR stateful deployments may instead bind
+    `/var/lib/easy-proxy/config/config.yaml`
 - writable runtime home: `/var/lib/easy-proxy`
 - SQLite DB: `/var/lib/easy-proxy/data/data.db`
 - connector work dir: `/var/lib/easy-proxy/connectors`
@@ -304,9 +308,10 @@ powershell -ExecutionPolicy Bypass -File .\deploy\service\base\scripts\smoke-eas
 ```
 
 The smoke script builds the image from `deploy/service/base/Dockerfile`,
-launches `easy-proxy-monorepo-service` through Docker Compose with the formal
-file-mount contract, and verifies the management API and container runtime
-paths.
+launches `easy-proxy-monorepo-service` through Docker Compose with a
+non-default `EASY_PROXY_CONFIG_PATH`, and verifies the management API plus the
+runtime path contract. This catches regressions where the entrypoint bootstrap
+path and the final `easy-proxy --config ...` path drift apart.
 
 Published-image smoke path:
 
@@ -352,8 +357,9 @@ The runtime image now supports bootstrap-driven config loading:
 - import-code env:
   - `EASY_PROXY_IMPORT_CODE`
 
-When `/etc/easy-proxy/config.yaml` is missing, the entrypoint can bootstrap the
-runtime config from private R2 storage before starting `easy-proxy`.
+When `EASY_PROXY_CONFIG_PATH` points to a missing file, the entrypoint can
+bootstrap the runtime config from private R2 storage before starting
+`easy-proxy`.
 
 See:
 

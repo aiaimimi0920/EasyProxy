@@ -141,6 +141,10 @@ docker build -t easy-proxy-monorepo:latest .
 docker compose up -d
 ```
 
+如果你的运行时配置不准备挂到默认的 `/etc/easy-proxy/config.yaml`，
+可以改为设置环境变量 `EASY_PROXY_CONFIG_PATH`。入口脚本会在真正启动
+`easy-proxy` 时优先使用这个路径，而不是镜像内默认 `CMD` 里的占位值。
+
 迁移期并行运行建议：
 
 - 容器名默认使用 `easy-proxy-monorepo`

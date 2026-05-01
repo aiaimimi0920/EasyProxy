@@ -48,13 +48,15 @@ $managementPort = Get-FreeTcpPort
 $proxyPort = Get-FreeTcpPort
 $projectName = ("easyproxysmoke" + ($SmokeId -replace "[^a-zA-Z0-9]", "")).ToLowerInvariant()
 $artifactDir = Join-Path $repoRoot ("tmp\\easy-proxy-docker-api-smoke\\" + $SmokeId)
-$dataDir = Join-Path $artifactDir "data"
-$configPath = Join-Path $artifactDir "config.yaml"
+$stateDir = Join-Path $artifactDir "state"
+$configDir = Join-Path $stateDir "config"
+$configPath = Join-Path $configDir "config.yaml"
 $composePath = Join-Path $artifactDir "docker-compose.yaml"
 $evidencePath = Join-Path $artifactDir "evidence.json"
 $authHeaderValue = "smoke-secret"
+$containerConfigPath = "/var/lib/easy-proxy/config/config.yaml"
 
-New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
+New-Item -ItemType Directory -Force -Path $configDir | Out-Null
 
 $configYaml = @"
 mode: hybrid
@@ -64,7 +66,7 @@ database_path: /var/lib/easy-proxy/data/data.db
 
 listener:
   address: 0.0.0.0
-  port: 22323
+  port: ${proxyPort}
   protocol: http
   username: ""
   password: ""
@@ -83,7 +85,7 @@ multi_port:
 
 management:
   enabled: true
-  listen: 0.0.0.0:29888
+  listen: 0.0.0.0:${managementPort}
   probe_target: "https://www.google.com/generate_204"
   password: "smoke-secret"
 
@@ -146,12 +148,13 @@ ${composeBuildBlock}
     image: ${serviceImage}
     container_name: ${projectName}
     restart: "no"
+    environment:
+      EASY_PROXY_CONFIG_PATH: ${containerConfigPath}
     ports:
-      - "${managementPort}:29888"
-      - "${proxyPort}:22323"
+      - "${managementPort}:${managementPort}"
+      - "${proxyPort}:${proxyPort}"
     volumes:
-      - ./config.yaml:/etc/easy-proxy/config.yaml
-      - ./data:/var/lib/easy-proxy
+      - ./state:/var/lib/easy-proxy
 "@
 
 Set-Content -Path $configPath -Value $configYaml -Encoding UTF8
@@ -216,7 +219,7 @@ try {
     }
     $nodesConfigAfterCreate = Invoke-JsonApi -Method GET -Uri "$baseUrl/api/nodes/config" -Headers $headers
 
-    & docker compose @composeArgs exec -T easy-proxy-monorepo-service sh -lc "test -f /etc/easy-proxy/config.yaml && test -d /var/lib/easy-proxy && test -x /usr/local/bin/easy-proxy && test -f /var/lib/easy-proxy/data/data.db"
+    & docker compose @composeArgs exec -T easy-proxy-monorepo-service sh -lc "test -f ${containerConfigPath} && test -d /var/lib/easy-proxy && test -x /usr/local/bin/easy-proxy && test -f /var/lib/easy-proxy/data/data.db"
     if ($LASTEXITCODE -ne 0) {
         throw "container contract verification failed"
     }
@@ -249,6 +252,7 @@ try {
             configMounted = $true
             stateDirMounted = $true
             sqliteCreated = $true
+            containerConfigPath = $containerConfigPath
         }
     }
 

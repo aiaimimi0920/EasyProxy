@@ -159,6 +159,42 @@ PY
 }
 
 start_runtime() {
+    # Keep runtime bootstrap and the final easy-proxy process on the same config path.
+    normalized_args=""
+    skip_next="0"
+    for arg in "$@"; do
+        if [ "${skip_next}" = "1" ]; then
+            skip_next="0"
+            continue
+        fi
+
+        case "${arg}" in
+            --config)
+                skip_next="1"
+                continue
+                ;;
+            --config=*)
+                continue
+                ;;
+        esac
+
+        normalized_args="${normalized_args}
+${arg}"
+    done
+
+    set -- --config "${EASY_PROXY_CONFIG_PATH}"
+    if [ -n "${normalized_args}" ]; then
+        old_ifs="${IFS}"
+        IFS='
+'
+        for arg in ${normalized_args#"
+"}; do
+            set -- "$@" "${arg}"
+        done
+        IFS="${old_ifs}"
+    fi
+
+    echo "[easy-proxy] starting with config ${EASY_PROXY_CONFIG_PATH}"
     if [ "$(id -u)" = "0" ]; then
         chown -R easy:easy "${EASY_PROXY_STATE_DIR}" /etc/easy-proxy
         gosu easy /usr/local/bin/easy-proxy "$@" &
