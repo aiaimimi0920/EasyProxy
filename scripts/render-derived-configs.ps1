@@ -21,6 +21,7 @@ $renderer = Join-Path $PSScriptRoot 'render-derived-configs.py'
 if (-not (Test-Path -LiteralPath $renderer)) {
     throw "Missing renderer script: $renderer"
 }
+$pythonExecutable = if ([string]::IsNullOrWhiteSpace($env:PYTHON_EXECUTABLE)) { 'python' } else { $env:PYTHON_EXECUTABLE }
 
 $args = @($renderer, '--root-config', $ConfigPath)
 if ($ServiceBase) {
@@ -33,7 +34,7 @@ if ($EchWorkersCloudflare) {
     $args += @('--worker-devvars-output', $WorkerDevVarsOutput)
 }
 
-& python @args
+& $pythonExecutable @args
 if ($LASTEXITCODE -ne 0) {
     throw "Failed to render derived configs with exit code $LASTEXITCODE"
 }

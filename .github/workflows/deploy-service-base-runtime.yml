@@ -49,13 +49,32 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Assert Python availability
+      - name: Resolve Python executable
         shell: pwsh
         run: |
-          & python --version
-          if ($LASTEXITCODE -ne 0) {
+          $candidates = @()
+          $cmd = Get-Command python -ErrorAction SilentlyContinue
+          if ($null -ne $cmd -and -not [string]::IsNullOrWhiteSpace($cmd.Source)) {
+            $candidates += $cmd.Source
+          }
+          $candidates += @(
+            'C:\Users\vmjcv\scoop\shims\python.exe',
+            'C:\Python313\python.exe',
+            'C:\Python312\python.exe',
+            'C:\Python311\python.exe',
+            'C:\Python310\python.exe'
+          )
+          $pythonExecutable = $candidates |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path -LiteralPath $_) } |
+            Select-Object -First 1
+          if ([string]::IsNullOrWhiteSpace($pythonExecutable)) {
             throw "python is required on the self-hosted deployment runner."
           }
+          & $pythonExecutable --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "Resolved python executable is not runnable: $pythonExecutable"
+          }
+          "PYTHON_EXECUTABLE=$pythonExecutable" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Resolve deployment metadata
         id: meta
@@ -125,7 +144,7 @@ jobs:
       - name: Extract management password
         shell: pwsh
         run: |
-          $password = & python -c "import sys, yaml; data=yaml.safe_load(open(sys.argv[1], 'r', encoding='utf-8').read()) or {}; print(((data.get('management') or {}).get('password') or '').strip())" $env:EASYPROXY_RUNTIME_RENDERED_CONFIG_PATH
+          $password = & $env:PYTHON_EXECUTABLE -c "import sys, yaml; data=yaml.safe_load(open(sys.argv[1], 'r', encoding='utf-8').read()) or {}; print(((data.get('management') or {}).get('password') or '').strip())" $env:EASYPROXY_RUNTIME_RENDERED_CONFIG_PATH
           if ($LASTEXITCODE -ne 0) {
             throw "Failed to extract management password from rendered config"
           }
