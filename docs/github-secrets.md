@@ -56,6 +56,7 @@ Optional repository variables:
 
 | Variable | Purpose |
 | --- | --- |
+| `EASYPROXY_SERVICE_DEPLOY_PYTHON` | Optional absolute Python executable path on the Windows deployment host; defaults to `C:\Users\vmjcv\scoop\shims\python.exe` and then other common fallbacks |
 | `EASYPROXY_SERVICE_DEPLOY_ROOT` | Absolute runtime root on the Windows deployment host; defaults to `C:\Users\Public\nas_home\AI\GameEditor\EasyProxy\deploy\service\base` |
 | `EASYPROXY_SERVICE_DEPLOY_NETWORK` | Docker network name override; defaults to `EasyAiMi` |
 | `EASYPROXY_SERVICE_DEPLOY_WAIT_MINUTES` | Override for GHCR image pull wait time; defaults to `35` |

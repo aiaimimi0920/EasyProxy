@@ -52,18 +52,19 @@ jobs:
       - name: Resolve Python executable
         shell: pwsh
         run: |
-          $candidates = @()
+          $configuredPython = "${{ vars.EASYPROXY_SERVICE_DEPLOY_PYTHON }}"
+          $candidates = @(
+            if ([string]::IsNullOrWhiteSpace($configuredPython)) { $null } else { $configuredPython }
+            'C:\Users\vmjcv\scoop\shims\python.exe'
+            'C:\Python313\python.exe'
+            'C:\Python312\python.exe'
+            'C:\Python311\python.exe'
+            'C:\Python310\python.exe'
+          )
           $cmd = Get-Command python -ErrorAction SilentlyContinue
           if ($null -ne $cmd -and -not [string]::IsNullOrWhiteSpace($cmd.Source)) {
             $candidates += $cmd.Source
           }
-          $candidates += @(
-            'C:\Users\vmjcv\scoop\shims\python.exe',
-            'C:\Python313\python.exe',
-            'C:\Python312\python.exe',
-            'C:\Python311\python.exe',
-            'C:\Python310\python.exe'
-          )
           $pythonExecutable = $candidates |
             Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path -LiteralPath $_) } |
             Select-Object -First 1
