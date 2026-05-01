@@ -242,6 +242,103 @@ func TestSourceSelectionStatesKeepTrafficProvenSourceEligible(t *testing.T) {
 	}
 }
 
+func TestSourceHealthStatesExposeAvailabilityBreakdown(t *testing.T) {
+	manager, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	healthy := manager.Register(NodeInfo{
+		Tag:        "zen-good",
+		Name:       "Zen Good",
+		SourceRef:  "manifest:conn_zenproxy_primary",
+		SourceName: "ZenProxy Primary",
+		SourceKind: "connector",
+	})
+	healthy.MarkInitialCheckDone(true)
+
+	trafficProven := manager.Register(NodeInfo{
+		Tag:        "zen-traffic",
+		Name:       "Zen Traffic",
+		SourceRef:  "manifest:conn_zenproxy_primary",
+		SourceName: "ZenProxy Primary",
+		SourceKind: "connector",
+	})
+	trafficProven.MarkInitialCheckDone(false)
+	trafficProven.RecordFailure(errors.New("tls handshake: EOF"), "www.google.com:443")
+	trafficProven.RecordSuccess("api.openai.com:443")
+
+	blacklisted := manager.Register(NodeInfo{
+		Tag:        "zen-blacklisted",
+		Name:       "Zen Blacklisted",
+		SourceRef:  "manifest:conn_zenproxy_primary",
+		SourceName: "ZenProxy Primary",
+		SourceKind: "connector",
+	})
+	blacklisted.MarkInitialCheckDone(true)
+	blacklisted.Blacklist(time.Now().Add(time.Minute))
+
+	manager.Register(NodeInfo{
+		Tag:        "zen-pending",
+		Name:       "Zen Pending",
+		SourceRef:  "manifest:conn_zenproxy_primary",
+		SourceName: "ZenProxy Primary",
+		SourceKind: "connector",
+	})
+
+	unhealthy := manager.Register(NodeInfo{
+		Tag:        "zen-bad",
+		Name:       "Zen Bad",
+		SourceRef:  "manifest:conn_zenproxy_primary",
+		SourceName: "ZenProxy Primary",
+		SourceKind: "connector",
+	})
+	unhealthy.MarkInitialCheckDone(false)
+	unhealthy.RecordFailure(errors.New("tls handshake: EOF"), "www.google.com:443")
+
+	states := manager.SourceHealthStates()
+	state, ok := states["manifest:conn_zenproxy_primary"]
+	if !ok {
+		t.Fatal("expected source health state for zenproxy connector")
+	}
+	if state.Name != "ZenProxy Primary" || state.Kind != "connector" {
+		t.Fatalf("unexpected source identity: %+v", state)
+	}
+	if state.TotalNodes != 5 {
+		t.Fatalf("expected 5 total nodes, got %+v", state)
+	}
+	if state.EffectiveAvailableNodes != 2 {
+		t.Fatalf("expected 2 effective nodes, got %+v", state)
+	}
+	if state.ProbeAvailableNodes != 1 {
+		t.Fatalf("expected 1 probe-available node, got %+v", state)
+	}
+	if state.TrafficProvenNodes != 1 {
+		t.Fatalf("expected 1 traffic-proven node, got %+v", state)
+	}
+	if state.BlacklistedNodes != 1 {
+		t.Fatalf("expected 1 blacklisted node, got %+v", state)
+	}
+	if state.PendingNodes != 1 {
+		t.Fatalf("expected 1 pending node, got %+v", state)
+	}
+	if state.UnavailableNodes != 1 {
+		t.Fatalf("expected 1 unavailable node, got %+v", state)
+	}
+	if state.StructuralFailures != 1 {
+		t.Fatalf("expected 1 structural failure, got %+v", state)
+	}
+	if state.SelectionExcluded {
+		t.Fatalf("expected source to stay eligible with healthy peers, got %+v", state)
+	}
+	if state.SelectionPenalty != 20 {
+		t.Fatalf("expected soft selection penalty, got %+v", state)
+	}
+	if state.SelectionReason != "tls_handshake_eof" {
+		t.Fatalf("unexpected selection reason: %+v", state)
+	}
+}
+
 func TestSelectProxyCompatCandidateSnapshotsTreatsTrafficProvenNodesAsEffective(t *testing.T) {
 	manager, err := NewManager(Config{})
 	if err != nil {

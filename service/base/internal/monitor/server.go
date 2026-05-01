@@ -167,6 +167,7 @@ func NewServer(cfg Config, mgr *Manager, logger *log.Logger) *Server {
 	mux.HandleFunc("/api/subscription/status", s.withAuth(s.handleSubscriptionStatus))
 	mux.HandleFunc("/api/subscription/refresh", s.withAuth(s.handleSubscriptionRefresh))
 	mux.HandleFunc("/api/source-sync/status", s.withAuth(s.handleSourceSyncStatus))
+	mux.HandleFunc("/api/source-sync/source-health", s.withAuth(s.handleSourceSyncSourceHealth))
 	mux.HandleFunc("/api/reload", s.withAuth(s.handleReload))
 	mux.HandleFunc("/proxy/catalog", s.withAuth(s.handleProxyCatalog))
 	mux.HandleFunc("/proxy/snapshot", s.withAuth(s.handleProxySnapshot))
@@ -857,24 +858,32 @@ func (s *Server) handleDebug(w http.ResponseWriter, r *http.Request) {
 		totalCalls += snap.SuccessCount + int64(snap.FailureCount)
 		totalSuccess += snap.SuccessCount
 		debugNodes = append(debugNodes, map[string]any{
-			"tag":                snap.Tag,
-			"name":               snap.Name,
-			"mode":               snap.Mode,
-			"port":               snap.Port,
-			"availability_score": snap.AvailabilityScore,
-			"failure_count":      snap.FailureCount,
-			"reported_success":   snap.ReportedSuccessCount,
-			"reported_failure":   snap.ReportedFailureCount,
-			"success_count":      snap.SuccessCount,
-			"active_connections": snap.ActiveConnections,
-			"last_latency_ms":    snap.LastLatencyMs,
-			"last_success":       snap.LastSuccess,
-			"last_failure":       snap.LastFailure,
-			"last_error":         snap.LastError,
-			"blacklisted":        snap.Blacklisted,
-			"total_upload":       snap.TotalUpload,
-			"total_download":     snap.TotalDownload,
-			"timeline":           snap.Timeline,
+			"tag":                   snap.Tag,
+			"name":                  snap.Name,
+			"mode":                  snap.Mode,
+			"port":                  snap.Port,
+			"source_kind":           snap.SourceKind,
+			"source_name":           snap.SourceName,
+			"source_ref":            snap.SourceRef,
+			"availability_score":    snap.AvailabilityScore,
+			"failure_count":         snap.FailureCount,
+			"reported_success":      snap.ReportedSuccessCount,
+			"reported_failure":      snap.ReportedFailureCount,
+			"success_count":         snap.SuccessCount,
+			"active_connections":    snap.ActiveConnections,
+			"initial_check_done":    snap.InitialCheckDone,
+			"available":             snap.Available,
+			"effective_available":   snap.EffectiveAvailable,
+			"traffic_proven_usable": snap.TrafficProvenUsable,
+			"availability_source":   snap.AvailabilitySource,
+			"last_latency_ms":       snap.LastLatencyMs,
+			"last_success":          snap.LastSuccess,
+			"last_failure":          snap.LastFailure,
+			"last_error":            snap.LastError,
+			"blacklisted":           snap.Blacklisted,
+			"total_upload":          snap.TotalUpload,
+			"total_download":        snap.TotalDownload,
+			"timeline":              snap.Timeline,
 		})
 	}
 	var successRate float64
@@ -1581,6 +1590,67 @@ func (s *Server) handleSourceSyncStatus(w http.ResponseWriter, r *http.Request) 
 	}
 
 	writeJSON(w, s.sourceSync.SourceSyncStatus())
+}
+
+func (s *Server) handleSourceSyncSourceHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.mgr == nil {
+		writeJSON(w, map[string]any{
+			"sources":       []SourceHealthState{},
+			"total_sources": 0,
+		})
+		return
+	}
+
+	sourceRef := strings.TrimSpace(r.URL.Query().Get("source_ref"))
+	if sourceRef == "" {
+		sourceRef = strings.TrimSpace(r.URL.Query().Get("ref"))
+	}
+
+	grouped := s.mgr.SourceHealthStates()
+	if sourceRef != "" {
+		state, ok := grouped[sourceRef]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			writeJSON(w, map[string]any{
+				"error":      "source_ref not found",
+				"source_ref": sourceRef,
+			})
+			return
+		}
+		writeJSON(w, map[string]any{
+			"sources":       []SourceHealthState{state},
+			"total_sources": 1,
+			"source_ref":    sourceRef,
+		})
+		return
+	}
+
+	sources := make([]SourceHealthState, 0, len(grouped))
+	for _, state := range grouped {
+		sources = append(sources, state)
+	}
+	sort.Slice(sources, func(i, j int) bool {
+		if sources[i].SelectionExcluded != sources[j].SelectionExcluded {
+			return !sources[i].SelectionExcluded && sources[j].SelectionExcluded
+		}
+		if sources[i].EffectiveAvailableNodes != sources[j].EffectiveAvailableNodes {
+			return sources[i].EffectiveAvailableNodes > sources[j].EffectiveAvailableNodes
+		}
+		if sources[i].TotalNodes != sources[j].TotalNodes {
+			return sources[i].TotalNodes > sources[j].TotalNodes
+		}
+		return sources[i].Ref < sources[j].Ref
+	})
+
+	writeJSON(w, map[string]any{
+		"sources":       sources,
+		"total_sources": len(sources),
+	})
 }
 
 // nodePayload is the JSON request body for node CRUD operations.

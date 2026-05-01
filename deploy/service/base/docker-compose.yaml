@@ -3,7 +3,7 @@ services:
     build:
       context: ../../..
       dockerfile: deploy/service/base/Dockerfile
-    image: easyproxy/easy-proxy-monorepo-service:local
+    image: ${EASY_PROXY_SERVICE_IMAGE:-easyproxy/easy-proxy-monorepo-service:local}
     container_name: easy-proxy-monorepo-service
     restart: unless-stopped
     cpus: 1.50

@@ -276,6 +276,88 @@ func TestHandleNodesPreferAvailableOrdering(t *testing.T) {
 	_ = unchecked
 }
 
+func TestHandleSourceSyncSourceHealthFiltersBySourceRef(t *testing.T) {
+	mgr, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+
+	healthy := mgr.Register(NodeInfo{
+		Tag:        "zen-good",
+		Name:       "Zen Good",
+		SourceRef:  "manifest:conn_zenproxy_primary",
+		SourceName: "ZenProxy Primary",
+		SourceKind: "connector",
+	})
+	healthy.MarkInitialCheckDone(true)
+
+	pending := mgr.Register(NodeInfo{
+		Tag:        "zen-pending",
+		Name:       "Zen Pending",
+		SourceRef:  "manifest:conn_zenproxy_primary",
+		SourceName: "ZenProxy Primary",
+		SourceKind: "connector",
+	})
+	_ = pending
+
+	other := mgr.Register(NodeInfo{
+		Tag:        "other-good",
+		Name:       "Other Good",
+		SourceRef:  "manifest:aggregator-global",
+		SourceName: "Aggregator Global",
+		SourceKind: "proxy_uri",
+	})
+	other.MarkInitialCheckDone(true)
+
+	s := &Server{mgr: mgr}
+	req := httptest.NewRequest(http.MethodGet, "/api/source-sync/source-health?source_ref=manifest:conn_zenproxy_primary", nil)
+	rec := httptest.NewRecorder()
+
+	s.handleSourceSyncSourceHealth(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+
+	var payload struct {
+		Sources []SourceHealthState `json:"sources"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to decode source health response: %v", err)
+	}
+
+	if len(payload.Sources) != 1 {
+		t.Fatalf("expected exactly one source in response, got %+v", payload.Sources)
+	}
+	state := payload.Sources[0]
+	if state.Ref != "manifest:conn_zenproxy_primary" {
+		t.Fatalf("unexpected source ref: %+v", state)
+	}
+	if state.TotalNodes != 2 || state.EffectiveAvailableNodes != 1 || state.PendingNodes != 1 {
+		t.Fatalf("unexpected zenproxy source counts: %+v", state)
+	}
+	if state.ProbeAvailableNodes != 1 || state.BlacklistedNodes != 0 || state.UnavailableNodes != 0 {
+		t.Fatalf("unexpected zenproxy source breakdown: %+v", state)
+	}
+}
+
+func TestHandleSourceSyncSourceHealthNotFound(t *testing.T) {
+	mgr, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+
+	s := &Server{mgr: mgr}
+	req := httptest.NewRequest(http.MethodGet, "/api/source-sync/source-health?ref=manifest:missing", nil)
+	rec := httptest.NewRecorder()
+
+	s.handleSourceSyncSourceHealth(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusNotFound, rec.Code, rec.Body.String())
+	}
+}
+
 func TestUpdateAllSettingsPropagatesSkipCertVerifyToManager(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Mode = "pool"

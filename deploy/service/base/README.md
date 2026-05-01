@@ -91,6 +91,12 @@ Current scheduler baseline:
 - `POST /proxy/leases/report`
   - feeds task success/failure back into the node score
   - repeated failures lower the route score before a hard runtime blacklist is needed
+- `GET /api/source-sync/source-health`
+  - groups runtime nodes by `source_ref`
+  - exposes `total_nodes`, `effective_available_nodes`, `blacklisted_nodes`,
+    `pending_nodes`, and selection-penalty fields
+  - supports `?source_ref=manifest:conn_zenproxy_primary` for exact ZenProxy
+    connector visibility
 
 Current shared-default aggregator fallback URL:
 
@@ -288,6 +294,10 @@ GitHub Actions workflow:
     - platforms `linux/amd64` or `linux/amd64,linux/arm64`
   - publishes the service image without requiring a local Docker daemon on the
     operator machine
+- `.github/workflows/deploy-service-base-runtime.yml`
+  - deploys the live `easy-proxy-monorepo-service` container from the tagged
+    GHCR image on a Windows self-hosted runner
+  - waits for the image tag to become pullable before running Docker Compose
 - `.github/workflows/publish-service-base-config.yml`
   - publishes the rendered runtime config to private R2 storage
   - can also emit an encrypted owner-only import-code artifact

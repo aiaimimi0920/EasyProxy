@@ -4,6 +4,10 @@ import "time"
 
 const trafficProvenSuccessWindow = 30 * time.Minute
 
+func isProbeAvailable(snap Snapshot) bool {
+	return snap.InitialCheckDone && snap.Available && !snap.Blacklisted
+}
+
 func isTrafficProvenUsable(snap Snapshot) bool {
 	return isTrafficProvenUsableAt(snap, time.Now())
 }
@@ -30,7 +34,7 @@ func effectiveAvailabilityDetails(snap Snapshot) (effective bool, trafficProven 
 }
 
 func effectiveAvailabilityDetailsAt(snap Snapshot, now time.Time) (effective bool, trafficProven bool, source string) {
-	probeAvailable := snap.InitialCheckDone && snap.Available && !snap.Blacklisted
+	probeAvailable := isProbeAvailable(snap)
 	trafficProven = isTrafficProvenUsableAt(snap, now)
 
 	switch {

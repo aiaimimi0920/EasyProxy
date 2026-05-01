@@ -125,6 +125,9 @@ GitHub Actions equivalents:
 - `.github/workflows/validate.yml`
 - `.github/workflows/publish-ghcr-images.yml`
   - GHCR publish now depends on the validation preflight job
+- `.github/workflows/deploy-service-base-runtime.yml`
+  - release-tag deploy for the live `service/base` runtime on a Windows
+    self-hosted runner
 - `.github/workflows/publish-service-base-config.yml`
   - service/base config distribution now depends on the validation preflight job
 - `.github/workflows/deploy-cloudflare.yml`

@@ -41,6 +41,25 @@ Optional secret for encrypted owner-only bootstrap artifacts:
 | --- | --- |
 | `EASYPROXY_IMPORT_CODE_OWNER_PUBLIC_KEY` | Owner public key used to generate encrypted import-code artifacts |
 
+### `deploy-service-base-runtime.yml`
+
+The live runtime deployment workflow uses:
+
+| Secret | Purpose |
+| --- | --- |
+| `EASYPROXY_ROOT_CONFIG_YAML_B64` | Base64-encoded root `config.yaml` used to render the final `service/base` runtime config before deployment |
+
+The workflow also uses the built-in `GITHUB_TOKEN` with `packages: read`
+permission to pull `ghcr.io/<repository-owner>/easy-proxy-monorepo-service:<release-tag>`.
+
+Optional repository variables:
+
+| Variable | Purpose |
+| --- | --- |
+| `EASYPROXY_SERVICE_DEPLOY_ROOT` | Absolute runtime root on the Windows deployment host; defaults to `C:\Users\Public\nas_home\AI\GameEditor\EasyProxy\deploy\service\base` |
+| `EASYPROXY_SERVICE_DEPLOY_NETWORK` | Docker network name override; defaults to `EasyAiMi` |
+| `EASYPROXY_SERVICE_DEPLOY_WAIT_MINUTES` | Override for GHCR image pull wait time; defaults to `35` |
+
 ### `deploy-cloudflare.yml`
 
 Add these repository secrets before using the manual Cloudflare deployment

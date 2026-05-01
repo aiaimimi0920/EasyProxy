@@ -222,6 +222,11 @@ GitHub-hosted publish workflow:
 - `.github/workflows/publish-ghcr-images.yml`
   - publishes GHCR images on tag push or manual workflow dispatch
   - does not require local Docker on the operator machine
+- `.github/workflows/deploy-service-base-runtime.yml`
+  - deploys the live `service/base` runtime from the published GHCR image on a
+    Windows self-hosted runner
+  - waits for the tagged GHCR image to become pullable, then updates
+    `easy-proxy-monorepo-service` through Docker Compose
 - `.github/workflows/publish-service-base-config.yml`
   - publishes the `service/base` runtime config distribution manifest and
     optional encrypted import-code artifact
@@ -236,7 +241,7 @@ GitHub-hosted publish workflow:
 
 ## Release Surface
 
-The repository now exposes five primary GitHub-hosted operational workflows:
+The repository now exposes six primary GitHub-hosted operational workflows:
 
 - `Validate`
   - repository regression gate for scripts, Go runtime, and aggregator tests
@@ -246,6 +251,8 @@ The repository now exposes five primary GitHub-hosted operational workflows:
   - MiSub Pages + `ech-workers-cloudflare`
 - `Publish GHCR Images`
   - `service/base` + local `ech-workers`
+- `Deploy Service Base Runtime`
+  - self-hosted live runtime deployment from the tagged GHCR image
 - `Publish Service Base Config`
   - private config distribution manifest + optional encrypted import-code artifact
 - `Publish GitHub Release`
@@ -303,6 +310,13 @@ The workflow publishes to:
 
 - `ghcr.io/<repository-owner>/easy-proxy-monorepo-service:<release-tag>`
 - `ghcr.io/<repository-owner>/ech-workers-monorepo:<release-tag>`
+
+If a Windows self-hosted runner is registered for this repository, the same
+tag push also triggers:
+
+- `.github/workflows/deploy-service-base-runtime.yml`
+  - waits for `ghcr.io/<repository-owner>/easy-proxy-monorepo-service:<release-tag>`
+  - redeploys the live `easy-proxy-monorepo-service` container from GHCR
 
 ### Import Code And Bootstrap Examples
 

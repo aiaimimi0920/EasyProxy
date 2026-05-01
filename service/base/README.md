@@ -111,6 +111,19 @@ cp ./config.example.yaml ./config.yaml
 - `connectors[]` / manifest `connector`: 也支持 `connector_type = zenproxy_client`，运行时会请求 ZenProxy `/api/client/fetch` 并把返回的 sing-box outbound 转成临时节点
 - 纯 `source_sync` / 纯 connector 场景现在也可直接启动，不再需要本地占位节点
 
+管理 API 的可观测性补充：
+
+- `GET /api/source-sync/status`
+  - 返回当前 manifest / fallback / connector 的总体同步状态
+- `GET /api/source-sync/source-health`
+  - 按 `source_ref` 聚合返回 `total/effective_available/blacklisted/pending`
+    等计数
+  - 可用 `?source_ref=manifest:conn_zenproxy_primary` 精确查看某个
+    provider 当前 materialize 出来的线路健康度
+- `GET /api/debug`
+  - 现在也会附带 `source_ref` / `source_name` / `source_kind` 与
+    `effective_available` 等字段，方便逐节点排查
+
 ---
 
 ## 🧪 从源码构建（开发者）

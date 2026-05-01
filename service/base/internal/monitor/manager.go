@@ -176,6 +176,23 @@ type SecondarySelectionState struct {
 	Reason             string `json:"reason,omitempty"`
 }
 
+type SourceHealthState struct {
+	Ref                     string `json:"ref"`
+	Name                    string `json:"name,omitempty"`
+	Kind                    string `json:"kind,omitempty"`
+	TotalNodes              int    `json:"total_nodes"`
+	EffectiveAvailableNodes int    `json:"effective_available_nodes"`
+	ProbeAvailableNodes     int    `json:"probe_available_nodes"`
+	TrafficProvenNodes      int    `json:"traffic_proven_nodes"`
+	BlacklistedNodes        int    `json:"blacklisted_nodes"`
+	PendingNodes            int    `json:"pending_nodes"`
+	UnavailableNodes        int    `json:"unavailable_nodes"`
+	StructuralFailures      int    `json:"structural_failures"`
+	SelectionPenalty        int    `json:"selection_penalty"`
+	SelectionExcluded       bool   `json:"selection_excluded"`
+	SelectionReason         string `json:"selection_reason,omitempty"`
+}
+
 func SecondarySelectionStateKey(sourceRef, dimension, value string) string {
 	return strings.TrimSpace(sourceRef) + "|" + strings.TrimSpace(dimension) + "|" + strings.TrimSpace(value)
 }
@@ -890,20 +907,81 @@ func (m *Manager) SourceSelectionStates() map[string]SourceSelectionState {
 
 	result := make(map[string]SourceSelectionState, len(grouped))
 	for ref, state := range grouped {
-		switch {
-		case state.StructuralFailures == 0:
-			state.Penalty = 0
-		case state.HealthyNodes == 0 && state.StructuralFailures >= 2:
-			state.Penalty = 85
-			state.Excluded = true
-		case state.HealthyNodes == 0 && state.TotalNodes == 1 && state.StructuralFailures == 1:
-			state.Penalty = 70
-			state.Excluded = true
-		case state.StructuralFailures*2 >= state.TotalNodes:
-			state.Penalty = 45
-		case state.StructuralFailures >= 1:
-			state.Penalty = 20
+		applySourceSelectionPenalty(state)
+		result[ref] = *state
+	}
+	return result
+}
+
+// SourceHealthStates aggregates runtime availability by source_ref so operator
+// tooling can answer questions like total/effective/blacklisted/pending counts
+// for manifest-fed providers such as ZenProxy.
+func (m *Manager) SourceHealthStates() map[string]SourceHealthState {
+	m.mu.RLock()
+	list := make([]*entry, 0, len(m.nodes))
+	for _, e := range m.nodes {
+		list = append(list, e)
+	}
+	m.mu.RUnlock()
+
+	grouped := make(map[string]*SourceHealthState)
+	for _, e := range list {
+		snap := e.snapshot()
+		sourceRef := strings.TrimSpace(snap.SourceRef)
+		if sourceRef == "" {
+			continue
 		}
+		state, ok := grouped[sourceRef]
+		if !ok {
+			state = &SourceHealthState{
+				Ref:  sourceRef,
+				Name: strings.TrimSpace(snap.SourceName),
+				Kind: strings.TrimSpace(snap.SourceKind),
+			}
+			grouped[sourceRef] = state
+		}
+
+		state.TotalNodes++
+		if snap.EffectiveAvailable {
+			state.EffectiveAvailableNodes++
+		}
+		if isProbeAvailable(snap) {
+			state.ProbeAvailableNodes++
+		}
+		if snap.TrafficProvenUsable {
+			state.TrafficProvenNodes++
+		}
+		if snap.Blacklisted {
+			state.BlacklistedNodes++
+		}
+		if !snap.InitialCheckDone {
+			state.PendingNodes++
+		} else if !snap.EffectiveAvailable && !snap.Blacklisted {
+			state.UnavailableNodes++
+		}
+		if structural, reason := classifySourceStructuralFailure(snap); structural {
+			state.StructuralFailures++
+			if state.SelectionReason == "" {
+				state.SelectionReason = reason
+			}
+		}
+	}
+
+	result := make(map[string]SourceHealthState, len(grouped))
+	for ref, state := range grouped {
+		selection := &SourceSelectionState{
+			Ref:                state.Ref,
+			Name:               state.Name,
+			Kind:               state.Kind,
+			TotalNodes:         state.TotalNodes,
+			HealthyNodes:       state.EffectiveAvailableNodes,
+			StructuralFailures: state.StructuralFailures,
+			Reason:             state.SelectionReason,
+		}
+		applySourceSelectionPenalty(selection)
+		state.SelectionPenalty = selection.Penalty
+		state.SelectionExcluded = selection.Excluded
+		state.SelectionReason = selection.Reason
 		result[ref] = *state
 	}
 	return result
@@ -1066,6 +1144,26 @@ func applySecondarySelectionPenalty(state *SecondarySelectionState) {
 		applyDimensionPenalty(state, 4, 12, 24, 38)
 	default:
 		applyDimensionPenalty(state, 4, 10, 20, 30)
+	}
+}
+
+func applySourceSelectionPenalty(state *SourceSelectionState) {
+	if state == nil {
+		return
+	}
+	switch {
+	case state.StructuralFailures == 0:
+		state.Penalty = 0
+	case state.HealthyNodes == 0 && state.StructuralFailures >= 2:
+		state.Penalty = 85
+		state.Excluded = true
+	case state.HealthyNodes == 0 && state.TotalNodes == 1 && state.StructuralFailures == 1:
+		state.Penalty = 70
+		state.Excluded = true
+	case state.StructuralFailures*2 >= state.TotalNodes:
+		state.Penalty = 45
+	case state.StructuralFailures >= 1:
+		state.Penalty = 20
 	}
 }
 
