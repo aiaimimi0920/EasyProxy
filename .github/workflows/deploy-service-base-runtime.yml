@@ -165,7 +165,10 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($env:GHCR_TOKEN)) {
             throw "GITHUB_TOKEN is required for GHCR login."
           }
-          $env:GHCR_TOKEN | docker login ghcr.io -u $env:GHCR_USERNAME --password-stdin
+          $dockerConfig = Join-Path $env:RUNNER_TEMP 'docker-ghcr-config'
+          $null = New-Item -ItemType Directory -Force -Path $dockerConfig
+          "DOCKER_CONFIG=$dockerConfig" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $env:GHCR_TOKEN | docker --config $dockerConfig login ghcr.io -u $env:GHCR_USERNAME --password-stdin
           if ($LASTEXITCODE -ne 0) {
             throw "Failed to login to GHCR"
           }
