@@ -170,7 +170,28 @@ jobs:
           $dockerConfig = Join-Path $env:RUNNER_TEMP 'docker-ghcr-config'
           $null = New-Item -ItemType Directory -Force -Path $dockerConfig
           "DOCKER_CONFIG=$dockerConfig" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          $ghcrToken | docker --config $dockerConfig login ghcr.io -u $env:GHCR_USERNAME --password-stdin
+          $env:DOCKER_CONFIG = $dockerConfig
+          $env:GHCR_TOKEN = $ghcrToken
+          @'
+          import os
+          import subprocess
+          import sys
+
+          proc = subprocess.run(
+              [
+                  'docker',
+                  '--config',
+                  os.environ['DOCKER_CONFIG'],
+                  'login',
+                  'ghcr.io',
+                  '-u',
+                  os.environ['GHCR_USERNAME'],
+                  '--password-stdin',
+              ],
+              input=os.environ['GHCR_TOKEN'].encode('utf-8'),
+          )
+          raise SystemExit(proc.returncode)
+          '@ | & $env:PYTHON_EXECUTABLE -
           if ($LASTEXITCODE -ne 0) {
             throw "Failed to login to GHCR"
           }
