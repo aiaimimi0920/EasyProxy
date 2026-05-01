@@ -82,6 +82,13 @@ if (-not $SkipPull) {
     }
 }
 
+$existingContainerId = (& docker ps -aq --filter 'name=^easy-proxy-monorepo-service$' 2>$null | Out-String).Trim()
+if (-not [string]::IsNullOrWhiteSpace($existingContainerId)) {
+    if ($PSCmdlet.ShouldProcess('easy-proxy-monorepo-service', 'Remove existing EasyProxy container before compose redeploy')) {
+        Invoke-CheckedCommand -FilePath 'docker' -Arguments @('rm', '-f', 'easy-proxy-monorepo-service') -FailureMessage 'Failed to remove existing easy-proxy-monorepo-service container'
+    }
+}
+
 if ($PSCmdlet.ShouldProcess($runtimeComposePath, "Deploy EasyProxy service container from GHCR")) {
     Invoke-CheckedCommand -FilePath 'docker' -Arguments @(
         'compose',
