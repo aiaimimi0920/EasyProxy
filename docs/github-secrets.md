@@ -48,6 +48,7 @@ The live runtime deployment workflow uses:
 | Secret | Purpose |
 | --- | --- |
 | `EASYPROXY_ROOT_CONFIG_YAML_B64` | Base64-encoded root `config.yaml` used to render the final `service/base` runtime config before deployment |
+| `EASYPROXY_GHCR_DEPLOY_TOKEN` | Optional PAT override for GHCR login on the self-hosted deployment runner; when unset the workflow falls back to the built-in `GITHUB_TOKEN` |
 
 The workflow also uses the built-in `GITHUB_TOKEN` with `packages: read`
 permission to pull `ghcr.io/<repository-owner>/easy-proxy-monorepo-service:<release-tag>`.

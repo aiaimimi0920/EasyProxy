@@ -160,15 +160,17 @@ jobs:
         shell: powershell
         env:
           GHCR_USERNAME: ${{ github.actor }}
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_TOKEN_FALLBACK: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_TOKEN_OVERRIDE: ${{ secrets.EASYPROXY_GHCR_DEPLOY_TOKEN }}
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:GHCR_TOKEN)) {
+          $ghcrToken = if (-not [string]::IsNullOrWhiteSpace($env:GHCR_TOKEN_OVERRIDE)) { $env:GHCR_TOKEN_OVERRIDE } else { $env:GHCR_TOKEN_FALLBACK }
+          if ([string]::IsNullOrWhiteSpace($ghcrToken)) {
             throw "GITHUB_TOKEN is required for GHCR login."
           }
           $dockerConfig = Join-Path $env:RUNNER_TEMP 'docker-ghcr-config'
           $null = New-Item -ItemType Directory -Force -Path $dockerConfig
           "DOCKER_CONFIG=$dockerConfig" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          $env:GHCR_TOKEN | docker --config $dockerConfig login ghcr.io -u $env:GHCR_USERNAME --password-stdin
+          $ghcrToken | docker --config $dockerConfig login ghcr.io -u $env:GHCR_USERNAME --password-stdin
           if ($LASTEXITCODE -ne 0) {
             throw "Failed to login to GHCR"
           }
