@@ -10,6 +10,7 @@ import { probeSourceItems } from './source-probe.js';
 const AGGREGATOR_DISCOVERY_MANAGED_BY = 'aggregator_sync';
 const AGGREGATOR_STABLE_MANAGED_BY = 'aggregator_stable';
 const AGGREGATOR_PUBLIC_PROFILE_MANAGED_BY = 'aggregator_public_profile';
+const EASYPROXY_RUNTIME_SOURCES_MANAGED_BY = 'easyproxy_runtime_sources';
 
 function normalizeString(value) {
     return typeof value === 'string' ? value.trim() : '';
@@ -115,6 +116,10 @@ function isManagedAggregatorSource(source) {
     return isManagedDiscoverySource(source) || isManagedStableSource(source);
 }
 
+function isManagedRuntimeProxySource(source) {
+    return source?.kind === 'proxy_uri' && source?.options?.managed_by === EASYPROXY_RUNTIME_SOURCES_MANAGED_BY;
+}
+
 function findManagedStableSourceIndex(sources) {
     return sources.findIndex(isManagedStableSource);
 }
@@ -203,23 +208,35 @@ function buildStableOptions(existingSource = null) {
     };
 }
 
-function resolveManagedPublicConnectorIds(config, existingProfile, sources) {
-    const configuredIds = normalizeStringArray(config.defaultPublicProfileConnectorIds);
-    if (configuredIds.length > 0) {
-        return configuredIds;
-    }
-
+function resolveManagedPublicManualNodeIds(config, existingProfile, sources) {
     const sourceById = new Map(
         normalizeSourceCollection(sources).map(source => [source.id, source])
     );
 
-    return normalizeStringArray(existingProfile?.manualNodes).filter(id => {
+    const configuredConnectorIds = normalizeStringArray(config.defaultPublicProfileConnectorIds).filter(id => {
         const source = sourceById.get(id);
         return Boolean(source) && isConnectorSource(source);
     });
+
+    const preservedConnectorIds = configuredConnectorIds.length > 0
+        ? configuredConnectorIds
+        : normalizeStringArray(existingProfile?.manualNodes).filter(id => {
+            const source = sourceById.get(id);
+            return Boolean(source) && isConnectorSource(source);
+        });
+
+    const preservedRuntimeIds = normalizeStringArray(existingProfile?.manualNodes).filter(id => {
+        const source = sourceById.get(id);
+        return Boolean(source) && isManagedRuntimeProxySource(source);
+    });
+
+    return normalizeStringArray([
+        ...preservedRuntimeIds,
+        ...preservedConnectorIds,
+    ]);
 }
 
-function buildManagedProfile(stableSourceId, connectorIds, config, existingProfile = null) {
+function buildManagedProfile(stableSourceId, manualNodeIds, config, existingProfile = null) {
     const profile = existingProfile && typeof existingProfile === 'object'
         ? cloneObject(existingProfile)
         : {};
@@ -229,7 +246,7 @@ function buildManagedProfile(stableSourceId, connectorIds, config, existingProfi
         name: config.defaultPublicProfileName,
         enabled: true,
         subscriptions: stableSourceId ? [stableSourceId] : [],
-        manualNodes: normalizeStringArray(connectorIds),
+        manualNodes: normalizeStringArray(manualNodeIds),
         customId: config.defaultPublicProfileCustomId,
         expiresAt: '',
         isPublic: true,
@@ -572,8 +589,8 @@ export async function syncAggregatorArtifacts({
         );
 
         const existingProfile = profileIndex >= 0 ? nextProfiles[profileIndex] : null;
-        const connectorIds = resolveManagedPublicConnectorIds(config, existingProfile, nextSources);
-        const managedProfile = buildManagedProfile(stableSourceId, connectorIds, config, existingProfile);
+        const manualNodeIds = resolveManagedPublicManualNodeIds(config, existingProfile, nextSources);
+        const managedProfile = buildManagedProfile(stableSourceId, manualNodeIds, config, existingProfile);
 
         if (profileIndex >= 0) {
             if (JSON.stringify(nextProfiles[profileIndex]) !== JSON.stringify(managedProfile)) {

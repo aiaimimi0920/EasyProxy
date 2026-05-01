@@ -106,13 +106,19 @@ not the same thing as the persistent local node store.
 `connector` sources are now supported at runtime as well:
 
 - `MiSub` may emit `kind=connector` + `connector_type=ech_worker`
+- `MiSub` may also emit `kind=connector` + `connector_type=zenproxy_client`
 - `EasyProxy` starts a local `ech-workers` process for each active connector
+- `EasyProxy` fetches and materializes ZenProxy client-mode outbounds into
+  ephemeral runtime proxy URIs on each sync
 - each connector is materialized into a local `socks5://127.0.0.1:<port>` or
   `http://127.0.0.1:<port>` upstream before the proxy pool reloads
 - these connector-derived upstreams remain ephemeral and are rebuilt from
   manifest state on each refresh
 - source-sync-only startup is supported, so `EasyProxy` can now boot from a
   pure `MiSub` manifest profile even when there are no local seed nodes yet
+- the managed `aggregator-global` profile may therefore contain a mix of
+  deployment-audited `proxy_uri` runtime nodes and connector references such as
+  `zenproxy_client`
 
 ## Live ECH Validation
 
@@ -170,8 +176,10 @@ Verified scenarios:
   - passed
   - manifest URL:
     - `https://misub.aiaimimi.com/api/manifest/aggregator-global`
-  - manifest source count:
-    - `1`
+  - manifest composition:
+    - may include deployment-audited `proxy_uri` entries, shared stable
+      subscriptions, and configured manifest connectors such as
+      `zenproxy_client`
 - aggregator fallback subscription:
   - passed
   - fallback source count:

@@ -64,8 +64,9 @@ Phase 1 defines three kinds:
   sync as a redundant operator-safety check
 - maintains a dedicated stable source for
   `https://sub.aiaimimi.com/subs/clash.yaml`
-- maintains `aggregator-global` as the managed public profile backed by the
-  stable source
+- maintains `aggregator-global` as the managed public profile seeded by the
+  stable source and able to retain deployment-managed runtime proxy URIs plus
+  configured connector references
 - keeps ordinary `/sub` output behavior for normal clients
 - exposes a machine-facing manifest endpoint for `service/base`
 

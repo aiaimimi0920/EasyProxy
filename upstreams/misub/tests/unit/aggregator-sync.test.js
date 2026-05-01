@@ -308,4 +308,73 @@ describe('syncAggregatorArtifacts', () => {
         const managedProfile = result.profiles.find(item => item.id === 'aggregator_global');
         expect(managedProfile.manualNodes).toEqual(['conn_ech_workers_pref_3']);
     });
+
+    it('preserves runtime-managed proxy nodes while also appending configured connector ids', async () => {
+        const fetchMock = vi.fn(async (input) => {
+            const url = String(input);
+            if (url === 'https://sub.aiaimimi.com/internal/crawledsubs.json') {
+                return createJsonResponse({});
+            }
+            if (url === 'https://sub.aiaimimi.com/subs/clash.yaml') {
+                return createTextResponse('proxies:\n  - { name: stable, type: ss, server: stable.example.com, port: 443, cipher: aes-128-gcm, password: test }', {
+                    contentType: 'text/yaml; charset=utf-8'
+                });
+            }
+
+            throw new Error(`Unexpected fetch URL in test: ${url}`);
+        });
+
+        const result = await syncAggregatorArtifacts({
+            sources: [
+                {
+                    id: 'proxy_runtime_node_1',
+                    kind: 'proxy_uri',
+                    name: 'Runtime Node 1',
+                    enabled: true,
+                    input: 'http://runtime-1.example.com:8080',
+                    options: {
+                        managed_by: 'easyproxy_runtime_sources',
+                        source_role: 'runtime_effective_proxy'
+                    }
+                },
+                {
+                    id: 'conn_zenproxy_primary',
+                    kind: 'connector',
+                    name: 'ZenProxy Primary',
+                    enabled: true,
+                    input: 'https://zenproxy.top',
+                    connector_type: 'zenproxy_client',
+                    connector_config: {
+                        api_key: 'demo-key'
+                    }
+                }
+            ],
+            profiles: [
+                {
+                    id: 'aggregator_global',
+                    customId: 'aggregator-global',
+                    name: 'Aggregator Global',
+                    enabled: true,
+                    subscriptions: ['sub_aggregator_stable'],
+                    manualNodes: ['proxy_runtime_node_1'],
+                    isPublic: true
+                }
+            ],
+            settings: {
+                aggregatorSync: {
+                    enabled: true,
+                    stableSourceEnabled: true,
+                    defaultPublicProfileEnabled: true,
+                    defaultPublicProfileConnectorIds: ['conn_zenproxy_primary']
+                }
+            },
+            fetchImpl: fetchMock
+        });
+
+        const managedProfile = result.profiles.find(item => item.id === 'aggregator_global');
+        expect(managedProfile.manualNodes).toEqual([
+            'proxy_runtime_node_1',
+            'conn_zenproxy_primary'
+        ]);
+    });
 });

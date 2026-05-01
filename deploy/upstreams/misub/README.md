@@ -166,8 +166,10 @@ layers:
   - used by the managed public profile `aggregator-global`
 
 Operationally, this means the default public profile should expose the stable
-aggregated artifact, while the raw crawler-discovered sources remain available
-for operator review and selective reuse.
+aggregated artifact, while any deployment-managed runtime proxy nodes and
+configured connector references can be layered on top of that managed profile.
+The raw crawler-discovered sources remain available for operator review and
+selective reuse.
 
 ## Accepted Global Inputs
 

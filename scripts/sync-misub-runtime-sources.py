@@ -57,6 +57,41 @@ def normalize_string_array(value: Any) -> list[str]:
     return normalized
 
 
+def is_connector_source(source: Any) -> bool:
+    return isinstance(source, dict) and str(source.get("kind", "")).strip() == "connector"
+
+
+def resolve_connector_node_ids(
+    *,
+    settings: dict[str, Any] | None,
+    existing_profile: dict[str, Any] | None,
+    sources: list[dict[str, Any]],
+) -> list[str]:
+    source_map = {
+        str(source.get("id", "")).strip(): source
+        for source in sources
+        if isinstance(source, dict) and str(source.get("id", "")).strip()
+    }
+
+    configured_ids = normalize_string_array(
+        (((settings or {}).get("aggregatorSync") or {}).get("defaultPublicProfileConnectorIds"))
+    )
+    configured_connector_ids = [
+        source_id
+        for source_id in configured_ids
+        if is_connector_source(source_map.get(source_id))
+    ]
+    if configured_connector_ids:
+        return configured_connector_ids
+
+    existing_manual_nodes = normalize_string_array((existing_profile or {}).get("manualNodes"))
+    return [
+        source_id
+        for source_id in existing_manual_nodes
+        if is_connector_source(source_map.get(source_id))
+    ]
+
+
 def run_runtime_audit(
     *,
     audit_script: Path,
@@ -159,9 +194,13 @@ def main() -> int:
     data_response = retry("MiSub data fetch", 10, 5, lambda: session.get(base_url + "api/data", timeout=30))
     data_response.raise_for_status()
     payload = data_response.json()
+    settings_response = retry("MiSub settings fetch", 10, 5, lambda: session.get(base_url + "api/settings", timeout=30))
+    settings_response.raise_for_status()
+    settings_payload = settings_response.json()
 
     misubs = payload.get("misubs") or []
     profiles = payload.get("profiles") or []
+    settings = settings_payload if isinstance(settings_payload, dict) else {}
     ensure(isinstance(misubs, list), "MiSub /api/data did not return a misubs array")
     ensure(isinstance(profiles, list), "MiSub /api/data did not return a profiles array")
 
@@ -209,7 +248,12 @@ def main() -> int:
     updated_profile["name"] = args.profile_name
     updated_profile["enabled"] = bool(updated_profile.get("enabled", True))
     updated_profile["subscriptions"] = []
-    updated_profile["manualNodes"] = runtime_source_ids
+    connector_node_ids = resolve_connector_node_ids(
+        settings=settings,
+        existing_profile=existing_profile,
+        sources=updated_sources,
+    )
+    updated_profile["manualNodes"] = runtime_source_ids + connector_node_ids
     updated_profile["expiresAt"] = str(updated_profile.get("expiresAt", "") or "")
     updated_profile["isPublic"] = bool(updated_profile.get("isPublic", False))
     updated_profile["description"] = args.profile_description
