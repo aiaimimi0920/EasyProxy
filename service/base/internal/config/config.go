@@ -1359,12 +1359,16 @@ func buildTrojanURI(p clashProxy) string {
 		params.Set("fp", p.ClientFingerprint)
 	}
 
-	query := ""
-	if len(params) > 0 {
-		query = "?" + params.Encode()
+	uri := &url.URL{
+		Scheme: "trojan",
+		User:   url.User(p.Password),
+		Host:   netJoinHostPort(p.Server, p.Port),
 	}
-
-	return fmt.Sprintf("trojan://%s@%s:%d%s#%s", p.Password, p.Server, p.Port, query, url.QueryEscape(p.Name))
+	if len(params) > 0 {
+		uri.RawQuery = params.Encode()
+	}
+	uri.Fragment = p.Name
+	return uri.String()
 }
 
 func buildShadowsocksURI(p clashProxy) string {

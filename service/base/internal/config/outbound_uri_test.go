@@ -1,6 +1,7 @@
 package config
 
 import (
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -173,5 +174,36 @@ func TestBuildURIFromSingboxOutboundRejectsUnsupportedSocksVersion(t *testing.T)
 	}
 	if !strings.Contains(err.Error(), "unsupported socks version") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestBuildURIFromSingboxOutboundTrojanEscapesPassword(t *testing.T) {
+	outbound := map[string]any{
+		"type":        "trojan",
+		"server":      "trojan.example.com",
+		"server_port": 443,
+		"password":    "8r<[9'l6hAO",
+		"tls": map[string]any{
+			"enabled":     true,
+			"server_name": "trojan.example.com",
+		},
+	}
+
+	uri, err := BuildURIFromSingboxOutbound("ZenProxy Trojan", outbound)
+	if err != nil {
+		t.Fatalf("BuildURIFromSingboxOutbound() error = %v", err)
+	}
+	if !strings.HasPrefix(uri, "trojan://8r%3C%5B9%27l6hAO@trojan.example.com:443?") {
+		t.Fatalf("unexpected trojan uri prefix: %q", uri)
+	}
+	parsed, err := url.Parse(uri)
+	if err != nil {
+		t.Fatalf("url.Parse() error = %v", err)
+	}
+	if parsed.User == nil {
+		t.Fatal("expected trojan uri to include user info")
+	}
+	if got := parsed.User.Username(); got != "8r<[9'l6hAO" {
+		t.Fatalf("unexpected trojan password round-trip: %q", got)
 	}
 }
