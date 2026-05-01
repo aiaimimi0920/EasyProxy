@@ -53,17 +53,22 @@ jobs:
         shell: pwsh
         run: |
           $configuredPython = "${{ vars.EASYPROXY_SERVICE_DEPLOY_PYTHON }}"
-          $candidates = @(
-            if ([string]::IsNullOrWhiteSpace($configuredPython)) { $null } else { $configuredPython }
+          $candidates = New-Object System.Collections.Generic.List[string]
+          if (-not [string]::IsNullOrWhiteSpace($configuredPython)) {
+            $null = $candidates.Add($configuredPython)
+          }
+          foreach ($candidate in @(
             'C:\Users\vmjcv\scoop\shims\python.exe'
             'C:\Python313\python.exe'
             'C:\Python312\python.exe'
             'C:\Python311\python.exe'
             'C:\Python310\python.exe'
-          )
+          )) {
+            $null = $candidates.Add($candidate)
+          }
           $cmd = Get-Command python -ErrorAction SilentlyContinue
           if ($null -ne $cmd -and -not [string]::IsNullOrWhiteSpace($cmd.Source)) {
-            $candidates += $cmd.Source
+            $null = $candidates.Add($cmd.Source)
           }
           $pythonExecutable = $candidates |
             Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path -LiteralPath $_) } |
