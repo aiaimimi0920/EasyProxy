@@ -201,6 +201,8 @@ Root-level operator entrypoints live under `scripts/`:
 
 - `scripts/deploy-easyproxy.ps1`
   - renders and deploys `service/base` through Docker Compose
+  - can also pull a published GHCR image when passed `-FromGhcr` plus
+    `-ReleaseTag` or `-Image`
 - `scripts/deploy-aggregator.ps1`
   - triggers the native aggregator deployment workflow in the current repository
 - `scripts/deploy-misub.ps1`
@@ -260,6 +262,9 @@ Run from repository root:
 # EasyProxy runtime deploy (Docker Compose)
 powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project easyproxy -InitConfig
 
+# EasyProxy runtime deploy from a published GHCR image
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project easyproxy-ghcr -InitConfig -ReleaseTag release-20260502-001
+
 # MiSub Pages deploy
 powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project misub-pages -InitConfig
 
@@ -309,6 +314,14 @@ The canonical operator baseline is:
 
 - GitHub-hosted cloud deploys plus GHCR/config/release publication
 - local script-driven runtime deployment on the target host
+
+For local GHCR rollout, the canonical root entrypoint is:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-easyproxy.ps1 `
+  -FromGhcr `
+  -ReleaseTag release-20260502-001
+```
 
 ### Import Code And Bootstrap Examples
 

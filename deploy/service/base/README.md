@@ -332,6 +332,23 @@ powershell -ExecutionPolicy Bypass -File .\deploy\service\base\scripts\smoke-eas
 Local GHCR runtime deployment on the target host:
 
 ```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-easyproxy.ps1 `
+  -FromGhcr `
+  -ReleaseTag <release-tag>
+```
+
+One-click root wrapper:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 `
+  -Project easyproxy-ghcr `
+  -InitConfig `
+  -ReleaseTag <release-tag>
+```
+
+Lower-level deployment-only helper:
+
+```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\render-derived-configs.ps1 `
   -ServiceBase `
   -ServiceOutput .\deploy\service\base\config.yaml
@@ -341,10 +358,10 @@ powershell -ExecutionPolicy Bypass -File .\deploy\service\base\scripts\deploy-gh
   -Image ghcr.io/<owner>/easy-proxy-monorepo-service:<release-tag>
 ```
 
-This is the canonical operator path for live `service/base` rollout after
-GitHub Actions has finished publishing the tagged GHCR image and any private R2
-config artifacts. GitHub Actions in this repository do not directly control the
-client deployment host.
+The root wrapper is the canonical operator path for live `service/base`
+rollout after GitHub Actions has finished publishing the tagged GHCR image and
+any private R2 config artifacts. GitHub Actions in this repository do not
+directly control the client deployment host.
 
 Full live runtime validation:
 

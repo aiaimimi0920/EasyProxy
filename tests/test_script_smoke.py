@@ -97,6 +97,50 @@ class ScriptSmokeTests(unittest.TestCase):
             self.assertIn("-ReleaseVersion", args)
             self.assertIn("config-tag", args)
 
+    def test_deploy_subproject_dispatches_easyproxy_ghcr(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            capture_path = Path(temp_dir) / "external.jsonl"
+            temp_config = Path(temp_dir) / "config.yaml"
+            template = (REPO_ROOT / "config.example.yaml").read_text(encoding="utf-8")
+            temp_config.write_text(
+                template.replace(
+                    "https://misub.example.com/api/manifest/your-profile",
+                    "https://misub.aiaimimi.com/api/manifest/aggregator-global",
+                ),
+                encoding="utf-8",
+            )
+
+            result = self.run_powershell(
+                [
+                    "-File",
+                    str(REPO_ROOT / "scripts" / "deploy-subproject.ps1"),
+                    "-Project",
+                    "easyproxy-ghcr",
+                    "-ConfigPath",
+                    str(temp_config),
+                    "-ReleaseTag",
+                    "smoke-release",
+                    "-GhcrOwner",
+                    "test-owner",
+                    "-SkipPull",
+                ],
+                env={"EASYPROXY_TEST_CAPTURE_EXTERNAL_COMMANDS_PATH": str(capture_path)},
+            )
+
+            self.assertEqual(result.returncode, 0, msg=result.stderr or result.stdout)
+            records = read_json_lines(capture_path)
+            self.assertEqual(len(records), 1)
+            record = records[0]
+            self.assertEqual(record["FilePath"], "powershell")
+            args = record["Arguments"]
+            self.assertIn("deploy-easyproxy.ps1", " ".join(args))
+            self.assertIn("-FromGhcr", args)
+            self.assertIn("-ReleaseTag", args)
+            self.assertIn("smoke-release", args)
+            self.assertIn("-GhcrOwner", args)
+            self.assertIn("test-owner", args)
+            self.assertIn("-SkipPull", args)
+
     def test_deploy_subproject_dispatches_sync_github_settings(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             capture_path = Path(temp_dir) / "external.jsonl"
@@ -123,6 +167,54 @@ class ScriptSmokeTests(unittest.TestCase):
             self.assertEqual(record["FilePath"], "powershell")
             args = record["Arguments"]
             self.assertIn("sync-github-deployment-settings.ps1", " ".join(args))
+
+    def test_deploy_easyproxy_dispatches_deploy_ghcr_runtime(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            capture_path = Path(temp_dir) / "external.jsonl"
+            temp_config = Path(temp_dir) / "config.yaml"
+            rendered_config = Path(temp_dir) / "rendered-config.yaml"
+            rendered_config.write_text("management:\n  password: \"\"\n", encoding="utf-8")
+            template = (REPO_ROOT / "config.example.yaml").read_text(encoding="utf-8")
+            template = template.replace(
+                "https://misub.example.com/api/manifest/your-profile",
+                "https://misub.aiaimimi.com/api/manifest/aggregator-global",
+            )
+            template = template.replace(
+                "renderedConfigPath: deploy/service/base/config.yaml",
+                f'renderedConfigPath: "{rendered_config.as_posix()}"',
+            )
+            temp_config.write_text(template, encoding="utf-8")
+
+            result = self.run_powershell(
+                [
+                    "-File",
+                    str(REPO_ROOT / "scripts" / "deploy-easyproxy.ps1"),
+                    "-ConfigPath",
+                    str(temp_config),
+                    "-FromGhcr",
+                    "-ReleaseTag",
+                    "smoke-release",
+                    "-GhcrOwner",
+                    "test-owner",
+                    "-SkipRender",
+                    "-SkipPull",
+                ],
+                env={"EASYPROXY_TEST_CAPTURE_EXTERNAL_COMMANDS_PATH": str(capture_path)},
+            )
+
+            self.assertEqual(result.returncode, 0, msg=result.stderr or result.stdout)
+            records = read_json_lines(capture_path)
+            self.assertEqual(len(records), 1)
+            record = records[0]
+            self.assertEqual(record["FilePath"], "powershell")
+            args = record["Arguments"]
+            self.assertIn("deploy-ghcr-runtime.ps1", " ".join(args))
+            self.assertIn("-Image", args)
+            self.assertIn("ghcr.io/test-owner/easy-proxy-monorepo-service:smoke-release", args)
+            self.assertIn("-RuntimeRoot", args)
+            self.assertIn("-NetworkName", args)
+            self.assertIn("EasyAiMi", args)
+            self.assertIn("-SkipPull", args)
 
     def test_publish_ghcr_images_dispatches_both_images_in_capture_mode(self):
         with tempfile.TemporaryDirectory() as temp_dir:

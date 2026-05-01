@@ -17,6 +17,7 @@ $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "lib\easyproxy-common.ps1")
 . (Join-Path $PSScriptRoot "lib\easyproxy-config.ps1")
+. (Join-Path $PSScriptRoot "lib\easyproxy-ghcr.ps1")
 
 Assert-EasyProxyCommand -Name "docker" -Hint "Install Docker Desktop or another Docker engine first."
 Assert-EasyProxyCommand -Name "git" -Hint "Install Git first."
@@ -41,22 +42,6 @@ function Resolve-ConfigMetadata {
     return [pscustomobject]@{
         Path   = $preferredResolved
         Exists = $false
-    }
-}
-
-function Assert-GhcrOwnerIsSafe {
-    param(
-        [Parameter(Mandatory = $true)][string]$Owner,
-        [string]$SourceDescription = "GHCR owner"
-    )
-
-    $normalized = $Owner.Trim()
-    if ([string]::IsNullOrWhiteSpace($normalized)) {
-        throw "$SourceDescription is empty. Set ghcr.owner in config.yaml or pass -GhcrOwner explicitly."
-    }
-
-    if ($normalized -match '^(your-github-owner|change_me.*|.*placeholder.*)$') {
-        throw "$SourceDescription still uses a placeholder value: $normalized"
     }
 }
 
@@ -88,7 +73,7 @@ if ([string]::IsNullOrWhiteSpace($GhcrOwner)) {
     $GhcrOwner = [string](Get-EasyProxyConfigValue -Object $ghcr -Name 'owner' -Default '')
 }
 
-Assert-GhcrOwnerIsSafe -Owner $GhcrOwner -SourceDescription "GHCR owner"
+Assert-EasyProxyGhcrOwnerIsSafe -Owner $GhcrOwner -SourceDescription "GHCR owner"
 
 if ([string]::IsNullOrWhiteSpace($Platform)) {
     $Platform = [string](Get-EasyProxyConfigValue -Object $ghcr -Name 'platform' -Default 'linux/amd64')

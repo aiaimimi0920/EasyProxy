@@ -1,6 +1,7 @@
 param(
     [ValidateSet(
         "easyproxy",
+        "easyproxy-ghcr",
         "misub-pages",
         "misub-docker",
         "aggregator",
@@ -29,7 +30,9 @@ param(
     [string]$GhcrOwner,
     [string]$GhcrUsername,
     [string]$GhcrToken,
-    [switch]$LoadOnly
+    [switch]$LoadOnly,
+    [string]$Image,
+    [switch]$SkipPull
 )
 
 Set-StrictMode -Version Latest
@@ -82,7 +85,7 @@ function Assert-ProjectConfigReady {
     $errors = @()
 
     switch ($Project) {
-        "easyproxy" {
+        { $_ -in @("easyproxy", "easyproxy-ghcr") } {
             $serviceBase = Get-EasyProxyConfigSection -Config $Config -Name 'serviceBase'
             $runtime = Get-EasyProxyConfigSection -Config $serviceBase -Name 'runtime'
             $sourceSync = Get-EasyProxyConfigSection -Config $runtime -Name 'source_sync'
@@ -146,7 +149,7 @@ function Assert-ProjectConfigReady {
 }
 
 if ([string]::IsNullOrWhiteSpace($Project)) {
-    throw "Missing -Project. Supported values: easyproxy, misub-pages, misub-docker, aggregator, ech-workers-cloudflare, sync-github-settings, build-easyproxy-image, build-ech-workers-image, publish-service-base-config, publish-easyproxy-image, publish-ech-workers-image, publish-core-images"
+    throw "Missing -Project. Supported values: easyproxy, easyproxy-ghcr, misub-pages, misub-docker, aggregator, ech-workers-cloudflare, sync-github-settings, build-easyproxy-image, build-ech-workers-image, publish-service-base-config, publish-easyproxy-image, publish-ech-workers-image, publish-core-images"
 }
 
 $resolvedConfigPath = Resolve-ConfigPath -Path $ConfigPath
@@ -169,6 +172,17 @@ switch ($Project) {
         if ($NoBuild) { $args += "-NoBuild" }
         if ($SkipRender) { $args += "-SkipRender" }
         Invoke-EasyProxyExternalCommand -FilePath "powershell" -Arguments $args -FailureMessage "easyproxy deploy failed"
+        break
+    }
+    "easyproxy-ghcr" {
+        $scriptPath = Join-Path $PSScriptRoot 'deploy-easyproxy.ps1'
+        $args = @("-ExecutionPolicy", "Bypass", "-File", $scriptPath, "-ConfigPath", $resolvedConfigPath, "-FromGhcr")
+        if ($SkipRender) { $args += "-SkipRender" }
+        if (-not [string]::IsNullOrWhiteSpace($ReleaseTag)) { $args += @("-ReleaseTag", $ReleaseTag) }
+        if (-not [string]::IsNullOrWhiteSpace($GhcrOwner)) { $args += @("-GhcrOwner", $GhcrOwner) }
+        if (-not [string]::IsNullOrWhiteSpace($Image)) { $args += @("-Image", $Image) }
+        if ($SkipPull) { $args += "-SkipPull" }
+        Invoke-EasyProxyExternalCommand -FilePath "powershell" -Arguments $args -FailureMessage "easyproxy GHCR deploy failed"
         break
     }
     "misub-pages" {

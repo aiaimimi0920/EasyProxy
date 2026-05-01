@@ -25,6 +25,21 @@ function Resolve-FullPath {
     return $item.FullName
 }
 
+function Sync-ItemIfNeeded {
+    param(
+        [Parameter(Mandatory = $true)][string]$SourcePath,
+        [Parameter(Mandatory = $true)][string]$DestinationPath
+    )
+
+    $sourceResolved = [System.IO.Path]::GetFullPath($SourcePath)
+    $destinationResolved = [System.IO.Path]::GetFullPath($DestinationPath)
+    if ([string]::Equals($sourceResolved, $destinationResolved, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return
+    }
+
+    Copy-Item -LiteralPath $sourceResolved -Destination $destinationResolved -Force
+}
+
 function Invoke-CheckedCommand {
     param(
         [Parameter(Mandatory = $true)][string]$FilePath,
@@ -60,8 +75,8 @@ if ($PSCmdlet.ShouldProcess($resolvedRuntimeRoot, "Prepare EasyProxy GHCR runtim
     $null = New-Item -ItemType Directory -Force -Path $resolvedRuntimeRoot
     $null = New-Item -ItemType Directory -Force -Path $runtimeDataPath
 
-    Copy-Item -LiteralPath $resolvedComposeSourcePath -Destination $runtimeComposePath -Force
-    Copy-Item -LiteralPath $resolvedConfigPath -Destination $runtimeConfigPath -Force
+    Sync-ItemIfNeeded -SourcePath $resolvedComposeSourcePath -DestinationPath $runtimeComposePath
+    Sync-ItemIfNeeded -SourcePath $resolvedConfigPath -DestinationPath $runtimeConfigPath
 
     @(
         "EASY_PROXY_SERVICE_IMAGE=$Image"

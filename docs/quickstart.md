@@ -63,9 +63,11 @@ Run these from the repository root:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project easyproxy -InitConfig
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project easyproxy-ghcr -InitConfig -ReleaseTag release-20260502-001
 powershell -ExecutionPolicy Bypass -File .\scripts\init-config.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\render-derived-configs.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\deploy-easyproxy.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-easyproxy.ps1 -FromGhcr -ReleaseTag release-20260502-001
 powershell -ExecutionPolicy Bypass -File .\scripts\build-easyproxy-image.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\build-ech-workers-image.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\publish-service-base-config.ps1
@@ -83,6 +85,8 @@ Notes:
 - root scripts now read defaults from `config.yaml`
 - `deploy-easyproxy.ps1` deploys `service/base` through the monorepo Docker
   Compose contract and renders `deploy/service/base/config.yaml` first
+- `deploy-easyproxy.ps1 -FromGhcr -ReleaseTag <tag>` is the canonical local
+  rollout path when you want the target host to pull a published GHCR image
 - `deploy-misub.ps1` defaults to Cloudflare Pages mode. Use `-Mode docker`
   if you explicitly want the Docker/VPS path.
 - `deploy-aggregator.ps1` targets the current GitHub Actions + R2 deployment
@@ -95,6 +99,7 @@ One-click examples:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project easyproxy -InitConfig
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project easyproxy-ghcr -InitConfig -ReleaseTag release-20260502-001
 powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project misub-pages -InitConfig
 powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project misub-docker -InitConfig
 powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project ech-workers-cloudflare -InitConfig
@@ -137,9 +142,9 @@ GitHub Actions equivalents:
   - bootstrap/import-code path for long-lived `service/base` runtime config delivery
 
 Local runtime deployment remains script-driven on the target machine. Use
-`scripts/deploy-easyproxy.ps1` for the local build/compose path, or
-`deploy/service/base/scripts/deploy-ghcr-runtime.ps1` when you want to pull a
-published GHCR image onto the target host.
+`scripts/deploy-easyproxy.ps1` for both local build/compose and local GHCR
+rollout. The lower-level `deploy/service/base/scripts/deploy-ghcr-runtime.ps1`
+helper remains available when you explicitly want the deployment-only helper.
 
 ## Import Code And Bootstrap
 
