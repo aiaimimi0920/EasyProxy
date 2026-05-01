@@ -306,9 +306,10 @@ def main() -> int:
     ensure(manifest_payload.get("success") is True, "MiSub manifest endpoint did not report success")
     manifest_sources = manifest_payload.get("sources") or []
     ensure(manifest_sources, "MiSub runtime manifest did not return any sources")
+    allowed_manifest_kinds = {"proxy_uri", "connector"}
     ensure(
-        all(str(source.get("kind", "")).strip() == "proxy_uri" for source in manifest_sources),
-        "MiSub runtime manifest returned non-proxy sources",
+        all(str(source.get("kind", "")).strip() in allowed_manifest_kinds for source in manifest_sources),
+        "MiSub runtime manifest returned unsupported source kinds",
     )
 
     summary = {
@@ -317,6 +318,9 @@ def main() -> int:
         "source_count": len(runtime_sources),
         "stable_uri_count": len(stable_uris),
         "stable_uris": stable_uris[:20],
+        "manifest_connector_count": sum(
+            1 for source in manifest_sources if str(source.get("kind", "")).strip() == "connector"
+        ),
     }
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0
