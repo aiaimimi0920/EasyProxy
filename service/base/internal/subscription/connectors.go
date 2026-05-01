@@ -3,9 +3,12 @@ package subscription
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -21,16 +24,18 @@ import (
 )
 
 const connectorTypeECHWorker = "ech_worker"
+const connectorTypeZenProxyClient = "zenproxy_client"
 
 type preferredIPRuntimeSelector func(context.Context, string, config.ConnectorRuntimeConfig, config.ConnectorSourceConfig, monitor.PreferredIPRefreshOptions) ([]preferredIPResultRow, string, string, error)
 
 type connectorRuntimeManager struct {
-	mu        sync.Mutex
-	ctx       context.Context
-	cancel    context.CancelFunc
-	logger    Logger
-	instances map[string]*connectorInstance
-	fanoutCache map[string][]RuntimeSource
+	mu                  sync.Mutex
+	ctx                 context.Context
+	cancel              context.CancelFunc
+	logger              Logger
+	httpClient          *http.Client
+	instances           map[string]*connectorInstance
+	fanoutCache         map[string][]RuntimeSource
 	preferredIPSelector preferredIPRuntimeSelector
 }
 
@@ -65,6 +70,35 @@ type echWorkerConnectorConfig struct {
 	ECHDomain     string
 }
 
+type zenProxyConnectorConfig struct {
+	APIKey      string
+	FetchPath   string
+	Count       int
+	Country     string
+	ProxyType   string
+	ProxyID     string
+	ChatGPT     bool
+	Google      bool
+	Residential bool
+	RiskMax     *float64
+	AuthInQuery bool
+}
+
+type zenProxyFetchResponse struct {
+	Proxies []zenProxyFetchedProxy `json:"proxies"`
+	Count   int                    `json:"count"`
+	Message string                 `json:"message"`
+}
+
+type zenProxyFetchedProxy struct {
+	ID       string         `json:"id"`
+	Name     string         `json:"name"`
+	Type     string         `json:"type"`
+	Server   string         `json:"server"`
+	Port     int            `json:"port"`
+	Outbound map[string]any `json:"outbound"`
+}
+
 func newConnectorRuntimeManager(parent context.Context, logger Logger) ConnectorRuntime {
 	if parent == nil {
 		parent = context.Background()
@@ -77,6 +111,7 @@ func newConnectorRuntimeManager(parent context.Context, logger Logger) Connector
 		ctx:                 ctx,
 		cancel:              cancel,
 		logger:              logger,
+		httpClient:          newConnectorHTTPClient(),
 		instances:           make(map[string]*connectorInstance),
 		fanoutCache:         make(map[string][]RuntimeSource),
 		preferredIPSelector: runPreferredIPSelection,
@@ -118,9 +153,6 @@ func (m *connectorRuntimeManager) Reconcile(cfg *config.Config, sources []Runtim
 	specs, err := m.buildConnectorSpecs(cfg, sources)
 	if err != nil {
 		return nil, err
-	}
-	if len(specs) == 0 {
-		return m.stopAllLocked()
 	}
 
 	desired := make(map[string]connectorSpec, len(specs))
@@ -178,6 +210,14 @@ func (m *connectorRuntimeManager) Reconcile(cfg *config.Config, sources []Runtim
 		})
 	}
 
+	zenProxySources, zenErr := m.fetchZenProxyRuntimeSources(cfg, sources)
+	if len(zenProxySources) > 0 {
+		runtimeSources = dedupeSourcesWithPrecedence(runtimeSources, zenProxySources)
+	}
+	if zenErr != nil {
+		errs = append(errs, zenErr.Error())
+	}
+
 	if len(errs) > 0 {
 		return runtimeSources, errors.New(strings.Join(errs, "; "))
 	}
@@ -200,6 +240,20 @@ func (m *connectorRuntimeManager) stopAllLocked() ([]RuntimeSource, error) {
 }
 
 func (m *connectorRuntimeManager) buildConnectorSpecs(cfg *config.Config, sources []RuntimeSource) ([]connectorSpec, error) {
+	hasECHSource := false
+	for _, source := range sources {
+		if source.Kind != SourceKindConnector {
+			continue
+		}
+		if extractStringOption(source.Options, "connector_type") == connectorTypeECHWorker {
+			hasECHSource = true
+			break
+		}
+	}
+	if !hasECHSource {
+		return nil, nil
+	}
+
 	binaryPath, err := resolveConnectorBinary(strings.TrimSpace(cfg.SourceSync.ConnectorRuntime.BinaryPath))
 	if err != nil {
 		return nil, err
@@ -227,6 +281,9 @@ func (m *connectorRuntimeManager) buildConnectorSpecs(cfg *config.Config, source
 		if source.Kind != SourceKindConnector {
 			continue
 		}
+		if extractStringOption(source.Options, "connector_type") != connectorTypeECHWorker {
+			continue
+		}
 		spec, err := buildECHWorkerConnectorSpec(cfg, source, idx, binaryPath, workingDir)
 		if err != nil {
 			return nil, err
@@ -251,6 +308,155 @@ func (m *connectorRuntimeManager) buildConnectorSpecs(cfg *config.Config, source
 	}
 
 	return specs, nil
+}
+
+func (m *connectorRuntimeManager) fetchZenProxyRuntimeSources(cfg *config.Config, sources []RuntimeSource) ([]RuntimeSource, error) {
+	if cfg == nil || len(sources) == 0 {
+		return nil, nil
+	}
+
+	var runtimeSources []RuntimeSource
+	var errs []string
+	timeout := cfg.SourceSync.RequestTimeout
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
+
+	for _, source := range sources {
+		if source.Kind != SourceKindConnector {
+			continue
+		}
+		if extractStringOption(source.Options, "connector_type") != connectorTypeZenProxyClient {
+			continue
+		}
+
+		connectorCfg, err := parseZenProxyConnectorConfig(extractMapOption(source.Options, "connector_config"))
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("zenproxy connector %s config: %v", source.Name, err))
+			continue
+		}
+
+		fetched, err := m.fetchZenProxyConnectorSource(cfg, source, connectorCfg, timeout)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("zenproxy connector %s fetch: %v", source.Name, err))
+			continue
+		}
+		runtimeSources = append(runtimeSources, fetched...)
+	}
+
+	if len(errs) > 0 {
+		return runtimeSources, errors.New(strings.Join(errs, "; "))
+	}
+	return runtimeSources, nil
+}
+
+func (m *connectorRuntimeManager) fetchZenProxyConnectorSource(cfg *config.Config, source RuntimeSource, connectorCfg zenProxyConnectorConfig, timeout time.Duration) ([]RuntimeSource, error) {
+	endpoint, err := buildZenProxyFetchURL(source.Input, connectorCfg.FetchPath)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := context.WithTimeout(m.ctx, timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	if connectorCfg.APIKey != "" && !connectorCfg.AuthInQuery {
+		req.Header.Set("Authorization", "Bearer "+connectorCfg.APIKey)
+	}
+
+	values := req.URL.Query()
+	if connectorCfg.AuthInQuery && connectorCfg.APIKey != "" {
+		values.Set("api_key", connectorCfg.APIKey)
+	}
+	if connectorCfg.Count > 0 {
+		values.Set("count", strconv.Itoa(connectorCfg.Count))
+	}
+	if connectorCfg.Country != "" {
+		values.Set("country", connectorCfg.Country)
+	}
+	if connectorCfg.ProxyType != "" {
+		values.Set("type", connectorCfg.ProxyType)
+	}
+	if connectorCfg.ProxyID != "" {
+		values.Set("proxy_id", connectorCfg.ProxyID)
+	}
+	if connectorCfg.ChatGPT {
+		values.Set("chatgpt", "true")
+	}
+	if connectorCfg.Google {
+		values.Set("google", "true")
+	}
+	if connectorCfg.Residential {
+		values.Set("residential", "true")
+	}
+	if connectorCfg.RiskMax != nil {
+		values.Set("risk_max", strconv.FormatFloat(*connectorCfg.RiskMax, 'f', -1, 64))
+	}
+	req.URL.RawQuery = values.Encode()
+
+	resp, err := m.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
+		return nil, fmt.Errorf("unexpected status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var payload zenProxyFetchResponse
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 2*1024*1024)).Decode(&payload); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+	if len(payload.Proxies) == 0 {
+		if strings.TrimSpace(payload.Message) != "" {
+			return nil, errors.New(strings.TrimSpace(payload.Message))
+		}
+		return nil, fmt.Errorf("no proxies returned")
+	}
+
+	providerRef := strings.TrimSpace(source.ID)
+	if providerRef == "" {
+		providerRef = sourceKey(source)
+	}
+
+	runtimeSources := make([]RuntimeSource, 0, len(payload.Proxies))
+	var conversionErrs []string
+	for idx, item := range payload.Proxies {
+		uri, err := config.BuildURIFromSingboxOutbound(item.Name, item.Outbound)
+		if err != nil {
+			conversionErrs = append(conversionErrs, fmt.Sprintf("%s: %v", firstNonEmpty(strings.TrimSpace(item.Name), strings.TrimSpace(item.ID), fmt.Sprintf("proxy-%d", idx+1)), err))
+			continue
+		}
+
+		displayName := buildZenProxyRuntimeDisplayName(source.Name, item.Name, item.Server, item.Port, idx)
+		runtimeSources = append(runtimeSources, RuntimeSource{
+			ID:     providerRef,
+			Kind:   SourceKindProxyURI,
+			Name:   displayName,
+			Input:  uri,
+			Origin: firstNonEmpty(strings.TrimSpace(source.Origin), "manifest"),
+			Options: map[string]any{
+				"connector_type":       connectorTypeZenProxyClient,
+				"connector_proxy_id":   strings.TrimSpace(item.ID),
+				"connector_proxy_type": firstNonEmpty(strings.TrimSpace(item.Type), strings.TrimSpace(extractStringOption(item.Outbound, "type"))),
+				"connector_provider":   firstNonEmpty(strings.TrimSpace(source.Name), "ZenProxy"),
+			},
+		})
+	}
+
+	if len(runtimeSources) == 0 && len(conversionErrs) > 0 {
+		return nil, fmt.Errorf("all returned proxies failed conversion: %s", strings.Join(conversionErrs, "; "))
+	}
+	if len(conversionErrs) > 0 {
+		return runtimeSources, fmt.Errorf("partial conversion failures: %s", strings.Join(conversionErrs, "; "))
+	}
+	return runtimeSources, nil
 }
 
 func (m *connectorRuntimeManager) expandConnectorSources(cfg *config.Config, sources []RuntimeSource) ([]RuntimeSource, error) {
@@ -622,6 +828,26 @@ func resolveConnectorBinary(configuredPath string) (string, error) {
 	return "", errors.New("ech-workers binary not found in PATH")
 }
 
+func newConnectorHTTPClient() *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+			DialContext: (&net.Dialer{
+				Timeout:   15 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          64,
+			MaxIdleConnsPerHost:   16,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+			ResponseHeaderTimeout: 15 * time.Second,
+		},
+		Timeout: 30 * time.Second,
+	}
+}
+
 func connectorWorkingDirectory(cfg *config.Config) string {
 	if cfg == nil {
 		return filepath.Join("data", "connectors")
@@ -725,6 +951,187 @@ func extractStringOption(options map[string]any, key string) string {
 	default:
 		return fmt.Sprint(typed)
 	}
+}
+
+func extractBoolOption(options map[string]any, key string) bool {
+	if options == nil {
+		return false
+	}
+	value, ok := options[key]
+	if !ok || value == nil {
+		return false
+	}
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		parsed, err := strconv.ParseBool(strings.TrimSpace(typed))
+		return err == nil && parsed
+	default:
+		return false
+	}
+}
+
+func extractIntOption(options map[string]any, key string, fallback int) int {
+	if options == nil {
+		return fallback
+	}
+	value, ok := options[key]
+	if !ok || value == nil {
+		return fallback
+	}
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case int8:
+		return int(typed)
+	case int16:
+		return int(typed)
+	case int32:
+		return int(typed)
+	case int64:
+		return int(typed)
+	case uint:
+		return int(typed)
+	case uint8:
+		return int(typed)
+	case uint16:
+		return int(typed)
+	case uint32:
+		return int(typed)
+	case uint64:
+		return int(typed)
+	case float32:
+		return int(typed)
+	case float64:
+		return int(typed)
+	case string:
+		parsed, err := strconv.Atoi(strings.TrimSpace(typed))
+		if err == nil {
+			return parsed
+		}
+	}
+	return fallback
+}
+
+func extractFloat64Option(options map[string]any, key string) *float64 {
+	if options == nil {
+		return nil
+	}
+	value, ok := options[key]
+	if !ok || value == nil {
+		return nil
+	}
+	var parsed float64
+	switch typed := value.(type) {
+	case float64:
+		parsed = typed
+	case float32:
+		parsed = float64(typed)
+	case int:
+		parsed = float64(typed)
+	case int8:
+		parsed = float64(typed)
+	case int16:
+		parsed = float64(typed)
+	case int32:
+		parsed = float64(typed)
+	case int64:
+		parsed = float64(typed)
+	case uint:
+		parsed = float64(typed)
+	case uint8:
+		parsed = float64(typed)
+	case uint16:
+		parsed = float64(typed)
+	case uint32:
+		parsed = float64(typed)
+	case uint64:
+		parsed = float64(typed)
+	case string:
+		value, err := strconv.ParseFloat(strings.TrimSpace(typed), 64)
+		if err != nil {
+			return nil
+		}
+		parsed = value
+	default:
+		return nil
+	}
+	return &parsed
+}
+
+func parseZenProxyConnectorConfig(options map[string]any) (zenProxyConnectorConfig, error) {
+	cfg := zenProxyConnectorConfig{
+		APIKey:      strings.TrimSpace(extractStringOption(options, "api_key")),
+		FetchPath:   strings.TrimSpace(extractStringOption(options, "fetch_path")),
+		Count:       extractIntOption(options, "count", 10),
+		Country:     strings.TrimSpace(extractStringOption(options, "country")),
+		ProxyType:   strings.TrimSpace(extractStringOption(options, "type")),
+		ProxyID:     strings.TrimSpace(extractStringOption(options, "proxy_id")),
+		ChatGPT:     extractBoolOption(options, "chatgpt"),
+		Google:      extractBoolOption(options, "google"),
+		Residential: extractBoolOption(options, "residential"),
+		RiskMax:     extractFloat64Option(options, "risk_max"),
+		AuthInQuery: extractBoolOption(options, "auth_in_query"),
+	}
+	if cfg.APIKey == "" {
+		return zenProxyConnectorConfig{}, fmt.Errorf("missing api_key")
+	}
+	if cfg.Count <= 0 {
+		cfg.Count = 10
+	}
+	return cfg, nil
+}
+
+func buildZenProxyFetchURL(rawInput string, fetchPath string) (string, error) {
+	trimmed := strings.TrimSpace(rawInput)
+	if trimmed == "" {
+		return "", fmt.Errorf("missing zenproxy input url")
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return "", fmt.Errorf("invalid zenproxy input url: %w", err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", fmt.Errorf("zenproxy input must be http(s)")
+	}
+
+	path := strings.TrimSpace(fetchPath)
+	if path == "" {
+		path = "/api/client/fetch"
+	}
+	if strings.HasSuffix(strings.TrimRight(parsed.Path, "/"), "/api/client/fetch") {
+		return parsed.String(), nil
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	parsed.Path = strings.TrimRight(parsed.Path, "/") + path
+	return parsed.String(), nil
+}
+
+func buildZenProxyRuntimeDisplayName(sourceName string, proxyName string, server string, port int, index int) string {
+	remote := strings.TrimSpace(proxyName)
+	if remote == "" && strings.TrimSpace(server) != "" && port > 0 {
+		remote = fmt.Sprintf("%s:%d", strings.TrimSpace(server), port)
+	}
+	if remote == "" {
+		remote = fmt.Sprintf("proxy-%d", index+1)
+	}
+	base := strings.TrimSpace(sourceName)
+	if base == "" {
+		return remote
+	}
+	return fmt.Sprintf("%s | %s", base, remote)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func isKilledProcessError(err error) bool {

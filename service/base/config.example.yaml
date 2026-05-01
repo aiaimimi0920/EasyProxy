@@ -123,7 +123,9 @@ geoip:
 
 # connector 说明：
 # - manifest 中 kind=connector、connector_type=ech_worker 的来源会被本地拉起为 ech-workers 进程
-# - 每个 connector 会被转换成本地 socks5://127.0.0.1:<port> 或 http://127.0.0.1:<port> 上游
+# - kind=connector、connector_type=zenproxy_client 的来源会在运行时请求 ZenProxy /api/client/fetch
+# - 每个 connector 会被转换成本地 socks5://127.0.0.1:<port> 或 http://127.0.0.1:<port> 上游，
+#   或转换成临时 proxy URI 节点
 # - 这些上游属于运行时临时来源，不会写回持久化本地节点库
 
 # ═══════════════════════════════════════════════════════════════

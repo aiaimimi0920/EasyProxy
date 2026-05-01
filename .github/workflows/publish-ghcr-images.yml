@@ -109,6 +109,12 @@ jobs:
         run: |
           go test ./internal/config
 
+      - name: Run service/base subscription tests
+        shell: pwsh
+        working-directory: service/base
+        run: |
+          go test ./internal/subscription
+
   publish:
     name: Build and publish GHCR images
     runs-on: ubuntu-latest

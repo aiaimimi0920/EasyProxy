@@ -108,6 +108,7 @@ cp ./config.example.yaml ./config.yaml
 - `subscriptions` / `nodes_file` / `nodes`: 节点来源（三选一或混用）
 - `source_sync.*`: 从 MiSub 拉取 machine manifest，并在失败时启用本地 fallback 订阅
 - `source_sync.connector_runtime.*`: 当 manifest 含有 `connector_type = ech_worker` 时，本地拉起 `ech-workers` 并转换成临时上游代理
+- `connectors[]` / manifest `connector`: 也支持 `connector_type = zenproxy_client`，运行时会请求 ZenProxy `/api/client/fetch` 并把返回的 sing-box outbound 转成临时节点
 - 纯 `source_sync` / 纯 connector 场景现在也可直接启动，不再需要本地占位节点
 
 ---

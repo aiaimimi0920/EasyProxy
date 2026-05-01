@@ -85,6 +85,23 @@ serviceBase:
         connector_config:
           local_protocol: socks5
           access_token: ""
+      - name: ZenProxy Provider
+        input: https://zenproxy.top
+        enabled: false
+        group: Shared Providers
+        notes: Fetch runtime proxies from ZenProxy /api/client/fetch
+        connector_type: zenproxy_client
+        connector_config:
+          api_key: ""
+          count: 10
+          country: ""
+          type: ""
+          proxy_id: ""
+          chatgpt: false
+          google: false
+          residential: false
+          risk_max: ""
+          fetch_path: /api/client/fetch
     subscriptions:
       - https://example.com/subscription-1
 

@@ -489,16 +489,26 @@ func normalizeManagedConnector(connector config.ConnectorSourceConfig) (config.C
 	if connector.ConnectorType == "" {
 		connector.ConnectorType = connectorTypeECHWorker
 	}
-	if connector.ConnectorType != connectorTypeECHWorker {
-		return config.ConnectorSourceConfig{}, fmt.Errorf("%w: 当前仅支持 ech_worker", monitor.ErrInvalidConnector)
-	}
 	if connector.ConnectorConfig == nil {
 		connector.ConnectorConfig = map[string]any{}
 	} else {
 		connector.ConnectorConfig = cloneConnectorOptions(connector.ConnectorConfig)
 	}
-	if strings.TrimSpace(extractStringOption(connector.ConnectorConfig, "local_protocol")) == "" {
-		connector.ConnectorConfig["local_protocol"] = "socks5"
+
+	switch connector.ConnectorType {
+	case connectorTypeECHWorker:
+		if strings.TrimSpace(extractStringOption(connector.ConnectorConfig, "local_protocol")) == "" {
+			connector.ConnectorConfig["local_protocol"] = "socks5"
+		}
+	case connectorTypeZenProxyClient:
+		if strings.TrimSpace(extractStringOption(connector.ConnectorConfig, "api_key")) == "" {
+			return config.ConnectorSourceConfig{}, fmt.Errorf("%w: zenproxy_client 缺少 api_key", monitor.ErrInvalidConnector)
+		}
+		if extractIntOption(connector.ConnectorConfig, "count", 0) <= 0 {
+			connector.ConnectorConfig["count"] = 10
+		}
+	default:
+		return config.ConnectorSourceConfig{}, fmt.Errorf("%w: 当前仅支持 ech_worker 和 zenproxy_client", monitor.ErrInvalidConnector)
 	}
 	return connector, nil
 }

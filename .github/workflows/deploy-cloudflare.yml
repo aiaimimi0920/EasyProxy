@@ -117,6 +117,12 @@ jobs:
         run: |
           go test ./internal/config
 
+      - name: Run service/base subscription tests
+        shell: pwsh
+        working-directory: service/base
+        run: |
+          go test ./internal/subscription
+
   deploy-misub-pages:
     name: Deploy MiSub Pages
     runs-on: ubuntu-latest

@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"easy_proxies/internal/config"
 	"easy_proxies/internal/monitor"
@@ -73,6 +74,135 @@ func TestBuildECHWorkerConnectorSpec(t *testing.T) {
 	}
 }
 
+func TestConnectorRuntimeManagerReconcileFetchesZenProxyClientSources(t *testing.T) {
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		if got := r.Header.Get("Authorization"); got != "Bearer zen-key" {
+			t.Fatalf("unexpected auth header: %q", got)
+		}
+		if got := r.URL.Query().Get("count"); got != "2" {
+			t.Fatalf("unexpected count query: %q", got)
+		}
+		if got := r.URL.Query().Get("country"); got != "US" {
+			t.Fatalf("unexpected country query: %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"count": 2,
+			"proxies": []map[string]any{
+				{
+					"id":   "proxy-1",
+					"name": "VMess Node",
+					"type": "vmess",
+					"outbound": map[string]any{
+						"type":        "vmess",
+						"server":      "vmess.example.com",
+						"server_port": 443,
+						"uuid":        "11111111-1111-1111-1111-111111111111",
+						"alter_id":    0,
+						"security":    "auto",
+						"tls": map[string]any{
+							"enabled":     true,
+							"server_name": "edge.example.com",
+							"insecure":    true,
+						},
+						"transport": map[string]any{
+							"type": "ws",
+							"path": "/ws",
+							"headers": map[string]any{
+								"Host": "edge.example.com",
+							},
+						},
+					},
+				},
+				{
+					"id":   "proxy-2",
+					"name": "HTTP Node",
+					"type": "http",
+					"outbound": map[string]any{
+						"type":        "http",
+						"server":      "http.example.com",
+						"server_port": 443,
+						"username":    "alice",
+						"password":    "secret",
+						"tls": map[string]any{
+							"enabled":     true,
+							"server_name": "origin.example.com",
+							"insecure":    true,
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	runtime := newConnectorRuntimeManager(context.Background(), defaultLogger{}).(*connectorRuntimeManager)
+	cfg := &config.Config{
+		SourceSync: config.SourceSyncConfig{
+			RequestTimeout:           5 * time.Second,
+			DefaultDirectProxyScheme: "http",
+		},
+	}
+
+	sources := []RuntimeSource{
+		{
+			ID:     "manifest-zenproxy",
+			Kind:   SourceKindConnector,
+			Name:   "ZenProxy Provider",
+			Input:  server.URL,
+			Origin: "manifest",
+			Options: map[string]any{
+				"connector_type": connectorTypeZenProxyClient,
+				"connector_config": map[string]any{
+					"api_key": "zen-key",
+					"count":   2,
+					"country": "US",
+				},
+			},
+		},
+	}
+
+	fetchedSources, fetchErr := runtime.fetchZenProxyRuntimeSources(cfg, sources)
+	if fetchErr != nil {
+		t.Fatalf("fetchZenProxyRuntimeSources() error = %v", fetchErr)
+	}
+	if len(fetchedSources) != 2 {
+		t.Fatalf("expected 2 fetched runtime sources before reconcile, got %d", len(fetchedSources))
+	}
+
+	runtimeSources, err := runtime.Reconcile(cfg, sources)
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+
+	if len(runtimeSources) != 2 {
+		t.Fatalf("expected 2 runtime sources, got %d (requestCount=%d)", len(runtimeSources), requestCount)
+	}
+	if requestCount != 2 {
+		t.Fatalf("expected 2 ZenProxy fetch requests (direct + reconcile), got %d", requestCount)
+	}
+	if runtimeSources[0].Kind != SourceKindProxyURI || runtimeSources[1].Kind != SourceKindProxyURI {
+		t.Fatalf("expected proxy uri runtime sources, got %#v", runtimeSources)
+	}
+	if runtimeSources[0].ID != "manifest-zenproxy" || runtimeSources[1].ID != "manifest-zenproxy" {
+		t.Fatalf("expected shared provider source ref, got %#v", runtimeSources)
+	}
+	if !strings.HasPrefix(runtimeSources[0].Input, "vmess://") {
+		t.Fatalf("expected vmess uri, got %q", runtimeSources[0].Input)
+	}
+	if !strings.HasPrefix(runtimeSources[1].Input, "http://alice:secret@http.example.com:443?") {
+		t.Fatalf("expected http uri, got %q", runtimeSources[1].Input)
+	}
+	if got := extractStringOption(runtimeSources[0].Options, "connector_type"); got != connectorTypeZenProxyClient {
+		t.Fatalf("unexpected connector type metadata: %q", got)
+	}
+	if got := extractStringOption(runtimeSources[0].Options, "connector_proxy_id"); got != "proxy-1" {
+		t.Fatalf("unexpected connector proxy id metadata: %q", got)
+	}
+}
+
 func TestSourceKeyKeepsDistinctConnectorConfigs(t *testing.T) {
 	first := RuntimeSource{
 		Kind:  SourceKindConnector,
@@ -99,6 +229,31 @@ func TestSourceKeyKeepsDistinctConnectorConfigs(t *testing.T) {
 
 	if sourceKey(first) == sourceKey(second) {
 		t.Fatalf("expected distinct keys for different connector configs")
+	}
+}
+
+func TestNormalizeManagedConnectorAcceptsZenProxyClient(t *testing.T) {
+	connector, err := normalizeManagedConnector(config.ConnectorSourceConfig{
+		Name:          "ZenProxy Provider",
+		Input:         "https://zenproxy.top",
+		ConnectorType: connectorTypeZenProxyClient,
+		ConnectorConfig: map[string]any{
+			"api_key": "demo-key",
+			"count":   8,
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalizeManagedConnector() error = %v", err)
+	}
+
+	if connector.ConnectorType != connectorTypeZenProxyClient {
+		t.Fatalf("unexpected connector type: %q", connector.ConnectorType)
+	}
+	if extractStringOption(connector.ConnectorConfig, "api_key") != "demo-key" {
+		t.Fatalf("expected api_key to be preserved, got %#v", connector.ConnectorConfig)
+	}
+	if extractIntOption(connector.ConnectorConfig, "count", 0) != 8 {
+		t.Fatalf("expected count to be preserved, got %#v", connector.ConnectorConfig)
 	}
 }
 
@@ -386,9 +541,9 @@ func TestBuildConnectorSpecsAutoFanoutSingleECHSource(t *testing.T) {
 	}
 
 	manager := &connectorRuntimeManager{
-		ctx:       context.Background(),
-		logger:    defaultLogger{},
-		instances: make(map[string]*connectorInstance),
+		ctx:         context.Background(),
+		logger:      defaultLogger{},
+		instances:   make(map[string]*connectorInstance),
 		fanoutCache: make(map[string][]RuntimeSource),
 		preferredIPSelector: func(_ context.Context, _ string, _ config.ConnectorRuntimeConfig, _ config.ConnectorSourceConfig, options monitor.PreferredIPRefreshOptions) ([]preferredIPResultRow, string, string, error) {
 			if options.TopCount != 2 {
@@ -404,8 +559,8 @@ func TestBuildConnectorSpecsAutoFanoutSingleECHSource(t *testing.T) {
 	cfg := &config.Config{
 		SourceSync: config.SourceSyncConfig{
 			ConnectorRuntime: config.ConnectorRuntimeConfig{
-				ListenHost: "127.0.0.1",
-				BinaryPath: binaryPath,
+				ListenHost:       "127.0.0.1",
+				BinaryPath:       binaryPath,
 				WorkingDirectory: t.TempDir(),
 				PreferredIP: config.PreferredIPGeneratorConfig{
 					FanoutCount: 2,

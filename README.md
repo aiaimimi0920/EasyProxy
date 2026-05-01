@@ -97,7 +97,7 @@ Responsibilities:
 
 - local proxy runtime and management API
 - source merge logic for local, manifest, and fallback inputs
-- local connector execution for supported connector sources
+- local connector execution for supported connector sources such as `ech_worker` and `zenproxy_client`
 - node scoring, health checks, and export surfaces
 
 ### `upstreams/misub`
@@ -107,7 +107,7 @@ The upstream-tracked shared source registry and manifest center that powers
 
 Responsibilities:
 
-- source registry for `subscription`, `proxy_uri`, and `connector`
+- source registry for `subscription`, `proxy_uri`, and `connector`, including provider-style connectors such as `ech_worker` and `zenproxy_client`
 - machine manifest endpoint for `service/base`
 - Cloudflare Pages + D1 primary deployment path
 - Docker / VPS compatibility path
@@ -377,6 +377,7 @@ Set-Location service/base
 go test ./internal/monitor
 go test ./internal/boxmgr
 go test ./internal/config
+go test ./internal/subscription
 ```
 
 Repository CI coverage:
@@ -384,7 +385,7 @@ Repository CI coverage:
 - `.github/workflows/validate.yml`
   - root PowerShell script smoke tests
   - `upstreams/aggregator` regression tests
-  - `service/base` monitor / boxmgr / config Go tests
+- `service/base` monitor / boxmgr / config / subscription Go tests
 - `.github/workflows/publish-ghcr-images.yml`
   - now runs the validation preflight before publishing GHCR images
 - `.github/workflows/deploy-cloudflare.yml`

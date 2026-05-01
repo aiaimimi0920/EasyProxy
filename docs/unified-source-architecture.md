@@ -38,8 +38,9 @@ Phase 1 defines three kinds:
     `http://user:pass@host:port`
 - `connector`
   - used by `upstreams/misub` to carry connector metadata such as `ECH Worker`
+    or provider-backed runtime sources like `ZenProxy`
   - currently executed locally by `service/base` when
-    `connector_type = ech_worker`
+    `connector_type = ech_worker` or `connector_type = zenproxy_client`
 
 ## Layer Responsibilities
 
@@ -168,7 +169,17 @@ Current manifest behavior:
 - selected `connector` sources are also emitted, including
   `options.connector_type` and `options.connector_config`
 - downstream runtime execution is currently implemented in `service/base` for
-  `connector_type = ech_worker`
+  `connector_type = ech_worker` and `connector_type = zenproxy_client`
+
+`zenproxy_client` connector contract:
+
+- `input` points at the ZenProxy server base URL or direct fetch endpoint
+- `options.connector_config.api_key` stores the ZenProxy user API key
+- optional filters such as `count`, `country`, `type`, `proxy_id`, `chatgpt`,
+  `google`, `residential`, and `risk_max` are forwarded to
+  `/api/client/fetch`
+- `service/base` converts each returned sing-box outbound into a runtime proxy
+  URI and treats the result as ephemeral manifest-origin nodes
 
 Profile lookup accepts either:
 
@@ -239,7 +250,8 @@ Current implemented state:
 
 - `subscription` + `proxy_uri` end-to-end support
 - `upstreams/misub` registry-level support for `connector` metadata, including
-  `ECH Worker`
+  `ECH Worker` and `ZenProxy client providers`
 - explicit `upstreams/misub` manifest endpoint
 - `service/base` runtime merge and fallback activation
 - `service/base` local lifecycle management for `connector_type = ech_worker`
+- `service/base` remote fetch + materialization for `connector_type = zenproxy_client`

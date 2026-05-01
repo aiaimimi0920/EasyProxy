@@ -86,6 +86,12 @@ jobs:
         run: |
           go test ./internal/config
 
+      - name: Run service/base subscription tests
+        shell: pwsh
+        working-directory: service/base
+        run: |
+          go test ./internal/subscription
+
       - name: Check git diff formatting
         shell: pwsh
         run: |
