@@ -49,10 +49,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.10"
+      - name: Assert Python availability
+        shell: pwsh
+        run: |
+          & python --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "python is required on the self-hosted deployment runner."
+          }
 
       - name: Resolve deployment metadata
         id: meta
