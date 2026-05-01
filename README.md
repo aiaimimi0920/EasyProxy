@@ -30,7 +30,8 @@ The public repository now owns the full operator surface:
 - post-deploy verification for every publish/deploy workflow
 
 This is the same operating model we want external users and maintainers to see:
-one repository, one release surface, one CI/CD control plane.
+one repository, one release surface, one CI/CD control plane for cloud and
+publish tasks, while local runtime deployment stays script-driven.
 
 ## Shared Config
 
@@ -217,16 +218,11 @@ Root-level operator entrypoints live under `scripts/`:
   - uploads the rendered `service/base` runtime config to private R2 storage
     and writes the current service distribution manifest
 
-GitHub-hosted publish workflow:
+GitHub-hosted cloud and publish workflows:
 
 - `.github/workflows/publish-ghcr-images.yml`
   - publishes GHCR images on tag push or manual workflow dispatch
   - does not require local Docker on the operator machine
-- `.github/workflows/deploy-service-base-runtime.yml`
-  - deploys the live `service/base` runtime from the published GHCR image on a
-    Windows self-hosted runner
-  - waits for the tagged GHCR image to become pullable, then updates
-    `easy-proxy-monorepo-service` through Docker Compose
 - `.github/workflows/publish-service-base-config.yml`
   - publishes the `service/base` runtime config distribution manifest and
     optional encrypted import-code artifact
@@ -251,8 +247,6 @@ The repository now exposes six primary GitHub-hosted operational workflows:
   - MiSub Pages + `ech-workers-cloudflare`
 - `Publish GHCR Images`
   - `service/base` + local `ech-workers`
-- `Deploy Service Base Runtime`
-  - self-hosted live runtime deployment from the tagged GHCR image
 - `Publish Service Base Config`
   - private config distribution manifest + optional encrypted import-code artifact
 - `Publish GitHub Release`
@@ -311,12 +305,10 @@ The workflow publishes to:
 - `ghcr.io/<repository-owner>/easy-proxy-monorepo-service:<release-tag>`
 - `ghcr.io/<repository-owner>/ech-workers-monorepo:<release-tag>`
 
-If a Windows self-hosted runner is registered for this repository, the same
-tag push also triggers:
+The canonical operator baseline is:
 
-- `.github/workflows/deploy-service-base-runtime.yml`
-  - waits for `ghcr.io/<repository-owner>/easy-proxy-monorepo-service:<release-tag>`
-  - redeploys the live `easy-proxy-monorepo-service` container from GHCR
+- GitHub-hosted cloud deploys plus GHCR/config/release publication
+- local script-driven runtime deployment on the target host
 
 ### Import Code And Bootstrap Examples
 

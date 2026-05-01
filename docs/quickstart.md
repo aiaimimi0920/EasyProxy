@@ -125,9 +125,6 @@ GitHub Actions equivalents:
 - `.github/workflows/validate.yml`
 - `.github/workflows/publish-ghcr-images.yml`
   - GHCR publish now depends on the validation preflight job
-- `.github/workflows/deploy-service-base-runtime.yml`
-  - release-tag deploy for the live `service/base` runtime on a Windows
-    self-hosted runner
 - `.github/workflows/publish-service-base-config.yml`
   - service/base config distribution now depends on the validation preflight job
 - `.github/workflows/deploy-cloudflare.yml`
@@ -138,6 +135,11 @@ GitHub Actions equivalents:
   - configure repository secrets before using GitHub-hosted Cloudflare deploys
 - [docs/service-base-config-distribution.md](/C:/Users/Public/nas_home/AI/GameEditor/EasyProxy/docs/service-base-config-distribution.md)
   - bootstrap/import-code path for long-lived `service/base` runtime config delivery
+
+Local runtime deployment remains script-driven on the target machine. Use
+`scripts/deploy-easyproxy.ps1` for the local build/compose path, or
+`deploy/service/base/scripts/deploy-ghcr-runtime.ps1` when you want to pull a
+published GHCR image onto the target host.
 
 ## Import Code And Bootstrap
 

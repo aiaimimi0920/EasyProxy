@@ -59,6 +59,9 @@ These defaults are encoded in:
   - local container deployment definition
 - `scripts/publish-ghcr-easy-proxy-service.ps1`
   - local publish helper for GHCR `easy-proxy-monorepo-service`
+- `scripts/deploy-ghcr-runtime.ps1`
+  - local-only helper that pulls a published GHCR image and updates
+    `easy-proxy-monorepo-service` through Docker Compose on the target host
 - `scripts/validate-easy-proxy-runtime.ps1`
   - full live validation script for local subscription, direct proxy, manifest,
     fallback, local connector, and manifest connector paths
@@ -294,10 +297,6 @@ GitHub Actions workflow:
     - platforms `linux/amd64` or `linux/amd64,linux/arm64`
   - publishes the service image without requiring a local Docker daemon on the
     operator machine
-- `.github/workflows/deploy-service-base-runtime.yml`
-  - deploys the live `easy-proxy-monorepo-service` container from the tagged
-    GHCR image on a Windows self-hosted runner
-  - waits for the image tag to become pullable before running Docker Compose
 - `.github/workflows/publish-service-base-config.yml`
   - publishes the rendered runtime config to private R2 storage
   - can also emit an encrypted owner-only import-code artifact
@@ -329,6 +328,23 @@ Published-image smoke path:
 powershell -ExecutionPolicy Bypass -File .\deploy\service\base\scripts\smoke-easy-proxy-docker-api.ps1 `
   -Image ghcr.io/<owner>/easy-proxy-monorepo-service:<release-tag>
 ```
+
+Local GHCR runtime deployment on the target host:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\render-derived-configs.ps1 `
+  -ServiceBase `
+  -ServiceOutput .\deploy\service\base\config.yaml
+
+powershell -ExecutionPolicy Bypass -File .\deploy\service\base\scripts\deploy-ghcr-runtime.ps1 `
+  -ConfigPath .\deploy\service\base\config.yaml `
+  -Image ghcr.io/<owner>/easy-proxy-monorepo-service:<release-tag>
+```
+
+This is the canonical operator path for live `service/base` rollout after
+GitHub Actions has finished publishing the tagged GHCR image and any private R2
+config artifacts. GitHub Actions in this repository do not directly control the
+client deployment host.
 
 Full live runtime validation:
 

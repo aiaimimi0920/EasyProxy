@@ -31,7 +31,6 @@ CI workflows:
 
 - `.github/workflows/validate.yml`
 - `.github/workflows/publish-ghcr-images.yml`
-- `.github/workflows/deploy-service-base-runtime.yml`
 - `.github/workflows/publish-service-base-config.yml`
 - `.github/workflows/publish-github-release.yml`
 - `.github/workflows/deploy-cloudflare.yml`
