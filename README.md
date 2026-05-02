@@ -182,12 +182,17 @@ Read the module-specific deployment notes:
 - `docs/unified-source-architecture.md`
 - `docs/upstream-sync.md`
 - `docs/migration-plan.md`
+- `docs/root-host-deploy-standard.md`
 - `CONTRIBUTING.md`
 
 ## Operator Scripts
 
 Root-level operator entrypoints live under `scripts/`:
 
+- `deploy-host.ps1`
+  - single-file host deploy wrapper
+  - can be downloaded and run without manually checking out the full repository
+  - bootstraps a local repo cache automatically before invoking the canonical deploy path
 - `scripts/deploy-subproject.ps1`
   - one-click entrypoint for per-module deploy/build tasks
   - auto-initializes `config.yaml` from template with `-InitConfig`
@@ -259,6 +264,9 @@ The repository now exposes six primary GitHub-hosted operational workflows:
 Run from repository root:
 
 ```powershell
+# EasyProxy runtime deploy from a single-file host wrapper
+powershell -ExecutionPolicy Bypass -File .\deploy-host.ps1 -ReleaseTag release-20260502-001
+
 # EasyProxy runtime deploy (Docker Compose)
 powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project easyproxy -InitConfig
 
@@ -315,6 +323,91 @@ The canonical operator baseline is:
 - GitHub-hosted cloud deploys plus GHCR/config/release publication
 - local script-driven runtime deployment on the target host
 
+### Local EasyProxy Docker Deploy
+
+Use this flow when a user clones the repository onto a target host and wants a
+single local script to pull the published GHCR image and deploy
+`easy-proxy-monorepo-service` into Docker.
+
+Prerequisites:
+
+- Windows PowerShell
+- Docker Desktop or another Docker engine with `docker compose`
+- Python 3 with `PyYAML`
+- repository checkout on the target host
+
+Prepare the local operator config:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\init-config.ps1
+```
+
+Then edit `config.yaml` and fill in the fields the local runtime actually
+needs. At minimum:
+
+- `ghcr.owner`
+  - the GitHub owner or org that publishes
+    `ghcr.io/<owner>/easy-proxy-monorepo-service:<release-tag>`
+- `serviceBase.runtime.source_sync.manifest_url`
+  - your real MiSub manifest URL
+- `serviceBase.runtime.source_sync.manifest_token`
+  - if your manifest endpoint requires auth
+- `serviceBase.runtime.management.password`
+  - recommended for the management API on `29888`
+- any connector secrets you actually use, for example:
+  - `serviceBase.runtime.connectors[*].connector_config.api_key`
+
+Recommended local GHCR rollout command:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-easyproxy.ps1 `
+  -FromGhcr `
+  -ReleaseTag release-20260502-001
+```
+
+Equivalent root one-click wrapper:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 `
+  -Project easyproxy-ghcr `
+  -InitConfig `
+  -ReleaseTag release-20260502-001
+```
+
+You can also pin the full image directly instead of using `ghcr.owner` plus
+`-ReleaseTag`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-easyproxy.ps1 `
+  -FromGhcr `
+  -Image ghcr.io/<owner>/easy-proxy-monorepo-service:<release-tag>
+```
+
+What the root script does:
+
+- renders `deploy/service/base/config.yaml` from the root `config.yaml`
+- ensures the target Docker network exists
+- pulls the requested GHCR image unless `-SkipPull` was passed
+- writes the runtime `.env` and compose inputs under `deploy/service/base`
+- replaces the existing `easy-proxy-monorepo-service` container if one already exists
+- runs Docker Compose to bring the runtime back up
+
+Recommended post-deploy checks:
+
+```powershell
+docker ps --filter "name=easy-proxy-monorepo-service"
+
+curl.exe -I -x "http://127.0.0.1:22323" "https://www.google.com/generate_204" --max-time 25 -k
+```
+
+If you set `serviceBase.runtime.management.password`, you can also inspect the
+runtime management API:
+
+```powershell
+$headers = @{ Authorization = "<management-password>" }
+Invoke-RestMethod -Uri "http://127.0.0.1:29888/api/source-sync/status" -Headers $headers
+```
+
 For local GHCR rollout, the canonical root entrypoint is:
 
 ```powershell
@@ -368,6 +461,7 @@ For local PowerShell publishing, set `ghcr.owner` in [config.example.yaml](/C:/U
 Supported `-Project` values:
 
 - `easyproxy`
+- `easyproxy-ghcr`
 - `misub-pages`
 - `misub-docker`
 - `aggregator`
