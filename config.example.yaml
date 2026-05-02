@@ -102,7 +102,8 @@ serviceBase:
           residential: false
           risk_max: ""
           fetch_path: /api/client/fetch
-    subscriptions: []
+    subscriptions:
+      - https://sub.aiaimimi.com/subs/effective.txt
 
 misub:
   projectRoot: upstreams/misub
