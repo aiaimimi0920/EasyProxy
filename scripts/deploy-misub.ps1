@@ -64,7 +64,7 @@ if ($Mode -eq "pages") {
 Assert-EasyProxyCommand -Name "docker" -Hint "Install Docker Desktop or another Docker engine first."
 
 $composeFile = Resolve-EasyProxyPath -Path (Get-EasyProxyConfigValue -Object $docker -Name 'composeFile' -Default 'upstreams/misub/docker-compose.yml')
-$envFile = Resolve-EasyProxyPath -Path (Get-EasyProxyConfigValue -Object $docker -Name 'envOutput' -Default 'upstreams/misub/.env')
+$envFile = Resolve-EasyProxyPath -Path (Get-EasyProxyConfigValue -Object $docker -Name 'envOutput' -Default 'upstreams/misub/.env') -AllowMissing
 Ensure-EasyProxyPathExists -Path $composeFile -Message "Missing MiSub docker compose file: $composeFile"
 if (-not $SkipRender) {
     $render = Join-Path $PSScriptRoot 'render-derived-configs.ps1'

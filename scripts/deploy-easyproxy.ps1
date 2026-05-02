@@ -26,7 +26,7 @@ Assert-EasyProxyCommand -Name "docker" -Hint "Install Docker Desktop or another 
 $config = Read-EasyProxyConfig -ConfigPath $ConfigPath
 $serviceBase = Get-EasyProxyConfigSection -Config $config -Name 'serviceBase'
 $composeFile = Resolve-EasyProxyPath -Path (Get-EasyProxyConfigValue -Object $serviceBase -Name 'composeFile' -Default 'deploy/service/base/docker-compose.yaml')
-$serviceOutput = Resolve-EasyProxyPath -Path (Get-EasyProxyConfigValue -Object $serviceBase -Name 'renderedConfigPath' -Default 'deploy/service/base/config.yaml')
+$serviceOutput = Resolve-EasyProxyPath -Path (Get-EasyProxyConfigValue -Object $serviceBase -Name 'renderedConfigPath' -Default 'deploy/service/base/config.yaml') -AllowMissing
 $networkName = [string](Get-EasyProxyConfigValue -Object $serviceBase -Name 'networkName' -Default 'EasyAiMi')
 $useGhcrDeploy = $FromGhcr -or -not [string]::IsNullOrWhiteSpace($Image) -or -not [string]::IsNullOrWhiteSpace($ReleaseTag)
 

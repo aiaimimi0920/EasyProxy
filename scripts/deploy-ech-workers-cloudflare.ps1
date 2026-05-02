@@ -17,7 +17,7 @@ $config = Read-EasyProxyConfig -ConfigPath $ConfigPath
 $worker = Get-EasyProxyConfigSection -Config $config -Name 'echWorkersCloudflare'
 $workerRoot = Resolve-EasyProxyPath -Path (Get-EasyProxyConfigValue -Object $worker -Name 'projectRoot' -Default 'workers/ech-workers-cloudflare')
 $wranglerConfig = Resolve-EasyProxyPath -Path (Get-EasyProxyConfigValue -Object $worker -Name 'wranglerConfig' -Default 'workers/ech-workers-cloudflare/wrangler.jsonc')
-$devVarsOutput = Resolve-EasyProxyPath -Path (Get-EasyProxyConfigValue -Object $worker -Name 'devVarsOutput' -Default 'workers/ech-workers-cloudflare/.dev.vars')
+$devVarsOutput = Resolve-EasyProxyPath -Path (Get-EasyProxyConfigValue -Object $worker -Name 'devVarsOutput' -Default 'workers/ech-workers-cloudflare/.dev.vars') -AllowMissing
 Ensure-EasyProxyPathExists -Path $wranglerConfig -Message "Missing wrangler config: $wranglerConfig"
 
 if (-not $SkipRender) {

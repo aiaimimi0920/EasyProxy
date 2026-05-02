@@ -9,18 +9,25 @@ function Get-EasyProxyRepoRoot {
 function Resolve-EasyProxyPath {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$Path
+        [string]$Path,
+        [switch]$AllowMissing
     )
 
     if ([string]::IsNullOrWhiteSpace($Path)) {
         throw "Path must not be empty."
     }
 
-    if ([System.IO.Path]::IsPathRooted($Path)) {
-        return (Resolve-Path -LiteralPath $Path).Path
+    $candidate = if ([System.IO.Path]::IsPathRooted($Path)) {
+        $Path
+    } else {
+        Join-Path (Get-EasyProxyRepoRoot) $Path
     }
 
-    return (Resolve-Path -LiteralPath (Join-Path (Get-EasyProxyRepoRoot) $Path)).Path
+    if ($AllowMissing) {
+        return [System.IO.Path]::GetFullPath($candidate)
+    }
+
+    return (Resolve-Path -LiteralPath $candidate).Path
 }
 
 function Ensure-EasyProxyPathExists {
