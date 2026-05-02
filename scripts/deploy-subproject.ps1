@@ -94,8 +94,9 @@ function Assert-ProjectConfigReady {
             $serviceBase = Get-EasyProxyConfigSection -Config $Config -Name 'serviceBase'
             $runtime = Get-EasyProxyConfigSection -Config $serviceBase -Name 'runtime'
             $sourceSync = Get-EasyProxyConfigSection -Config $runtime -Name 'source_sync'
+            $sourceSyncEnabled = [bool](Get-EasyProxyConfigValue -Object $sourceSync -Name 'enabled' -Default $false)
             $manifestUrl = [string](Get-EasyProxyConfigValue -Object $sourceSync -Name 'manifest_url' -Default '')
-            if ($manifestUrl -match 'example\.com') {
+            if ($sourceSyncEnabled -and $manifestUrl -match 'example\.com') {
                 $errors += "serviceBase.runtime.source_sync.manifest_url still uses an example domain."
             }
         }
