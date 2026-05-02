@@ -14,7 +14,7 @@ param(
         "publish-ech-workers-image",
         "publish-core-images"
     )]
-    [string]$Project = "easyproxy-ghcr",
+    [string]$Project = "easyproxy",
     [string]$ConfigPath = "config.yaml",
     [switch]$NoBuild,
     [switch]$NoInstall,
@@ -170,6 +170,18 @@ function Ensure-RepoRoot {
         }
 
         Move-Item -LiteralPath $extractedRoot.FullName -Destination $repoRoot
+    }
+
+    if (-not (Test-RepoLayout -Root $repoRoot -RequiredRelativePaths $RequiredRelativePaths)) {
+        $nestedCandidate = Get-ChildItem -LiteralPath $repoRoot -Directory -ErrorAction SilentlyContinue |
+            Where-Object { Test-RepoLayout -Root $_.FullName -RequiredRelativePaths $RequiredRelativePaths } |
+            Select-Object -First 1
+        if ($null -ne $nestedCandidate) {
+            Get-ChildItem -LiteralPath $nestedCandidate.FullName -Force | ForEach-Object {
+                Move-Item -LiteralPath $_.FullName -Destination $repoRoot -Force
+            }
+            Remove-Item -LiteralPath $nestedCandidate.FullName -Recurse -Force
+        }
     }
 
     if (-not (Test-RepoLayout -Root $repoRoot -RequiredRelativePaths $RequiredRelativePaths)) {
