@@ -143,7 +143,26 @@ Responsibilities:
 
 ## Quick Start
 
-### EasyProxy runtime
+### Root host deploy
+
+```powershell
+pwsh .\deploy-host.ps1
+```
+
+For a side-by-side isolated host deploy on a machine that already has a live
+EasyProxy runtime, override the container name and host port bindings:
+
+```powershell
+pwsh .\deploy-host.ps1 `
+  -Project easyproxy `
+  -ContainerName easy-proxy-monorepo-service-blankfinal01 `
+  -PoolPortBinding 22324:22323 `
+  -ManagementPortBinding 29889:29888 `
+  -MultiPortBinding 26000-26500:25000-25500 `
+  -NetworkAlias easy-proxy-service-blankfinal01
+```
+
+### EasyProxy runtime (manual local build)
 
 ```powershell
 Set-Location service/base/frontend

@@ -1,5 +1,24 @@
 # Quick Start
 
+## Root Host Deploy
+
+```powershell
+pwsh .\deploy-host.ps1
+```
+
+If the host already has a live EasyProxy runtime and you need a side-by-side
+instance for validation, pass isolated bindings:
+
+```powershell
+pwsh .\deploy-host.ps1 `
+  -Project easyproxy `
+  -ContainerName easy-proxy-monorepo-service-blankfinal01 `
+  -PoolPortBinding 22324:22323 `
+  -ManagementPortBinding 29889:29888 `
+  -MultiPortBinding 26000-26500:25000-25500 `
+  -NetworkAlias easy-proxy-service-blankfinal01
+```
+
 ## Main Runtime
 
 Build the frontend:
