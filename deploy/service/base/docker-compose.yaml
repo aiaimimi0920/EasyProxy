@@ -4,14 +4,14 @@ services:
       context: ../../..
       dockerfile: deploy/service/base/Dockerfile
     image: ${EASY_PROXY_SERVICE_IMAGE:-easyproxy/easy-proxy-monorepo-service:local}
-    container_name: easy-proxy-monorepo-service
+    container_name: ${EASY_PROXY_SERVICE_CONTAINER_NAME:-easy-proxy-monorepo-service}
     restart: unless-stopped
     cpus: 1.50
     mem_limit: 512m
     ports:
-      - "22323:22323"
-      - "29888:29888"
-      - "25000-25500:25000-25500"
+      - "${EASY_PROXY_SERVICE_POOL_PORT_BINDING:-22323:22323}"
+      - "${EASY_PROXY_SERVICE_MANAGEMENT_PORT_BINDING:-29888:29888}"
+      - "${EASY_PROXY_SERVICE_MULTI_PORT_BINDING:-25000-25500:25000-25500}"
     volumes:
       - ./config.yaml:/etc/easy-proxy/config.yaml
       - ./data:/var/lib/easy-proxy
@@ -22,7 +22,7 @@ services:
     networks:
       easyproxy-service-network:
         aliases:
-          - easy-proxy-service
+          - ${EASY_PROXY_SERVICE_NETWORK_ALIAS:-easy-proxy-service}
 
     # Optional file-based node source:
     # - ./nodes.txt:/etc/easy-proxy/nodes.txt

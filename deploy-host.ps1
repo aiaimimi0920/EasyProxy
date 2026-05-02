@@ -32,6 +32,11 @@ param(
     [switch]$LoadOnly,
     [string]$Image = "",
     [switch]$SkipPull,
+    [string]$ContainerName = "",
+    [string]$PoolPortBinding = "",
+    [string]$ManagementPortBinding = "",
+    [string]$MultiPortBinding = "",
+    [string]$NetworkAlias = "",
     [string]$RepoOwner = "aiaimimi0920",
     [string]$RepoName = "EasyProxy",
     [string]$RepoRef = "main",
@@ -235,5 +240,10 @@ if (-not [string]::IsNullOrWhiteSpace($GhcrToken)) { $args += @("-GhcrToken", $G
 if ($LoadOnly) { $args += "-LoadOnly" }
 if (-not [string]::IsNullOrWhiteSpace($Image)) { $args += @("-Image", $Image) }
 if ($SkipPull) { $args += "-SkipPull" }
+if (-not [string]::IsNullOrWhiteSpace($ContainerName)) { $args += @("-ContainerName", $ContainerName) }
+if (-not [string]::IsNullOrWhiteSpace($PoolPortBinding)) { $args += @("-PoolPortBinding", $PoolPortBinding) }
+if (-not [string]::IsNullOrWhiteSpace($ManagementPortBinding)) { $args += @("-ManagementPortBinding", $ManagementPortBinding) }
+if (-not [string]::IsNullOrWhiteSpace($MultiPortBinding)) { $args += @("-MultiPortBinding", $MultiPortBinding) }
+if (-not [string]::IsNullOrWhiteSpace($NetworkAlias)) { $args += @("-NetworkAlias", $NetworkAlias) }
 
 & powershell @args

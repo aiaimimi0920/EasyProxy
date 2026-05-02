@@ -32,7 +32,12 @@ param(
     [string]$GhcrToken,
     [switch]$LoadOnly,
     [string]$Image,
-    [switch]$SkipPull
+    [switch]$SkipPull,
+    [string]$ContainerName = '',
+    [string]$PoolPortBinding = '',
+    [string]$ManagementPortBinding = '',
+    [string]$MultiPortBinding = '',
+    [string]$NetworkAlias = ''
 )
 
 Set-StrictMode -Version Latest
@@ -171,6 +176,11 @@ switch ($Project) {
         $args = @("-ExecutionPolicy", "Bypass", "-File", $scriptPath, "-ConfigPath", $resolvedConfigPath)
         if ($NoBuild) { $args += "-NoBuild" }
         if ($SkipRender) { $args += "-SkipRender" }
+        if (-not [string]::IsNullOrWhiteSpace($ContainerName)) { $args += @("-ContainerName", $ContainerName) }
+        if (-not [string]::IsNullOrWhiteSpace($PoolPortBinding)) { $args += @("-PoolPortBinding", $PoolPortBinding) }
+        if (-not [string]::IsNullOrWhiteSpace($ManagementPortBinding)) { $args += @("-ManagementPortBinding", $ManagementPortBinding) }
+        if (-not [string]::IsNullOrWhiteSpace($MultiPortBinding)) { $args += @("-MultiPortBinding", $MultiPortBinding) }
+        if (-not [string]::IsNullOrWhiteSpace($NetworkAlias)) { $args += @("-NetworkAlias", $NetworkAlias) }
         Invoke-EasyProxyExternalCommand -FilePath "powershell" -Arguments $args -FailureMessage "easyproxy deploy failed"
         break
     }
@@ -181,6 +191,11 @@ switch ($Project) {
         if (-not [string]::IsNullOrWhiteSpace($ReleaseTag)) { $args += @("-ReleaseTag", $ReleaseTag) }
         if (-not [string]::IsNullOrWhiteSpace($GhcrOwner)) { $args += @("-GhcrOwner", $GhcrOwner) }
         if (-not [string]::IsNullOrWhiteSpace($Image)) { $args += @("-Image", $Image) }
+        if (-not [string]::IsNullOrWhiteSpace($ContainerName)) { $args += @("-ContainerName", $ContainerName) }
+        if (-not [string]::IsNullOrWhiteSpace($PoolPortBinding)) { $args += @("-PoolPortBinding", $PoolPortBinding) }
+        if (-not [string]::IsNullOrWhiteSpace($ManagementPortBinding)) { $args += @("-ManagementPortBinding", $ManagementPortBinding) }
+        if (-not [string]::IsNullOrWhiteSpace($MultiPortBinding)) { $args += @("-MultiPortBinding", $MultiPortBinding) }
+        if (-not [string]::IsNullOrWhiteSpace($NetworkAlias)) { $args += @("-NetworkAlias", $NetworkAlias) }
         if ($SkipPull) { $args += "-SkipPull" }
         Invoke-EasyProxyExternalCommand -FilePath "powershell" -Arguments $args -FailureMessage "easyproxy GHCR deploy failed"
         break

@@ -6,7 +6,12 @@ param(
     [string]$Image = '',
     [string]$ReleaseTag = '',
     [string]$GhcrOwner = '',
-    [switch]$SkipPull
+    [switch]$SkipPull,
+    [string]$ContainerName = '',
+    [string]$PoolPortBinding = '',
+    [string]$ManagementPortBinding = '',
+    [string]$MultiPortBinding = '',
+    [string]$NetworkAlias = ''
 )
 
 Set-StrictMode -Version Latest
@@ -67,6 +72,11 @@ if ($useGhcrDeploy) {
         '-NetworkName', $networkName,
         '-ComposeSourcePath', $composeFile
     )
+    if (-not [string]::IsNullOrWhiteSpace($ContainerName)) { $ghcrArgs += @('-ContainerName', $ContainerName) }
+    if (-not [string]::IsNullOrWhiteSpace($PoolPortBinding)) { $ghcrArgs += @('-PoolPortBinding', $PoolPortBinding) }
+    if (-not [string]::IsNullOrWhiteSpace($ManagementPortBinding)) { $ghcrArgs += @('-ManagementPortBinding', $ManagementPortBinding) }
+    if (-not [string]::IsNullOrWhiteSpace($MultiPortBinding)) { $ghcrArgs += @('-MultiPortBinding', $MultiPortBinding) }
+    if (-not [string]::IsNullOrWhiteSpace($NetworkAlias)) { $ghcrArgs += @('-NetworkAlias', $NetworkAlias) }
     if ($SkipPull) {
         $ghcrArgs += '-SkipPull'
     }
@@ -78,6 +88,11 @@ if ($useGhcrDeploy) {
 }
 
 $env:EASY_PROXY_SERVICE_NETWORK = $networkName
+if (-not [string]::IsNullOrWhiteSpace($ContainerName)) { $env:EASY_PROXY_SERVICE_CONTAINER_NAME = $ContainerName }
+if (-not [string]::IsNullOrWhiteSpace($PoolPortBinding)) { $env:EASY_PROXY_SERVICE_POOL_PORT_BINDING = $PoolPortBinding }
+if (-not [string]::IsNullOrWhiteSpace($ManagementPortBinding)) { $env:EASY_PROXY_SERVICE_MANAGEMENT_PORT_BINDING = $ManagementPortBinding }
+if (-not [string]::IsNullOrWhiteSpace($MultiPortBinding)) { $env:EASY_PROXY_SERVICE_MULTI_PORT_BINDING = $MultiPortBinding }
+if (-not [string]::IsNullOrWhiteSpace($NetworkAlias)) { $env:EASY_PROXY_SERVICE_NETWORK_ALIAS = $NetworkAlias }
 & docker network inspect $networkName *> $null
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Creating docker network: $networkName" -ForegroundColor Cyan

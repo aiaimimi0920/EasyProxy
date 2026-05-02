@@ -12,6 +12,16 @@ param(
 
     [string]$ComposeSourcePath = '',
 
+    [string]$ContainerName = '',
+
+    [string]$PoolPortBinding = '',
+
+    [string]$ManagementPortBinding = '',
+
+    [string]$MultiPortBinding = '',
+
+    [string]$NetworkAlias = '',
+
     [switch]$SkipPull
 )
 
@@ -70,6 +80,11 @@ $runtimeConfigPath = Join-Path $resolvedRuntimeRoot 'config.yaml'
 $runtimeDataPath = Join-Path $resolvedRuntimeRoot 'data'
 $runtimeComposePath = Join-Path $resolvedRuntimeRoot 'docker-compose.yaml'
 $runtimeEnvPath = Join-Path $resolvedRuntimeRoot '.env'
+$resolvedContainerName = if ([string]::IsNullOrWhiteSpace($ContainerName)) { 'easy-proxy-monorepo-service' } else { $ContainerName }
+$resolvedPoolPortBinding = if ([string]::IsNullOrWhiteSpace($PoolPortBinding)) { '22323:22323' } else { $PoolPortBinding }
+$resolvedManagementPortBinding = if ([string]::IsNullOrWhiteSpace($ManagementPortBinding)) { '29888:29888' } else { $ManagementPortBinding }
+$resolvedMultiPortBinding = if ([string]::IsNullOrWhiteSpace($MultiPortBinding)) { '25000-25500:25000-25500' } else { $MultiPortBinding }
+$resolvedNetworkAlias = if ([string]::IsNullOrWhiteSpace($NetworkAlias)) { 'easy-proxy-service' } else { $NetworkAlias }
 
 if ($PSCmdlet.ShouldProcess($resolvedRuntimeRoot, "Prepare EasyProxy GHCR runtime root")) {
     $null = New-Item -ItemType Directory -Force -Path $resolvedRuntimeRoot
@@ -81,6 +96,11 @@ if ($PSCmdlet.ShouldProcess($resolvedRuntimeRoot, "Prepare EasyProxy GHCR runtim
     @(
         "EASY_PROXY_SERVICE_IMAGE=$Image"
         "EASY_PROXY_SERVICE_NETWORK=$NetworkName"
+        "EASY_PROXY_SERVICE_CONTAINER_NAME=$resolvedContainerName"
+        "EASY_PROXY_SERVICE_POOL_PORT_BINDING=$resolvedPoolPortBinding"
+        "EASY_PROXY_SERVICE_MANAGEMENT_PORT_BINDING=$resolvedManagementPortBinding"
+        "EASY_PROXY_SERVICE_MULTI_PORT_BINDING=$resolvedMultiPortBinding"
+        "EASY_PROXY_SERVICE_NETWORK_ALIAS=$resolvedNetworkAlias"
     ) | Set-Content -LiteralPath $runtimeEnvPath -Encoding utf8
 }
 
@@ -97,10 +117,10 @@ if (-not $SkipPull) {
     }
 }
 
-$existingContainerId = (& docker ps -aq --filter 'name=^easy-proxy-monorepo-service$' 2>$null | Out-String).Trim()
+$existingContainerId = (& docker ps -aq --filter "name=^$resolvedContainerName$" 2>$null | Out-String).Trim()
 if (-not [string]::IsNullOrWhiteSpace($existingContainerId)) {
-    if ($PSCmdlet.ShouldProcess('easy-proxy-monorepo-service', 'Remove existing EasyProxy container before compose redeploy')) {
-        Invoke-CheckedCommand -FilePath 'docker' -Arguments @('rm', '-f', 'easy-proxy-monorepo-service') -FailureMessage 'Failed to remove existing easy-proxy-monorepo-service container'
+    if ($PSCmdlet.ShouldProcess($resolvedContainerName, 'Remove existing EasyProxy container before compose redeploy')) {
+        Invoke-CheckedCommand -FilePath 'docker' -Arguments @('rm', '-f', $resolvedContainerName) -FailureMessage "Failed to remove existing $resolvedContainerName container"
     }
 }
 
@@ -113,9 +133,9 @@ if ($PSCmdlet.ShouldProcess($runtimeComposePath, "Deploy EasyProxy service conta
     ) -FailureMessage 'Docker Compose deployment failed'
 }
 
-$deployedImage = (& docker inspect --format '{{.Config.Image}}' 'easy-proxy-monorepo-service' 2>$null)
+$deployedImage = (& docker inspect --format '{{.Config.Image}}' $resolvedContainerName 2>$null)
 if ($LASTEXITCODE -ne 0) {
-    throw 'Failed to inspect easy-proxy-monorepo-service after deployment'
+    throw "Failed to inspect $resolvedContainerName after deployment"
 }
 $deployedImage = ($deployedImage | Out-String).Trim()
 if ($deployedImage -ne $Image -and -not $deployedImage.StartsWith("$Image@")) {
@@ -125,3 +145,4 @@ if ($deployedImage -ne $Image -and -not $deployedImage.StartsWith("$Image@")) {
 Write-Host "EasyProxy GHCR runtime deployed successfully." -ForegroundColor Green
 Write-Host "Runtime root: $resolvedRuntimeRoot"
 Write-Host "Image: $Image"
+Write-Host "Container name: $resolvedContainerName"
