@@ -102,8 +102,7 @@ serviceBase:
           residential: false
           risk_max: ""
           fetch_path: /api/client/fetch
-    subscriptions:
-      - https://example.com/subscription-1
+    subscriptions: []
 
 misub:
   projectRoot: upstreams/misub
