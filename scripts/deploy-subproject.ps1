@@ -37,7 +37,8 @@ param(
     [string]$PoolPortBinding = '',
     [string]$ManagementPortBinding = '',
     [string]$MultiPortBinding = '',
-    [string]$NetworkAlias = ''
+    [string]$NetworkAlias = '',
+    [string]$ComposeProjectName = ''
 )
 
 Set-StrictMode -Version Latest
@@ -182,6 +183,7 @@ switch ($Project) {
         if (-not [string]::IsNullOrWhiteSpace($ManagementPortBinding)) { $args += @("-ManagementPortBinding", $ManagementPortBinding) }
         if (-not [string]::IsNullOrWhiteSpace($MultiPortBinding)) { $args += @("-MultiPortBinding", $MultiPortBinding) }
         if (-not [string]::IsNullOrWhiteSpace($NetworkAlias)) { $args += @("-NetworkAlias", $NetworkAlias) }
+        if (-not [string]::IsNullOrWhiteSpace($ComposeProjectName)) { $args += @("-ComposeProjectName", $ComposeProjectName) }
         Invoke-EasyProxyExternalCommand -FilePath "powershell" -Arguments $args -FailureMessage "easyproxy deploy failed"
         break
     }
@@ -197,6 +199,7 @@ switch ($Project) {
         if (-not [string]::IsNullOrWhiteSpace($ManagementPortBinding)) { $args += @("-ManagementPortBinding", $ManagementPortBinding) }
         if (-not [string]::IsNullOrWhiteSpace($MultiPortBinding)) { $args += @("-MultiPortBinding", $MultiPortBinding) }
         if (-not [string]::IsNullOrWhiteSpace($NetworkAlias)) { $args += @("-NetworkAlias", $NetworkAlias) }
+        if (-not [string]::IsNullOrWhiteSpace($ComposeProjectName)) { $args += @("-ComposeProjectName", $ComposeProjectName) }
         if ($SkipPull) { $args += "-SkipPull" }
         Invoke-EasyProxyExternalCommand -FilePath "powershell" -Arguments $args -FailureMessage "easyproxy GHCR deploy failed"
         break

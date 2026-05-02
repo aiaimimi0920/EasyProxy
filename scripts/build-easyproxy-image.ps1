@@ -19,7 +19,7 @@ $serviceBase = Get-EasyProxyConfigSection -Config $config -Name 'serviceBase'
 $context = Resolve-EasyProxyPath -Path (Get-EasyProxyConfigValue -Object $serviceBase -Name 'context' -Default '.')
 $dockerfile = Resolve-EasyProxyPath -Path (Get-EasyProxyConfigValue -Object $serviceBase -Name 'dockerfile' -Default 'deploy/service/base/Dockerfile')
 if ([string]::IsNullOrWhiteSpace($Image)) {
-    $Image = [string](Get-EasyProxyConfigValue -Object $serviceBase -Name 'image' -Default 'easyproxy/easy-proxy-monorepo-service:local')
+$Image = [string](Get-EasyProxyConfigValue -Object $serviceBase -Name 'image' -Default 'easy-proxy/easy-proxy:local')
 }
 
 $args = @("build", "-f", $dockerfile, "-t", $Image)

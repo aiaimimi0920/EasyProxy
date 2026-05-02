@@ -11,7 +11,8 @@ param(
     [string]$PoolPortBinding = '',
     [string]$ManagementPortBinding = '',
     [string]$MultiPortBinding = '',
-    [string]$NetworkAlias = ''
+    [string]$NetworkAlias = '',
+    [string]$ComposeProjectName = ''
 )
 
 Set-StrictMode -Version Latest
@@ -77,6 +78,7 @@ if ($useGhcrDeploy) {
     if (-not [string]::IsNullOrWhiteSpace($ManagementPortBinding)) { $ghcrArgs += @('-ManagementPortBinding', $ManagementPortBinding) }
     if (-not [string]::IsNullOrWhiteSpace($MultiPortBinding)) { $ghcrArgs += @('-MultiPortBinding', $MultiPortBinding) }
     if (-not [string]::IsNullOrWhiteSpace($NetworkAlias)) { $ghcrArgs += @('-NetworkAlias', $NetworkAlias) }
+    if (-not [string]::IsNullOrWhiteSpace($ComposeProjectName)) { $ghcrArgs += @('-ComposeProjectName', $ComposeProjectName) }
     if ($SkipPull) {
         $ghcrArgs += '-SkipPull'
     }
@@ -93,13 +95,14 @@ if (-not [string]::IsNullOrWhiteSpace($PoolPortBinding)) { $env:EASY_PROXY_SERVI
 if (-not [string]::IsNullOrWhiteSpace($ManagementPortBinding)) { $env:EASY_PROXY_SERVICE_MANAGEMENT_PORT_BINDING = $ManagementPortBinding }
 if (-not [string]::IsNullOrWhiteSpace($MultiPortBinding)) { $env:EASY_PROXY_SERVICE_MULTI_PORT_BINDING = $MultiPortBinding }
 if (-not [string]::IsNullOrWhiteSpace($NetworkAlias)) { $env:EASY_PROXY_SERVICE_NETWORK_ALIAS = $NetworkAlias }
+$resolvedComposeProjectName = if (-not [string]::IsNullOrWhiteSpace($ComposeProjectName)) { $ComposeProjectName } else { 'easy-proxy' }
 & docker network inspect $networkName *> $null
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Creating docker network: $networkName" -ForegroundColor Cyan
     Invoke-EasyProxyExternalCommand -FilePath 'docker' -Arguments @('network', 'create', $networkName) -FailureMessage "Failed to create docker network $networkName"
 }
 
-$composeArgs = @('compose', '-f', $composeFile, 'up', '-d')
+$composeArgs = @('compose', '-p', $resolvedComposeProjectName, '-f', $composeFile, 'up', '-d')
 if (-not $NoBuild) {
     $composeArgs += '--build'
 }

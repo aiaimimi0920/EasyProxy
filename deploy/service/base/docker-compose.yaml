@@ -1,10 +1,10 @@
 services:
-  easy-proxy-monorepo-service:
+  easy-proxy:
     build:
       context: ../../..
       dockerfile: deploy/service/base/Dockerfile
-    image: ${EASY_PROXY_SERVICE_IMAGE:-easyproxy/easy-proxy-monorepo-service:local}
-    container_name: ${EASY_PROXY_SERVICE_CONTAINER_NAME:-easy-proxy-monorepo-service}
+    image: ${EASY_PROXY_SERVICE_IMAGE:-easy-proxy/easy-proxy:local}
+    container_name: ${EASY_PROXY_SERVICE_CONTAINER_NAME:-easy-proxy}
     restart: unless-stopped
     cpus: 1.50
     mem_limit: 512m
@@ -22,7 +22,7 @@ services:
     networks:
       easyproxy-service-network:
         aliases:
-          - ${EASY_PROXY_SERVICE_NETWORK_ALIAS:-easy-proxy-service}
+          - ${EASY_PROXY_SERVICE_NETWORK_ALIAS:-easy-proxy}
 
     # Optional file-based node source:
     # - ./nodes.txt:/etc/easy-proxy/nodes.txt

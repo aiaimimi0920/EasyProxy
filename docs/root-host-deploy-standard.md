@@ -28,3 +28,13 @@ The contract for that file is:
    without launching the full runtime.
 
 Future deploy changes must preserve this contract.
+
+## Canonical Docker Naming
+
+This repo must keep the short slug `easy-proxy` as the operator-facing
+default for:
+
+- Docker Compose project name
+- default container name
+- default network alias
+- default local image name `easy-proxy/easy-proxy:local`

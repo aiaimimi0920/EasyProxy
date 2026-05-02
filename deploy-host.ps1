@@ -32,11 +32,12 @@ param(
     [switch]$LoadOnly,
     [string]$Image = "",
     [switch]$SkipPull,
-    [string]$ContainerName = "",
+    [string]$ContainerName = "easy-proxy",
     [string]$PoolPortBinding = "",
     [string]$ManagementPortBinding = "",
     [string]$MultiPortBinding = "",
-    [string]$NetworkAlias = "",
+    [string]$NetworkAlias = "easy-proxy",
+    [string]$ComposeProjectName = "easy-proxy",
     [string]$RepoOwner = "aiaimimi0920",
     [string]$RepoName = "EasyProxy",
     [string]$RepoRef = "main",
@@ -257,5 +258,6 @@ if (-not [string]::IsNullOrWhiteSpace($PoolPortBinding)) { $args += @("-PoolPort
 if (-not [string]::IsNullOrWhiteSpace($ManagementPortBinding)) { $args += @("-ManagementPortBinding", $ManagementPortBinding) }
 if (-not [string]::IsNullOrWhiteSpace($MultiPortBinding)) { $args += @("-MultiPortBinding", $MultiPortBinding) }
 if (-not [string]::IsNullOrWhiteSpace($NetworkAlias)) { $args += @("-NetworkAlias", $NetworkAlias) }
+if (-not [string]::IsNullOrWhiteSpace($ComposeProjectName)) { $args += @("-ComposeProjectName", $ComposeProjectName) }
 
 & powershell @args

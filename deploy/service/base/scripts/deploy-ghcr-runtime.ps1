@@ -22,6 +22,8 @@ param(
 
     [string]$NetworkAlias = '',
 
+    [string]$ComposeProjectName = ''
+
     [switch]$SkipPull
 )
 
@@ -80,11 +82,12 @@ $runtimeConfigPath = Join-Path $resolvedRuntimeRoot 'config.yaml'
 $runtimeDataPath = Join-Path $resolvedRuntimeRoot 'data'
 $runtimeComposePath = Join-Path $resolvedRuntimeRoot 'docker-compose.yaml'
 $runtimeEnvPath = Join-Path $resolvedRuntimeRoot '.env'
-$resolvedContainerName = if ([string]::IsNullOrWhiteSpace($ContainerName)) { 'easy-proxy-monorepo-service' } else { $ContainerName }
+$resolvedContainerName = if ([string]::IsNullOrWhiteSpace($ContainerName)) { 'easy-proxy' } else { $ContainerName }
 $resolvedPoolPortBinding = if ([string]::IsNullOrWhiteSpace($PoolPortBinding)) { '22323:22323' } else { $PoolPortBinding }
 $resolvedManagementPortBinding = if ([string]::IsNullOrWhiteSpace($ManagementPortBinding)) { '29888:29888' } else { $ManagementPortBinding }
 $resolvedMultiPortBinding = if ([string]::IsNullOrWhiteSpace($MultiPortBinding)) { '25000-25500:25000-25500' } else { $MultiPortBinding }
-$resolvedNetworkAlias = if ([string]::IsNullOrWhiteSpace($NetworkAlias)) { 'easy-proxy-service' } else { $NetworkAlias }
+$resolvedNetworkAlias = if ([string]::IsNullOrWhiteSpace($NetworkAlias)) { 'easy-proxy' } else { $NetworkAlias }
+$resolvedComposeProjectName = if ([string]::IsNullOrWhiteSpace($ComposeProjectName)) { 'easy-proxy' } else { $ComposeProjectName }
 
 if ($PSCmdlet.ShouldProcess($resolvedRuntimeRoot, "Prepare EasyProxy GHCR runtime root")) {
     $null = New-Item -ItemType Directory -Force -Path $resolvedRuntimeRoot
@@ -101,6 +104,7 @@ if ($PSCmdlet.ShouldProcess($resolvedRuntimeRoot, "Prepare EasyProxy GHCR runtim
         "EASY_PROXY_SERVICE_MANAGEMENT_PORT_BINDING=$resolvedManagementPortBinding"
         "EASY_PROXY_SERVICE_MULTI_PORT_BINDING=$resolvedMultiPortBinding"
         "EASY_PROXY_SERVICE_NETWORK_ALIAS=$resolvedNetworkAlias"
+        "EASY_PROXY_SERVICE_COMPOSE_PROJECT_NAME=$resolvedComposeProjectName"
     ) | Set-Content -LiteralPath $runtimeEnvPath -Encoding utf8
 }
 
@@ -127,6 +131,7 @@ if (-not [string]::IsNullOrWhiteSpace($existingContainerId)) {
 if ($PSCmdlet.ShouldProcess($runtimeComposePath, "Deploy EasyProxy service container from GHCR")) {
     Invoke-CheckedCommand -FilePath 'docker' -Arguments @(
         'compose',
+        '-p', $resolvedComposeProjectName,
         '--env-file', $runtimeEnvPath,
         '-f', $runtimeComposePath,
         'up', '-d', '--remove-orphans'
@@ -146,3 +151,4 @@ Write-Host "EasyProxy GHCR runtime deployed successfully." -ForegroundColor Gree
 Write-Host "Runtime root: $resolvedRuntimeRoot"
 Write-Host "Image: $Image"
 Write-Host "Container name: $resolvedContainerName"
+Write-Host "Compose project: $resolvedComposeProjectName"

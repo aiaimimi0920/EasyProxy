@@ -7,7 +7,7 @@
 serviceBase:
   context: .
   dockerfile: deploy/service/base/Dockerfile
-  image: easyproxy/easy-proxy-monorepo-service:local
+  image: easy-proxy/easy-proxy:local
   composeFile: deploy/service/base/docker-compose.yaml
   renderedConfigPath: deploy/service/base/config.yaml
   networkName: EasyAiMi
