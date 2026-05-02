@@ -22,7 +22,7 @@ param(
 
     [string]$NetworkAlias = '',
 
-    [string]$ComposeProjectName = ''
+    [string]$ComposeProjectName = '',
 
     [switch]$SkipPull
 )
