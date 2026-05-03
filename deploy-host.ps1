@@ -16,6 +16,8 @@ param(
     )]
     [string]$Project = "easyproxy",
     [string]$ConfigPath = "config.yaml",
+    [string]$ImportCode = "",
+    [string]$BootstrapFile = "",
     [switch]$NoBuild,
     [switch]$NoInstall,
     [switch]$SkipRender,
@@ -228,12 +230,21 @@ if (-not (Test-Path -LiteralPath $resolvedConfigPath)) {
     Write-Host "[deploy-host] created config file from template: $resolvedConfigPath" -ForegroundColor Yellow
 }
 
+if (-not [string]::IsNullOrWhiteSpace($ImportCode) -and -not [string]::IsNullOrWhiteSpace($BootstrapFile)) {
+    throw 'Specify either ImportCode or BootstrapFile, not both.'
+}
+if ((-not [string]::IsNullOrWhiteSpace($ImportCode) -or -not [string]::IsNullOrWhiteSpace($BootstrapFile)) -and $Project -notin @('easyproxy', 'easyproxy-ghcr')) {
+    throw "Project '$Project' does not support ImportCode/BootstrapFile bootstrap."
+}
+
 $args = @(
     "-ExecutionPolicy", "Bypass",
     "-File", $deployScript,
     "-Project", $Project,
     "-ConfigPath", $resolvedConfigPath
 )
+if (-not [string]::IsNullOrWhiteSpace($ImportCode)) { $args += @("-ImportCode", $ImportCode) }
+if (-not [string]::IsNullOrWhiteSpace($BootstrapFile)) { $args += @("-BootstrapFile", (Resolve-AbsolutePath -Path $BootstrapFile -BaseDir $launcherRoot)) }
 if (-not (Test-Path -LiteralPath $resolvedConfigPath)) {
     $args += "-InitConfig"
 }

@@ -149,6 +149,19 @@ Responsibilities:
 pwsh .\deploy-host.ps1
 ```
 
+The same root entrypoint now also supports owner-only runtime bootstrap
+through either:
+
+- `-ImportCode <decrypted-import-code>`
+- `-BootstrapFile <r2-bootstrap.json>`
+
+If you keep the owner private key as a stable passphrase string instead of a
+raw base64 private key, derive the matching public key with:
+
+```powershell
+python .\scripts\easyproxy-import-code.py derive-public-key --private-key-file .\owner-private-key.txt
+```
+
 For a side-by-side isolated host deploy on a machine that already has a live
 EasyProxy runtime, override the container name and host port bindings:
 

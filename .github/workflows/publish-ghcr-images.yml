@@ -132,6 +132,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.10'
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -170,6 +175,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Install distribution dependencies
+        if: steps.prep.outputs.target == 'both' || steps.prep.outputs.target == 'easyproxy'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install boto3 PyYAML pynacl
+
       - name: Extract metadata for EasyProxy service image
         if: steps.prep.outputs.target == 'both' || steps.prep.outputs.target == 'easyproxy'
         id: meta_service
@@ -205,6 +218,137 @@ jobs:
         run: |
           .\deploy\service\base\scripts\smoke-easy-proxy-docker-api.ps1 `
             -Image "ghcr.io/${{ steps.prep.outputs.owner_lc }}/easy-proxy-monorepo-service:${{ steps.prep.outputs.release_tag }}"
+
+      - name: Resolve service/base distribution secrets
+        if: steps.prep.outputs.target == 'both' || steps.prep.outputs.target == 'easyproxy'
+        id: service_base_distribution
+        env:
+          EASYPROXY_ROOT_CONFIG_YAML_B64: ${{ secrets.EASYPROXY_ROOT_CONFIG_YAML_B64 }}
+          EASYPROXY_R2_CONFIG_ACCOUNT_ID: ${{ secrets.EASYPROXY_R2_CONFIG_ACCOUNT_ID }}
+          EASYPROXY_R2_CONFIG_BUCKET: ${{ secrets.EASYPROXY_R2_CONFIG_BUCKET }}
+          EASYPROXY_R2_CONFIG_ENDPOINT: ${{ secrets.EASYPROXY_R2_CONFIG_ENDPOINT }}
+          EASYPROXY_R2_CONFIG_CONFIG_OBJECT_KEY: ${{ secrets.EASYPROXY_R2_CONFIG_CONFIG_OBJECT_KEY }}
+          EASYPROXY_R2_CONFIG_MANIFEST_OBJECT_KEY: ${{ secrets.EASYPROXY_R2_CONFIG_MANIFEST_OBJECT_KEY }}
+          EASYPROXY_R2_CONFIG_UPLOAD_ACCESS_KEY_ID: ${{ secrets.EASYPROXY_R2_CONFIG_UPLOAD_ACCESS_KEY_ID }}
+          EASYPROXY_R2_CONFIG_UPLOAD_SECRET_ACCESS_KEY: ${{ secrets.EASYPROXY_R2_CONFIG_UPLOAD_SECRET_ACCESS_KEY }}
+          EASYPROXY_R2_CONFIG_READ_ACCESS_KEY_ID: ${{ secrets.EASYPROXY_R2_CONFIG_READ_ACCESS_KEY_ID }}
+          EASYPROXY_R2_CONFIG_READ_SECRET_ACCESS_KEY: ${{ secrets.EASYPROXY_R2_CONFIG_READ_SECRET_ACCESS_KEY }}
+          EASYPROXY_IMPORT_CODE_OWNER_PUBLIC_KEY: ${{ secrets.EASYPROXY_IMPORT_CODE_OWNER_PUBLIC_KEY }}
+        shell: pwsh
+        run: |
+          $distributionEnabled = $true
+          foreach ($name in @(
+            'EASYPROXY_ROOT_CONFIG_YAML_B64',
+            'EASYPROXY_R2_CONFIG_ACCOUNT_ID',
+            'EASYPROXY_R2_CONFIG_BUCKET',
+            'EASYPROXY_R2_CONFIG_CONFIG_OBJECT_KEY',
+            'EASYPROXY_R2_CONFIG_MANIFEST_OBJECT_KEY',
+            'EASYPROXY_R2_CONFIG_UPLOAD_ACCESS_KEY_ID',
+            'EASYPROXY_R2_CONFIG_UPLOAD_SECRET_ACCESS_KEY'
+          )) {
+            if ([string]::IsNullOrWhiteSpace((Get-Item -Path "Env:$name" -ErrorAction SilentlyContinue).Value)) {
+              $distributionEnabled = $false
+              break
+            }
+          }
+
+          $importEnabled = $distributionEnabled
+          foreach ($name in @(
+            'EASYPROXY_R2_CONFIG_READ_ACCESS_KEY_ID',
+            'EASYPROXY_R2_CONFIG_READ_SECRET_ACCESS_KEY',
+            'EASYPROXY_IMPORT_CODE_OWNER_PUBLIC_KEY'
+          )) {
+            if ([string]::IsNullOrWhiteSpace((Get-Item -Path "Env:$name" -ErrorAction SilentlyContinue).Value)) {
+              $importEnabled = $false
+              break
+            }
+          }
+
+          "distribution_enabled=$($distributionEnabled.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          "import_enabled=$($importEnabled.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+
+      - name: Materialize service/base root config
+        if: steps.service_base_distribution.outputs.distribution_enabled == 'true'
+        shell: bash
+        env:
+          EASYPROXY_ROOT_CONFIG_YAML_B64: ${{ secrets.EASYPROXY_ROOT_CONFIG_YAML_B64 }}
+        run: |
+          set -euo pipefail
+          printf '%s' "${EASYPROXY_ROOT_CONFIG_YAML_B64}" | base64 -d > config.yaml
+
+      - name: Upload service/base runtime config distribution
+        if: steps.service_base_distribution.outputs.distribution_enabled == 'true'
+        id: runtime_config_upload
+        shell: pwsh
+        env:
+          EASYPROXY_R2_CONFIG_ACCOUNT_ID: ${{ secrets.EASYPROXY_R2_CONFIG_ACCOUNT_ID }}
+          EASYPROXY_R2_CONFIG_BUCKET: ${{ secrets.EASYPROXY_R2_CONFIG_BUCKET }}
+          EASYPROXY_R2_CONFIG_ENDPOINT: ${{ secrets.EASYPROXY_R2_CONFIG_ENDPOINT }}
+          EASYPROXY_R2_CONFIG_CONFIG_OBJECT_KEY: ${{ secrets.EASYPROXY_R2_CONFIG_CONFIG_OBJECT_KEY }}
+          EASYPROXY_R2_CONFIG_MANIFEST_OBJECT_KEY: ${{ secrets.EASYPROXY_R2_CONFIG_MANIFEST_OBJECT_KEY }}
+          EASYPROXY_R2_CONFIG_UPLOAD_ACCESS_KEY_ID: ${{ secrets.EASYPROXY_R2_CONFIG_UPLOAD_ACCESS_KEY_ID }}
+          EASYPROXY_R2_CONFIG_UPLOAD_SECRET_ACCESS_KEY: ${{ secrets.EASYPROXY_R2_CONFIG_UPLOAD_SECRET_ACCESS_KEY }}
+        run: |
+          $manifestPath = Join-Path $PWD 'service-base-r2-config-manifest.json'
+          .\scripts\upload-service-base-r2-config.ps1 `
+            -ConfigPath .\config.yaml `
+            -AccountId $env:EASYPROXY_R2_CONFIG_ACCOUNT_ID `
+            -Bucket $env:EASYPROXY_R2_CONFIG_BUCKET `
+            -AccessKeyId $env:EASYPROXY_R2_CONFIG_UPLOAD_ACCESS_KEY_ID `
+            -SecretAccessKey $env:EASYPROXY_R2_CONFIG_UPLOAD_SECRET_ACCESS_KEY `
+            -ConfigObjectKey $env:EASYPROXY_R2_CONFIG_CONFIG_OBJECT_KEY `
+            -ManifestObjectKey $env:EASYPROXY_R2_CONFIG_MANIFEST_OBJECT_KEY `
+            -Endpoint $env:EASYPROXY_R2_CONFIG_ENDPOINT `
+            -ReleaseVersion '${{ steps.prep.outputs.release_tag }}' `
+            -ManifestOutput $manifestPath
+          "path=$manifestPath" >> $env:GITHUB_OUTPUT
+
+      - name: Generate encrypted import code
+        if: steps.service_base_distribution.outputs.import_enabled == 'true'
+        id: import_code
+        shell: bash
+        env:
+          EASYPROXY_R2_CONFIG_ACCOUNT_ID: ${{ secrets.EASYPROXY_R2_CONFIG_ACCOUNT_ID }}
+          EASYPROXY_R2_CONFIG_BUCKET: ${{ secrets.EASYPROXY_R2_CONFIG_BUCKET }}
+          EASYPROXY_R2_CONFIG_ENDPOINT: ${{ secrets.EASYPROXY_R2_CONFIG_ENDPOINT }}
+          EASYPROXY_R2_CONFIG_MANIFEST_OBJECT_KEY: ${{ secrets.EASYPROXY_R2_CONFIG_MANIFEST_OBJECT_KEY }}
+          EASYPROXY_R2_CONFIG_READ_ACCESS_KEY_ID: ${{ secrets.EASYPROXY_R2_CONFIG_READ_ACCESS_KEY_ID }}
+          EASYPROXY_R2_CONFIG_READ_SECRET_ACCESS_KEY: ${{ secrets.EASYPROXY_R2_CONFIG_READ_SECRET_ACCESS_KEY }}
+          EASYPROXY_IMPORT_CODE_OWNER_PUBLIC_KEY: ${{ secrets.EASYPROXY_IMPORT_CODE_OWNER_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          python scripts/easyproxy-import-code.py encode \
+            --account-id "${EASYPROXY_R2_CONFIG_ACCOUNT_ID}" \
+            --bucket "${EASYPROXY_R2_CONFIG_BUCKET}" \
+            --manifest-object-key "${EASYPROXY_R2_CONFIG_MANIFEST_OBJECT_KEY}" \
+            --access-key-id "${EASYPROXY_R2_CONFIG_READ_ACCESS_KEY_ID}" \
+            --secret-access-key "${EASYPROXY_R2_CONFIG_READ_SECRET_ACCESS_KEY}" \
+            --endpoint "${EASYPROXY_R2_CONFIG_ENDPOINT}" \
+            --release-version "${{ steps.prep.outputs.release_tag }}" \
+            --json-output \
+            --output service-base-import-code.bundle.json
+
+          python scripts/easyproxy-import-code.py encrypt \
+            --bundle-file service-base-import-code.bundle.json \
+            --public-key "${EASYPROXY_IMPORT_CODE_OWNER_PUBLIC_KEY}" \
+            --metadata-json "{\"releaseVersion\":\"${{ steps.prep.outputs.release_tag }}\",\"manifestObjectKey\":\"${EASYPROXY_R2_CONFIG_MANIFEST_OBJECT_KEY}\"}" \
+            --output service-base-import-code.encrypted.json
+
+          echo "encrypted_path=service-base-import-code.encrypted.json" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload service/base config distribution manifest
+        if: steps.service_base_distribution.outputs.distribution_enabled == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: service-base-r2-config-manifest
+          path: ${{ steps.runtime_config_upload.outputs.path }}
+
+      - name: Upload encrypted import code
+        if: steps.service_base_distribution.outputs.import_enabled == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: service-base-import-code-encrypted
+          path: ${{ steps.import_code.outputs.encrypted_path }}
 
       - name: Extract metadata for ech-workers image
         if: steps.prep.outputs.target == 'both' || steps.prep.outputs.target == 'ech-workers'
@@ -253,6 +397,12 @@ jobs:
             echo "- platforms: \`${{ steps.prep.outputs.platforms }}\`"
             if [[ "${{ steps.prep.outputs.target }}" == "both" || "${{ steps.prep.outputs.target }}" == "easyproxy" ]]; then
               echo "- service image: \`ghcr.io/${{ steps.prep.outputs.owner_lc }}/easy-proxy-monorepo-service:${{ steps.prep.outputs.release_tag }}\`"
+              if [[ "${{ steps.service_base_distribution.outputs.distribution_enabled }}" == "true" ]]; then
+                echo "- service/base manifest: \`${{ secrets.EASYPROXY_R2_CONFIG_MANIFEST_OBJECT_KEY }}\`"
+              fi
+              if [[ "${{ steps.service_base_distribution.outputs.import_enabled }}" == "true" ]]; then
+                echo "- import code artifact: \`service-base-import-code-encrypted\`"
+              fi
             fi
             if [[ "${{ steps.prep.outputs.target }}" == "both" || "${{ steps.prep.outputs.target }}" == "ech-workers" ]]; then
               echo "- worker image: \`ghcr.io/${{ steps.prep.outputs.owner_lc }}/ech-workers-monorepo:${{ steps.prep.outputs.release_tag }}\`"

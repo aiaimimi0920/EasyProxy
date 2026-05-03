@@ -1,5 +1,7 @@
 param(
     [string]$ConfigPath = (Join-Path $PSScriptRoot '..\config.yaml'),
+    [string]$ImportCode = '',
+    [string]$BootstrapFile = '',
     [switch]$NoBuild,
     [switch]$SkipRender,
     [switch]$FromGhcr,
@@ -30,10 +32,41 @@ $composeFile = Resolve-EasyProxyPath -Path (Get-EasyProxyConfigValue -Object $se
 $serviceOutput = Resolve-EasyProxyPath -Path (Get-EasyProxyConfigValue -Object $serviceBase -Name 'renderedConfigPath' -Default 'deploy/service/base/config.yaml') -AllowMissing
 $networkName = [string](Get-EasyProxyConfigValue -Object $serviceBase -Name 'networkName' -Default 'EasyAiMi')
 $useGhcrDeploy = $FromGhcr -or -not [string]::IsNullOrWhiteSpace($Image) -or -not [string]::IsNullOrWhiteSpace($ReleaseTag)
+$bootstrapPath = Resolve-EasyProxyPath -Path 'deploy/service/base/bootstrap/r2-bootstrap.json' -AllowMissing
+$bootstrapStatePath = Resolve-EasyProxyPath -Path 'deploy/service/base/bootstrap/.import-state.json' -AllowMissing
 
 Ensure-EasyProxyPathExists -Path $composeFile -Message "Missing EasyProxy docker compose file: $composeFile"
 
-if (-not $SkipRender) {
+if (-not [string]::IsNullOrWhiteSpace($ImportCode) -and -not [string]::IsNullOrWhiteSpace($BootstrapFile)) {
+    throw 'Specify either ImportCode or BootstrapFile, not both.'
+}
+
+$shouldBootstrapFromImport = -not [string]::IsNullOrWhiteSpace($ImportCode) -or -not [string]::IsNullOrWhiteSpace($BootstrapFile)
+
+if ($shouldBootstrapFromImport) {
+    $bootstrapDir = Split-Path -Parent $bootstrapPath
+    New-Item -ItemType Directory -Force -Path $bootstrapDir | Out-Null
+    if (-not [string]::IsNullOrWhiteSpace($ImportCode)) {
+        Invoke-EasyProxyExternalCommand -FilePath 'powershell' -Arguments @(
+            '-ExecutionPolicy', 'Bypass',
+            '-File', (Join-Path $PSScriptRoot 'write-service-base-r2-bootstrap.ps1'),
+            '-ImportCode', $ImportCode,
+            '-OutputPath', $bootstrapPath
+        ) -FailureMessage 'Failed to materialize EasyProxy bootstrap from import code'
+    } else {
+        $resolvedBootstrapFile = Resolve-EasyProxyPath -Path $BootstrapFile
+        Ensure-EasyProxyPathExists -Path $resolvedBootstrapFile -Message "Bootstrap file not found: $resolvedBootstrapFile"
+        Copy-Item -LiteralPath $resolvedBootstrapFile -Destination $bootstrapPath -Force
+    }
+
+    Invoke-EasyProxyExternalCommand -FilePath 'python' -Arguments @(
+        (Join-Path $PSScriptRoot '..\deploy\service\base\bootstrap-service-config.py'),
+        '--bootstrap-path', $bootstrapPath,
+        '--config-path', $serviceOutput,
+        '--state-path', $bootstrapStatePath
+    ) -FailureMessage 'Failed to bootstrap EasyProxy runtime config from R2'
+}
+elseif (-not $SkipRender) {
     $render = Join-Path $PSScriptRoot 'render-derived-configs.ps1'
     Invoke-EasyProxyExternalCommand -FilePath 'powershell' -Arguments @(
         '-ExecutionPolicy', 'Bypass',

@@ -16,6 +16,8 @@ param(
     )]
     [string]$Project,
     [string]$ConfigPath = (Join-Path $PSScriptRoot '..\config.yaml'),
+    [string]$ImportCode = '',
+    [string]$BootstrapFile = '',
     [switch]$InitConfig,
     [switch]$NoBuild,
     [switch]$NoInstall,
@@ -176,6 +178,8 @@ switch ($Project) {
     "easyproxy" {
         $scriptPath = Join-Path $PSScriptRoot 'deploy-easyproxy.ps1'
         $args = @("-ExecutionPolicy", "Bypass", "-File", $scriptPath, "-ConfigPath", $resolvedConfigPath)
+        if (-not [string]::IsNullOrWhiteSpace($ImportCode)) { $args += @("-ImportCode", $ImportCode) }
+        if (-not [string]::IsNullOrWhiteSpace($BootstrapFile)) { $args += @("-BootstrapFile", $BootstrapFile) }
         if ($NoBuild) { $args += "-NoBuild" }
         if ($SkipRender) { $args += "-SkipRender" }
         if (-not [string]::IsNullOrWhiteSpace($ContainerName)) { $args += @("-ContainerName", $ContainerName) }
@@ -190,6 +194,8 @@ switch ($Project) {
     "easyproxy-ghcr" {
         $scriptPath = Join-Path $PSScriptRoot 'deploy-easyproxy.ps1'
         $args = @("-ExecutionPolicy", "Bypass", "-File", $scriptPath, "-ConfigPath", $resolvedConfigPath, "-FromGhcr")
+        if (-not [string]::IsNullOrWhiteSpace($ImportCode)) { $args += @("-ImportCode", $ImportCode) }
+        if (-not [string]::IsNullOrWhiteSpace($BootstrapFile)) { $args += @("-BootstrapFile", $BootstrapFile) }
         if ($SkipRender) { $args += "-SkipRender" }
         if (-not [string]::IsNullOrWhiteSpace($ReleaseTag)) { $args += @("-ReleaseTag", $ReleaseTag) }
         if (-not [string]::IsNullOrWhiteSpace($GhcrOwner)) { $args += @("-GhcrOwner", $GhcrOwner) }
