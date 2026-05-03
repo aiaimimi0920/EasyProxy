@@ -2026,6 +2026,16 @@ func (s *Server) applyProxyCompatUsageFeedback(selectedNodeTag, hostID string, r
 			s.compatState().recordServiceFailureForSnapshot(serviceKey, snapshot, errMessage, serviceDecision)
 		}
 	case proxyCompatFailureClassRouteFailure:
+		serviceKey := normalizeProxyCompatServiceKey(record.ServiceKey, hostID)
+		if proxyCompatShouldServiceCooldownLoginBlockedRouteFailure(serviceKey, record.Stage, errMessage, routeConfidence) {
+			nodeEntry.recordObservationFailure(errors.New(errMessage), destination)
+			nodeEntry.applyUsageReportFailure(0, false)
+			snapshot := nodeEntry.snapshot()
+			serviceDecision := proxyCompatLoginBlockedServiceRouteFailureDecision(errMessage, routeConfidence)
+			s.compatState().recordServiceFailureForSnapshot(serviceKey, snapshot, errMessage, serviceDecision)
+			return
+		}
+
 		decision := proxyCompatRouteFailureDecision(errMessage, routeConfidence)
 		nodeEntry.recordFailure(errors.New(errMessage), destination)
 		nodeEntry.applyUsageReportFailure(decision.Penalty, true)
@@ -2039,7 +2049,6 @@ func (s *Server) applyProxyCompatUsageFeedback(selectedNodeTag, hostID string, r
 		if cooldown > 0 {
 			nodeEntry.blacklistUntil(time.Now().Add(cooldown))
 		}
-		serviceKey := normalizeProxyCompatServiceKey(record.ServiceKey, hostID)
 		if proxyCompatShouldDirectServiceCooldownRouteFailure(serviceKey, record.Stage, errMessage, routeConfidence) {
 			snapshot := nodeEntry.snapshot()
 			serviceDecision := proxyCompatDirectServiceRouteFailureDecision(errMessage, routeConfidence)
@@ -2348,6 +2357,72 @@ func proxyCompatDirectServiceRouteFailureDecision(errorCode, routeConfidence str
 	return proxyCompatUsageFeedbackDecision{
 		Scope:              proxyCompatUsageFailureService,
 		ErrorClass:         "route:registration_close",
+		Penalty:            penalty,
+		CooldownBase:       baseCooldown,
+		CooldownEscalated:  escalatedCooldown,
+		EscalateAfterCount: 2,
+	}
+}
+
+func proxyCompatShouldServiceCooldownLoginBlockedRouteFailure(serviceKey, stage, errorCode, routeConfidence string) bool {
+	if !proxyCompatRequiresStrictDegradedServiceCooldown(serviceKey, stage) {
+		return false
+	}
+	switch normalizeProxyCompatRouteConfidence(routeConfidence) {
+	case proxyCompatRouteConfidenceHigh, proxyCompatRouteConfidenceMedium:
+	default:
+		return false
+	}
+
+	normalized := strings.ToLower(strings.TrimSpace(errorCode))
+	if normalized == "" {
+		return false
+	}
+	loginHosts := []string{
+		"platform.openai.com/login",
+		"auth.openai.com",
+		"chatgpt.com/auth/login_with",
+		"chatgpt.com/auth/login",
+	}
+	matchedHost := false
+	for _, host := range loginHosts {
+		if strings.Contains(normalized, host) {
+			matchedHost = true
+			break
+		}
+	}
+	if !matchedHost {
+		return false
+	}
+
+	blockMarkers := []string{
+		"proxy route failure blocked",
+		"easy_proxy_probe_failed",
+		"just a moment",
+		"challenge=yes",
+		"status=403",
+	}
+	for _, marker := range blockMarkers {
+		if strings.Contains(normalized, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func proxyCompatLoginBlockedServiceRouteFailureDecision(errorCode, routeConfidence string) proxyCompatUsageFeedbackDecision {
+	penalty := 30
+	baseCooldown := 8 * time.Minute
+	escalatedCooldown := 25 * time.Minute
+	switch normalizeProxyCompatRouteConfidence(routeConfidence) {
+	case proxyCompatRouteConfidenceMedium:
+		penalty = 24
+		baseCooldown = 6 * time.Minute
+		escalatedCooldown = 18 * time.Minute
+	}
+	return proxyCompatUsageFeedbackDecision{
+		Scope:              proxyCompatUsageFailureService,
+		ErrorClass:         "route:login_blocked",
 		Penalty:            penalty,
 		CooldownBase:       baseCooldown,
 		CooldownEscalated:  escalatedCooldown,
