@@ -2007,6 +2007,68 @@ func TestProxyCompatDegradedCheckoutAvoidsSameServiceActiveNode(t *testing.T) {
 	}
 }
 
+func TestProxyCompatCheckoutAllowsDegradedFallbackWhileInitialProbePending(t *testing.T) {
+	mgr, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+
+	handle := mgr.Register(NodeInfo{
+		Tag:           "pending-degraded-a",
+		Name:          "Pending Degraded A",
+		ListenAddress: "127.0.0.1",
+		Port:          37221,
+	})
+	handle.MarkInitialCheckDone(false)
+
+	s := &Server{
+		cfg:         Config{ProxyUsername: "node-user", ProxyPassword: "node-pass"},
+		mgr:         mgr,
+		sessions:    map[string]*Session{},
+		proxyCompat: newProxyCompatState(),
+	}
+
+	cfg := &config.Config{}
+	cfg.Listener.Port = 2323
+	cfg.Listener.Protocol = "http"
+	cfg.Management.Listen = "0.0.0.0:9888"
+	cfg.MultiPort.Protocol = "http"
+	cfg.MultiPort.Username = "node-user"
+	cfg.MultiPort.Password = "node-pass"
+	cfg.Mode = "hybrid"
+	s.SetConfig(cfg)
+
+	checkoutBody, err := json.Marshal(proxyCompatCheckoutRequest{
+		HostID:        "register-service",
+		ProvisionMode: "reuse-only",
+		BindingMode:   "shared-instance",
+	})
+	if err != nil {
+		t.Fatalf("Marshal checkout request failed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/proxy/leases/checkout", bytes.NewReader(checkoutBody))
+	req.Host = "easy-proxy-service:9888"
+	rec := httptest.NewRecorder()
+	s.handleProxyCheckout(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected degraded checkout status %d while initial probe is pending, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Result proxyCompatCheckoutResult `json:"result"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode degraded checkout response: %v", err)
+	}
+	if resp.Result.Lease.Metadata["selectedNodeTag"] != "pending-degraded-a" {
+		t.Fatalf("expected degraded pending node to be selected, got %+v", resp.Result.Lease.Metadata)
+	}
+	if resp.Result.Lease.Metadata["selectedNodeSelectionTier"] != "degraded" {
+		t.Fatalf("expected degraded selection tier, got %+v", resp.Result.Lease.Metadata)
+	}
+}
+
 func TestProxyCompatCheckoutFallsBackWhenAllCandidatesAreCooling(t *testing.T) {
 	mgr, err := NewManager(Config{})
 	if err != nil {

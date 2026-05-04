@@ -434,11 +434,9 @@ func (s *Server) handleProxyPlanCheckout(w http.ResponseWriter, r *http.Request)
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	if s.mgr != nil {
-		if err := s.mgr.WaitForInitialProbe(0); err != nil {
-			writeProxyCompatError(w, http.StatusServiceUnavailable, "INITIAL_PROXY_PROBE_PENDING", err.Error())
-			return
-		}
+	if err := s.waitForCompatCheckoutReady(); err != nil {
+		writeProxyCompatError(w, http.StatusServiceUnavailable, "INITIAL_PROXY_PROBE_PENDING", err.Error())
+		return
 	}
 
 	var request proxyCompatCheckoutRequest
@@ -480,11 +478,9 @@ func (s *Server) handleProxyCheckout(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	if s.mgr != nil {
-		if err := s.mgr.WaitForInitialProbe(0); err != nil {
-			writeProxyCompatError(w, http.StatusServiceUnavailable, "INITIAL_PROXY_PROBE_PENDING", err.Error())
-			return
-		}
+	if err := s.waitForCompatCheckoutReady(); err != nil {
+		writeProxyCompatError(w, http.StatusServiceUnavailable, "INITIAL_PROXY_PROBE_PENDING", err.Error())
+		return
 	}
 
 	var request proxyCompatCheckoutRequest
@@ -513,6 +509,20 @@ func (s *Server) handleProxyCheckout(w http.ResponseWriter, r *http.Request) {
 			StrategyMode: proxyCompatStrategyModeDefinition(),
 		},
 	})
+}
+
+func (s *Server) waitForCompatCheckoutReady() error {
+	if s.mgr == nil {
+		return nil
+	}
+	if err := s.mgr.WaitForInitialProbe(0); err != nil {
+		nodes, _ := selectProxyCompatCandidateSnapshots(s.mgr.Snapshot())
+		if len(nodes) > 0 {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *Server) handleProxyReportUsage(w http.ResponseWriter, r *http.Request) {
