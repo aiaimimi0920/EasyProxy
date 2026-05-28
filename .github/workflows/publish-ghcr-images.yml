@@ -166,6 +166,7 @@ jobs:
           echo "owner_lc=${owner_lc}" >> "$GITHUB_OUTPUT"
           echo "target=${target}" >> "$GITHUB_OUTPUT"
           echo "release_tag=${release_tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${release_tag}" >> "$GITHUB_OUTPUT"
           echo "platforms=${platforms}" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GitHub Container Registry

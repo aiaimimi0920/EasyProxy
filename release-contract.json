@@ -1,0 +1,51 @@
+{
+    "schemaVersion":  1,
+    "project":  "EasyProxy",
+    "releaseClass":  "complex-multi-surface",
+    "workflows":  [
+                      {
+                          "component":  "service-and-workers",
+                          "requiresImportCode":  true,
+                          "releaseTagOutputs":  [
+                                                    "release_tag",
+                                                    "version"
+                                                ],
+                          "artifacts":  [
+                                            "service-base-r2-config-manifest",
+                                            "service-base-import-code-encrypted"
+                                        ],
+                          "releaseTagInputs":  [
+                                                   "release_tag"
+                                               ],
+                          "requiresR2":  true,
+                          "path":  ".github/workflows/publish-ghcr-images.yml",
+                          "requiresGhcr":  true
+                      },
+                      {
+                          "component":  "service-base-config",
+                          "requiresImportCode":  true,
+                          "releaseTagOutputs":  [
+                                                    "release_tag",
+                                                    "version"
+                                                ],
+                          "artifacts":  [
+                                            "service-base-r2-config-manifest",
+                                            "service-base-import-code-encrypted"
+                                        ],
+                          "releaseTagInputs":  [
+                                                   "release_tag"
+                                               ],
+                          "requiresR2":  true,
+                          "path":  ".github/workflows/publish-service-base-config.yml",
+                          "requiresGhcr":  false
+                      }
+                  ],
+    "localDeploy":  {
+                        "entrypoint":  "deploy-host.ps1",
+                        "zeroFolder":  true,
+                        "forbidDevSourceBindMounts":  true
+                    },
+    "exceptions":  [
+                       "Multi-image publishing, GitHub Release, Cloudflare deploy, and aggregator deploy stay project-specific."
+                   ]
+}

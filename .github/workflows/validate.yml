@@ -92,6 +92,11 @@ jobs:
         run: |
           go test ./internal/subscription
 
+      - name: Validate Release Contract
+        shell: pwsh
+        run: |
+          python scripts/validate-release-contract.py
+
       - name: Check git diff formatting
         shell: pwsh
         run: |

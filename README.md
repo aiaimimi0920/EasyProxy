@@ -575,3 +575,7 @@ repository.
 
 Local operator material should continue to live under the shared `AIRead`
 knowledge base and remain ignored by Git when linked into this repository.
+
+## Release Contract
+
+This repository follows the EasyAiMi release contract v1 for GitHub Actions, GHCR publication, R2 config distribution, encrypted import-code artifacts, and blank-host local deployment. See [docs/release-contract.md](docs/release-contract.md) for the exact contract and project-specific exceptions.

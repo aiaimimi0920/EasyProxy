@@ -158,6 +158,7 @@ jobs:
             fi
           fi
           echo "release_tag=${release_tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${release_tag}" >> "$GITHUB_OUTPUT"
 
       - name: Upload service/base config to R2
         id: upload
