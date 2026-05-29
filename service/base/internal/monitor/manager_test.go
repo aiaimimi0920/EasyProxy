@@ -500,6 +500,58 @@ func TestWaitForInitialProbeBlocksUntilFirstProbeRoundCompletes(t *testing.T) {
 	manager.Stop()
 }
 
+func TestProbeAllNodesCompletesWhenProbeIgnoresContext(t *testing.T) {
+	manager, err := NewManager(Config{
+		ProbeTargets: []string{"https://platform.openai.com/login"},
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	handle := manager.Register(NodeInfo{
+		Tag:           "ignores-context",
+		Name:          "Ignores Context",
+		ListenAddress: "127.0.0.1",
+		Port:          32003,
+	})
+	handle.SetProbe(func(ctx context.Context) (time.Duration, error) {
+		close(started)
+		<-release
+		return 0, errors.New("released after timeout")
+	})
+
+	done := make(chan struct{})
+	go func() {
+		manager.probeAllNodes(25 * time.Millisecond)
+		close(done)
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		close(release)
+		t.Fatal("expected probe to start")
+	}
+
+	timedOut := false
+	select {
+	case <-done:
+	case <-time.After(200 * time.Millisecond):
+		timedOut = true
+	}
+	close(release)
+	if timedOut {
+		t.Fatal("expected full probe round to complete after timeout even when a probe ignores context")
+	}
+
+	snap := handle.Snapshot()
+	if !snap.InitialCheckDone || snap.Available {
+		t.Fatalf("expected timed-out probe to mark node checked but unavailable, got %+v", snap)
+	}
+}
+
 func TestRecordSuccessWithLatencyClearsLastError(t *testing.T) {
 	manager, err := NewManager(Config{})
 	if err != nil {

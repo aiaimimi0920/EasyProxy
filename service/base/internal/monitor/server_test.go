@@ -2069,6 +2069,67 @@ func TestProxyCompatCheckoutAllowsDegradedFallbackWhileInitialProbePending(t *te
 	}
 }
 
+func TestProxyCompatCheckoutDoesNotWaitForInitialProbeWhenCandidatesExist(t *testing.T) {
+	mgr, err := NewManager(Config{
+		ProbeTargets: []string{"https://platform.openai.com/login"},
+	})
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+	mgr.healthMu.Lock()
+	mgr.healthTimeout = 150 * time.Millisecond
+	mgr.healthMu.Unlock()
+
+	handle := mgr.Register(NodeInfo{
+		Tag:           "pending-fast-checkout",
+		Name:          "Pending Fast Checkout",
+		ListenAddress: "127.0.0.1",
+		Port:          37222,
+	})
+	handle.MarkInitialCheckDone(false)
+
+	s := &Server{
+		cfg:         Config{ProxyUsername: "node-user", ProxyPassword: "node-pass"},
+		mgr:         mgr,
+		sessions:    map[string]*Session{},
+		proxyCompat: newProxyCompatState(),
+	}
+
+	cfg := &config.Config{}
+	cfg.Listener.Port = 2323
+	cfg.Listener.Protocol = "http"
+	cfg.Management.Listen = "0.0.0.0:9888"
+	cfg.MultiPort.Protocol = "http"
+	cfg.MultiPort.Username = "node-user"
+	cfg.MultiPort.Password = "node-pass"
+	cfg.Mode = "hybrid"
+	s.SetConfig(cfg)
+
+	checkoutBody, err := json.Marshal(proxyCompatCheckoutRequest{
+		HostID:        "register-service",
+		ProvisionMode: "reuse-only",
+		BindingMode:   "shared-instance",
+	})
+	if err != nil {
+		t.Fatalf("Marshal checkout request failed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/proxy/leases/checkout", bytes.NewReader(checkoutBody))
+	req.Host = "easy-proxy-service:9888"
+	rec := httptest.NewRecorder()
+
+	start := time.Now()
+	s.handleProxyCheckout(rec, req)
+	elapsed := time.Since(start)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected checkout status %d while initial probe is pending, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	if elapsed >= 50*time.Millisecond {
+		t.Fatalf("expected checkout to use existing candidates without waiting for initial probe, took %s", elapsed)
+	}
+}
+
 func TestProxyCompatCheckoutFallsBackWhenAllCandidatesAreCooling(t *testing.T) {
 	mgr, err := NewManager(Config{})
 	if err != nil {

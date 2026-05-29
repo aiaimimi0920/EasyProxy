@@ -538,9 +538,7 @@ func (m *Manager) probeAllNodes(timeout time.Duration) {
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			ctx, cancel := context.WithTimeout(m.ctx, timeout)
-			latency, err := probe(ctx)
-			cancel()
+			latency, err := runProbeWithTimeout(m.ctx, timeout, probe)
 
 			entry.mu.Lock()
 			probeAt := time.Now()
@@ -571,6 +569,34 @@ func (m *Manager) probeAllNodes(timeout time.Duration) {
 
 	if m.logger != nil {
 		m.logger.Info("health check completed: ", availableCount.Load(), " available, ", failedCount.Load(), " failed")
+	}
+}
+
+func runProbeWithTimeout(parent context.Context, timeout time.Duration, probe probeFunc) (time.Duration, error) {
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+
+	type probeResult struct {
+		latency time.Duration
+		err     error
+	}
+	resultCh := make(chan probeResult, 1)
+	go func() {
+		latency, err := probe(ctx)
+		select {
+		case resultCh <- probeResult{latency: latency, err: err}:
+		case <-ctx.Done():
+		}
+	}()
+
+	select {
+	case result := <-resultCh:
+		return result.latency, result.err
+	case <-ctx.Done():
+		return 0, ctx.Err()
 	}
 }
 

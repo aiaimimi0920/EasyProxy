@@ -515,6 +515,9 @@ func (s *Server) waitForCompatCheckoutReady() error {
 	if s.mgr == nil {
 		return nil
 	}
+	if nodes, _ := selectProxyCompatCandidateSnapshots(s.mgr.Snapshot()); len(nodes) > 0 {
+		return nil
+	}
 	if err := s.mgr.WaitForInitialProbe(0); err != nil {
 		nodes, _ := selectProxyCompatCandidateSnapshots(s.mgr.Snapshot())
 		if len(nodes) > 0 {
