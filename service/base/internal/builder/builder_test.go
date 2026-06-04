@@ -92,6 +92,18 @@ func TestBuildNodeOutboundSupportsShadowsocksObfsPlugin(t *testing.T) {
 	}
 }
 
+func TestBuildNodeOutboundRejectsUnsupportedShadowsocksPlugin(t *testing.T) {
+	uri := "ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTpzZWNyZXQ=@example.com:8388?plugin=gost-plugin&plugin-opts=mode%3Dtls#unsupported-plugin"
+
+	_, err := buildNodeOutbound("unsupported-ss-plugin", uri, false)
+	if err == nil {
+		t.Fatal("expected unsupported shadowsocks plugin to be rejected before sing-box startup")
+	}
+	if !strings.Contains(err.Error(), "unsupported shadowsocks plugin") {
+		t.Fatalf("expected unsupported plugin error, got %v", err)
+	}
+}
+
 func TestBuildNodeOutboundTreatsRawVMessTransportAsTCP(t *testing.T) {
 	vmessJSON := `{"v":"2","ps":"raw-test","add":"example.com","port":"443","id":"11111111-1111-1111-1111-111111111111","aid":"0","net":"raw"}`
 	uri := "vmess://" + base64.StdEncoding.EncodeToString([]byte(vmessJSON))

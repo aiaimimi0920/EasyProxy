@@ -971,6 +971,9 @@ func buildShadowsocksOptions(u *url.URL) (option.ShadowsocksOutboundOptions, err
 
 	query := u.Query()
 	if plugin := query.Get("plugin"); plugin != "" {
+		if plugin != "obfs-local" {
+			return option.ShadowsocksOutboundOptions{}, fmt.Errorf("unsupported shadowsocks plugin %q", plugin)
+		}
 		opts.Plugin = plugin
 		opts.PluginOptions = query.Get("plugin-opts")
 	}
