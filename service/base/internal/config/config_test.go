@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,6 +10,12 @@ import (
 	"testing"
 	"time"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
 
 func TestIsProxyURIRecognizesHTTPAndSOCKS5(t *testing.T) {
 	tests := []struct {
@@ -184,6 +191,37 @@ func TestLoadForReloadIncludesNodesFile(t *testing.T) {
 	}
 	if cfg.Nodes[0].Source != NodeSourceFile {
 		t.Fatalf("expected nodes_file source, got %q", cfg.Nodes[0].Source)
+	}
+}
+
+func TestFetchSubscriptionNodesRetriesHTTP1AfterHTTP2HeaderTimeout(t *testing.T) {
+	fallbackRequests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fallbackRequests++
+		_, _ = w.Write([]byte("ss://YWVzLTI1Ni1nY206c2VjcmV0QDE5OC41MS4xMDAuMTA6ODM4OA==#h1-fallback\n"))
+	}))
+	defer server.Close()
+
+	initialAttempts := 0
+	failingHTTP2Client := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			initialAttempts++
+			return nil, errors.New("Get \"" + req.URL.String() + "\": http2: timeout awaiting response headers")
+		}),
+	}
+
+	nodes, err := FetchSubscriptionNodesWithClient(server.URL, time.Second, "", 0, failingHTTP2Client)
+	if err != nil {
+		t.Fatalf("expected HTTP/1.1 fallback to recover subscription fetch, got error = %v", err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("expected 1 node from HTTP/1.1 fallback, got %d", len(nodes))
+	}
+	if initialAttempts != 1 {
+		t.Fatalf("expected one initial HTTP/2-like attempt, got %d", initialAttempts)
+	}
+	if fallbackRequests != 1 {
+		t.Fatalf("expected one HTTP/1.1 fallback request, got %d", fallbackRequests)
 	}
 }
 

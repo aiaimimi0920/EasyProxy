@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -903,16 +904,7 @@ func fetchSubscriptionNodesRemote(subURL string, timeout time.Duration, client *
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, "GET", subURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-
-	// Set common headers to avoid being blocked
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-	req.Header.Set("Accept", "*/*")
-
-	resp, err := client.Do(req)
+	resp, err := fetchSubscriptionResponse(ctx, subURL, client)
 	if err != nil {
 		return nil, fmt.Errorf("fetch subscription: %w", err)
 	}
@@ -941,6 +933,68 @@ func fetchSubscriptionNodesRemote(subURL string, timeout time.Duration, client *
 		return nil, fmt.Errorf("subscription contained no usable nodes")
 	}
 	return nodes, nil
+}
+
+func fetchSubscriptionResponse(ctx context.Context, subURL string, client *http.Client) (*http.Response, error) {
+	req, err := newSubscriptionFetchRequest(ctx, subURL)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := client.Do(req)
+	if err == nil {
+		return resp, nil
+	}
+	if !isHTTP2ResponseHeaderTimeout(err) {
+		return nil, err
+	}
+
+	req, err = newSubscriptionFetchRequest(ctx, subURL)
+	if err != nil {
+		return nil, err
+	}
+	resp, fallbackErr := newSubscriptionHTTP1Client().Do(req)
+	if fallbackErr != nil {
+		return nil, fmt.Errorf("%w; HTTP/1.1 fallback failed: %v", err, fallbackErr)
+	}
+	return resp, nil
+}
+
+func newSubscriptionFetchRequest(ctx context.Context, subURL string) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", subURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+
+	// Set common headers to avoid being blocked.
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	req.Header.Set("Accept", "*/*")
+	return req, nil
+}
+
+func newSubscriptionHTTP1Client() *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{
+			Proxy: nil,
+			DialContext: (&net.Dialer{
+				Timeout:   30 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			ForceAttemptHTTP2:     false,
+			TLSNextProto:          map[string]func(string, *tls.Conn) http.RoundTripper{},
+			MaxIdleConns:          100,
+			MaxIdleConnsPerHost:   10,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+			ResponseHeaderTimeout: 10 * time.Second,
+		},
+	}
+}
+
+func isHTTP2ResponseHeaderTimeout(err error) bool {
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "http2: timeout awaiting response headers")
 }
 
 func subscriptionCachePath(cacheDir string, subURL string) string {
