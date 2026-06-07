@@ -98,6 +98,9 @@ func TestNormalizeVLESSFlowCanonicalizesLegacyUDP443Variant(t *testing.T) {
 	if got := NormalizeVLESSFlow("xtls-rprx-vision-udp443"); got != "xtls-rprx-vision" {
 		t.Fatalf("expected legacy UDP443 flow to normalize, got %q", got)
 	}
+	if got := NormalizeVLESSFlow("xtls-rprx-vision-udp443-udp443"); got != "xtls-rprx-vision" {
+		t.Fatalf("expected repeated legacy UDP443 flow to normalize, got %q", got)
+	}
 	if got := NormalizeVLESSFlow("xtls-rprx-vision"); got != "xtls-rprx-vision" {
 		t.Fatalf("expected plain vision flow to remain unchanged, got %q", got)
 	}

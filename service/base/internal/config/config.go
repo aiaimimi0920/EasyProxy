@@ -251,10 +251,17 @@ func NormalizeV2RayTransport(value string) (string, bool) {
 // accepted by the current sing-box runtime.
 func NormalizeVLESSFlow(value string) string {
 	flow := strings.TrimSpace(value)
-	switch strings.ToLower(flow) {
+	normalized := strings.ToLower(flow)
+	canonicalCandidate := normalized
+	for strings.HasSuffix(canonicalCandidate, "-udp443") {
+		canonicalCandidate = strings.TrimSuffix(canonicalCandidate, "-udp443")
+	}
+	switch normalized {
 	case "", "none":
 		return ""
-	case "xtls-rprx-vision-udp443":
+	}
+	switch canonicalCandidate {
+	case "xtls-rprx-vision":
 		return "xtls-rprx-vision"
 	default:
 		return flow
