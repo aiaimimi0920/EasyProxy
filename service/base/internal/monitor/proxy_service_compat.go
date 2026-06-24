@@ -515,11 +515,17 @@ func (s *Server) waitForCompatCheckoutReady() error {
 	if s.mgr == nil {
 		return nil
 	}
-	if nodes, _ := selectProxyCompatCandidateSnapshots(s.mgr.Snapshot()); len(nodes) > 0 {
+	snapshots := s.mgr.Snapshot()
+	sourceStates := s.mgr.SourceSelectionStates()
+	secondaryStates := s.mgr.SecondarySelectionStates()
+	if nodes, _ := selectProxyCompatCandidateSnapshotsWithSelection(snapshots, sourceStates, secondaryStates); len(nodes) > 0 {
 		return nil
 	}
 	if err := s.mgr.WaitForInitialProbe(0); err != nil {
-		nodes, _ := selectProxyCompatCandidateSnapshots(s.mgr.Snapshot())
+		snapshots = s.mgr.Snapshot()
+		sourceStates = s.mgr.SourceSelectionStates()
+		secondaryStates = s.mgr.SecondarySelectionStates()
+		nodes, _ := selectProxyCompatCandidateSnapshotsWithSelection(snapshots, sourceStates, secondaryStates)
 		if len(nodes) > 0 {
 			return nil
 		}
@@ -1428,7 +1434,10 @@ func (s *Server) resolveProxyCompatCandidate(r *http.Request, request proxyCompa
 	}
 
 	runtimeCfg := s.resolveProxyCompatRuntime(r)
-	nodes, selectionTier := selectProxyCompatCandidateSnapshots(s.mgr.Snapshot())
+	snapshots := s.mgr.Snapshot()
+	sourceStates := s.mgr.SourceSelectionStates()
+	secondaryStates := s.mgr.SecondarySelectionStates()
+	nodes, selectionTier := selectProxyCompatCandidateSnapshotsWithSelection(snapshots, sourceStates, secondaryStates)
 	if len(nodes) == 0 {
 		return proxyCompatCandidate{}, runtimeCfg, errProxyCompatNoNodes
 	}
@@ -1640,6 +1649,23 @@ func selectProxyCompatCandidateSnapshots(nodes []Snapshot) ([]Snapshot, string) 
 	return nil, ""
 }
 
+func selectProxyCompatCandidateSnapshotsWithSelection(
+	nodes []Snapshot,
+	sourceStates map[string]SourceSelectionState,
+	secondaryStates map[string]SecondarySelectionState,
+) ([]Snapshot, string) {
+	effective := filterEffectiveSnapshots(nodes)
+	if len(effective) > 0 {
+		return effective, "effective"
+	}
+
+	degraded := filterCompatFallbackSnapshotsWithSelection(nodes, sourceStates, secondaryStates)
+	if len(degraded) > 0 {
+		return degraded, "degraded"
+	}
+	return nil, ""
+}
+
 func filterCompatFallbackSnapshots(nodes []Snapshot) []Snapshot {
 	if len(nodes) == 0 {
 		return nil
@@ -1656,6 +1682,86 @@ func filterCompatFallbackSnapshots(nodes []Snapshot) []Snapshot {
 		return nonBlacklisted
 	}
 	return append([]Snapshot(nil), nodes...)
+}
+
+func filterCompatFallbackSnapshotsWithSelection(
+	nodes []Snapshot,
+	sourceStates map[string]SourceSelectionState,
+	secondaryStates map[string]SecondarySelectionState,
+) []Snapshot {
+	if len(nodes) == 0 {
+		return nil
+	}
+
+	nonBlacklisted := make([]Snapshot, 0, len(nodes))
+	for _, snap := range nodes {
+		if snap.Blacklisted {
+			continue
+		}
+		nonBlacklisted = append(nonBlacklisted, snap)
+	}
+
+	eligible := make([]Snapshot, 0, len(nonBlacklisted))
+	for _, snap := range nonBlacklisted {
+		if compatSourceExcluded(snap, sourceStates) {
+			continue
+		}
+		if compatSecondaryExcluded(snap, secondaryStates) {
+			continue
+		}
+		eligible = append(eligible, snap)
+	}
+	if len(eligible) > 0 {
+		return eligible
+	}
+
+	if len(sourceStates) == 0 && len(secondaryStates) == 0 {
+		if len(nonBlacklisted) > 0 {
+			return nonBlacklisted
+		}
+		return append([]Snapshot(nil), nodes...)
+	}
+	return nil
+}
+
+func compatSourceExcluded(snap Snapshot, sourceStates map[string]SourceSelectionState) bool {
+	if len(sourceStates) == 0 {
+		return false
+	}
+	sourceRef := strings.TrimSpace(snap.SourceRef)
+	if sourceRef == "" {
+		return false
+	}
+	state, ok := sourceStates[sourceRef]
+	return ok && state.Excluded
+}
+
+func compatSecondaryExcluded(snap Snapshot, secondaryStates map[string]SecondarySelectionState) bool {
+	if len(secondaryStates) == 0 {
+		return false
+	}
+	sourceRef := strings.TrimSpace(snap.SourceRef)
+	if sourceRef == "" {
+		return false
+	}
+
+	keys := make([]string, 0, 3)
+	if value := strings.TrimSpace(snap.ProtocolFamily); value != "" {
+		keys = append(keys, SecondarySelectionStateKey(sourceRef, SelectionDimensionProtocolFamily, value))
+	}
+	if value := strings.TrimSpace(snap.NodeMode); value != "" {
+		keys = append(keys, SecondarySelectionStateKey(sourceRef, SelectionDimensionNodeMode, value))
+	}
+	if value := strings.TrimSpace(snap.DomainFamily); value != "" {
+		keys = append(keys, SecondarySelectionStateKey(sourceRef, SelectionDimensionDomainFamily, value))
+	}
+	for _, key := range keys {
+		state, ok := secondaryStates[key]
+		if ok && state.Excluded {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeCompatLatency(value int64) int64 {

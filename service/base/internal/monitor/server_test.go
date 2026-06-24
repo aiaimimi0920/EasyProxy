@@ -2069,6 +2069,77 @@ func TestProxyCompatCheckoutAllowsDegradedFallbackWhileInitialProbePending(t *te
 	}
 }
 
+func TestProxyCompatCheckoutRejectsSourceExcludedDegradedCandidates(t *testing.T) {
+	mgr, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+
+	first := mgr.Register(NodeInfo{
+		Tag:           "excluded-a",
+		Name:          "Excluded A",
+		ListenAddress: "127.0.0.1",
+		Port:          37231,
+		SourceRef:     "local:bad-sub-1",
+		SourceName:    "bad-sub-1",
+	})
+	first.MarkInitialCheckDone(false)
+	first.RecordFailure(errors.New("context deadline exceeded"), "www.google.com:443")
+
+	second := mgr.Register(NodeInfo{
+		Tag:           "excluded-b",
+		Name:          "Excluded B",
+		ListenAddress: "127.0.0.1",
+		Port:          37232,
+		SourceRef:     "local:bad-sub-2",
+		SourceName:    "bad-sub-2",
+	})
+	second.MarkInitialCheckDone(false)
+	second.RecordFailure(errors.New("tls handshake: EOF"), "www.google.com:443")
+
+	s := &Server{
+		cfg:         Config{ProxyUsername: "node-user", ProxyPassword: "node-pass"},
+		mgr:         mgr,
+		sessions:    map[string]*Session{},
+		proxyCompat: newProxyCompatState(),
+	}
+
+	cfg := &config.Config{}
+	cfg.Listener.Port = 2323
+	cfg.Listener.Protocol = "http"
+	cfg.Management.Listen = "0.0.0.0:9888"
+	cfg.MultiPort.Protocol = "http"
+	cfg.MultiPort.Username = "node-user"
+	cfg.MultiPort.Password = "node-pass"
+	cfg.Mode = "hybrid"
+	s.SetConfig(cfg)
+
+	checkoutBody, err := json.Marshal(proxyCompatCheckoutRequest{
+		HostID:        "register-service",
+		ProvisionMode: "reuse-only",
+		BindingMode:   "shared-instance",
+		Metadata: map[string]string{
+			"serviceKey": "register-service",
+			"stage":      "registration",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Marshal checkout request failed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/proxy/leases/checkout", bytes.NewReader(checkoutBody))
+	req.Host = "easy-proxy-service:9888"
+	rec := httptest.NewRecorder()
+	s.handleProxyCheckout(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected checkout status %d when all degraded candidates are source-excluded, got %d: %s", http.StatusServiceUnavailable, rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "NO_PROXY_PROVIDER_ROUTE") {
+		t.Fatalf("expected NO_PROXY_PROVIDER_ROUTE response, got %s", rec.Body.String())
+	}
+}
+
 func TestProxyCompatCheckoutDoesNotWaitForInitialProbeWhenCandidatesExist(t *testing.T) {
 	mgr, err := NewManager(Config{
 		ProbeTargets: []string{"https://platform.openai.com/login"},
