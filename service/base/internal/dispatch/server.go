@@ -58,10 +58,11 @@ type Server struct {
 	directDLR *net.Dialer
 	bound     directiveOverlay // parsed from cfg.BoundTokens (zero value = none)
 
-	mu      sync.RWMutex
-	started bool
-	ln      net.Listener
-	baseCtx context.Context
+	mu              sync.RWMutex
+	started         bool
+	ln              net.Listener
+	baseCtx         context.Context
+	defaultStrategy pool.Strategy // hot-updatable default selection strategy
 }
 
 // NewServer constructs a dispatcher server. engine may be nil (then every
@@ -74,11 +75,12 @@ func NewServer(cfg Config, provider PoolProvider, engine *routerule.Engine, logg
 		cfg.DefaultStrategy = pool.StrategyStable
 	}
 	s := &Server{
-		cfg:       cfg,
-		provider:  provider,
-		engine:    engine,
-		logger:    logger,
-		directDLR: &net.Dialer{Timeout: cfg.DialTimeout},
+		cfg:             cfg,
+		provider:        provider,
+		engine:          engine,
+		logger:          logger,
+		directDLR:       &net.Dialer{Timeout: cfg.DialTimeout},
+		defaultStrategy: cfg.DefaultStrategy,
 	}
 	if strings.TrimSpace(cfg.BoundTokens) != "" {
 		if overlay, ok := parseTokens(cfg.BoundTokens); ok {
@@ -105,7 +107,22 @@ func (s *Server) currentEngine() *routerule.Engine {
 func (s *Server) Listen() string { return s.cfg.Listen }
 
 // DefaultStrategy returns the entry's default selection strategy.
-func (s *Server) DefaultStrategy() pool.Strategy { return s.cfg.DefaultStrategy }
+func (s *Server) DefaultStrategy() pool.Strategy {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.defaultStrategy
+}
+
+// SetDefaultStrategy hot-swaps the default selection strategy used when a
+// request does not specify one.
+func (s *Server) SetDefaultStrategy(strategy pool.Strategy) {
+	if strategy == "" {
+		strategy = pool.StrategyStable
+	}
+	s.mu.Lock()
+	s.defaultStrategy = strategy
+	s.mu.Unlock()
+}
 
 // RuleCount returns the number of active (non-FINAL) routing rules, or 0 when
 // no engine is bound.
@@ -287,7 +304,7 @@ func (s *Server) checkAuthConn(conn net.Conn, req *http.Request) bool {
 // key.
 func (s *Server) resolveDirective(reqOverlay directiveOverlay, host, sessionFallback string) (resolved, routerule.Policy) {
 	overlay := s.bound.merge(reqOverlay)
-	res := overlay.resolve(s.cfg.DefaultStrategy, sessionFallback)
+	res := overlay.resolve(s.DefaultStrategy(), sessionFallback)
 	policy := policyForSplit(res.split, s.currentEngine(), host)
 	return res, policy
 }

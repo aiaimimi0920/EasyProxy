@@ -116,6 +116,13 @@ func (e *Engine) SetGeoLookup(geo CountryLookup) {
 	e.mu.Unlock()
 }
 
+// SetFinal swaps the fallback FINAL policy applied when no rule matches.
+func (e *Engine) SetFinal(final Policy) {
+	e.mu.Lock()
+	e.final = final
+	e.mu.Unlock()
+}
+
 // Match returns the routing policy for a destination host. The host may be a
 // domain name or a literal IP (with or without brackets for IPv6). Matching is
 // case-insensitive for domains.

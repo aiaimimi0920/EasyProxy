@@ -1810,6 +1810,9 @@ func (c *Config) SaveSettings() error {
 	// GeoIP
 	saveCfg.GeoIP = c.GeoIP
 
+	// Routing (smart dispatch entry)
+	saveCfg.Routing = c.Routing
+
 	// Connectors
 	saveCfg.Connectors = c.Connectors
 

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import MonitorPanel from './components/MonitorPanel'
 import ManagePanel from './components/ManagePanel'
+import RoutingPanel from './components/RoutingPanel'
 import DebugPanel from './components/DebugPanel'
 import SettingsPanel from './components/SettingsPanel'
 import LoginPage from './components/LoginPage'
@@ -8,7 +9,7 @@ import { checkAuth, getToken, logout } from './api/client'
 import packageJson from '../package.json'
 
 type AuthState = 'loading' | 'need_login' | 'authenticated'
-type TabId = 'monitor' | 'manage' | 'debug' | 'settings'
+type TabId = 'monitor' | 'manage' | 'routing' | 'debug' | 'settings'
 
 const ALL_THEMES = [
   'light', 'dark', 'cupcake', 'bumblebee', 'emerald', 'corporate',
@@ -41,6 +42,16 @@ const MENU_ITEMS: { id: TabId; label: string; icon: React.ReactNode; desc: strin
     ),
   },
   {
+    id: 'routing',
+    label: '智能分流',
+    desc: '规则与策略',
+    icon: (
+      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+      </svg>
+    ),
+  },
+  {
     id: 'debug',
     label: '调试面板',
     desc: '运行时信息',
@@ -63,7 +74,7 @@ const MENU_ITEMS: { id: TabId; label: string; icon: React.ReactNode; desc: strin
   },
 ]
 
-const VALID_TABS: TabId[] = ['monitor', 'manage', 'debug', 'settings']
+const VALID_TABS: TabId[] = ['monitor', 'manage', 'routing', 'debug', 'settings']
 const THEME_STORAGE_KEY = 'ep-theme'
 
 const APP_VERSION = `v${packageJson.version}`
@@ -173,6 +184,7 @@ function App() {
     switch (activeTab) {
       case 'monitor': return <MonitorPanel />
       case 'manage': return <ManagePanel />
+      case 'routing': return <RoutingPanel />
       case 'debug': return <DebugPanel />
       case 'settings': return <SettingsPanel />
       default: return <MonitorPanel />

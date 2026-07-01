@@ -368,3 +368,22 @@ export async function importNodes(content: string): Promise<{ message: string; i
     body: JSON.stringify({ content }),
   })
 }
+
+// ---- Smart Routing API ----
+
+export async function fetchRoutingStatus(): Promise<import('../types').RoutingStatus> {
+  return request<import('../types').RoutingStatus>('/api/routing/status')
+}
+
+export async function fetchRoutingConfig(): Promise<import('../types').RoutingConfig> {
+  return request<import('../types').RoutingConfig>('/api/routing/config')
+}
+
+export async function updateRoutingConfig(
+  cfg: import('../types').RoutingConfig
+): Promise<import('../types').RoutingConfigUpdateResponse> {
+  return request<import('../types').RoutingConfigUpdateResponse>('/api/routing/config', {
+    method: 'PUT',
+    body: JSON.stringify(cfg),
+  })
+}

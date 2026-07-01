@@ -257,3 +257,40 @@ export interface TrafficStreamEvent {
   sampled_at: string
   nodes: TrafficStreamNode[]
 }
+
+// ---- Smart Routing (smart dispatch entry) types ----
+
+export interface RoutingStatus {
+  enabled: boolean
+  listen?: string
+  default_strategy?: string
+  final_policy?: string
+  rule_count: number
+  sticky_buckets?: Record<string, string>
+  sticky_sessions?: Record<string, string>
+}
+
+export interface RoutingProviderConfig {
+  url: string
+  policy: string
+  behavior: string
+  interval: string
+}
+
+export interface RoutingConfig {
+  enabled: boolean
+  listen: string
+  default_strategy: string
+  use_default_rules: boolean
+  final_policy: string
+  rules: string[]
+  rule_providers: RoutingProviderConfig[]
+  long_lived_min_uptime: string
+  long_lived_min_success_rate: number
+  session_ttl: string
+}
+
+export interface RoutingConfigUpdateResponse {
+  message: string
+  need_reload: boolean
+}

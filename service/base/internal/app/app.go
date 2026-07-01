@@ -116,13 +116,13 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// disabled this is a no-op and the plain pool inbound keeps serving all
 	// traffic exactly as before. When enabled the dispatcher takes over the
 	// proxy entry, performing rule-based splitting + strategy node selection
-	// while sharing the same underlying pool.
-	dispatchSrv, dispatchGeo := startDispatch(ctx, cfg, boxMgr)
-	if dispatchSrv != nil {
-		defer dispatchSrv.Stop()
-	}
-	if dispatchGeo != nil {
-		defer dispatchGeo.Close()
+	// while sharing the same underlying pool. The controller also lets the
+	// management API hot-apply rule/strategy edits without a full reload.
+	routingCtl := NewRoutingController(ctx, boxMgr)
+	routingCtl.Start(cfg)
+	defer routingCtl.Stop()
+	if server := boxMgr.MonitorServer(); server != nil {
+		server.SetRoutingController(routingCtl)
 	}
 
 	// ── 7. Start periodic stats flush ──
