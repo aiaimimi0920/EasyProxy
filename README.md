@@ -207,6 +207,7 @@ Read the module-specific deployment notes:
 ## Documentation
 
 - `docs/architecture.md`
+- `docs/smart-routing.md`
 - `docs/quickstart.md`
 - `docs/release-checklist.md`
 - `docs/release-notes-template.md`

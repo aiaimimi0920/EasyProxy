@@ -44,7 +44,8 @@ type Options struct {
 	FailureThreshold  int
 	BlacklistDuration time.Duration
 	Metadata          map[string]MemberMeta
-	MaxRetries        int // max retry attempts on connection failure (default 2)
+	MaxRetries        int           // max retry attempts on connection failure (default 2)
+	SessionTTL        time.Duration // idle TTL for session-strategy stickiness (default 10m)
 }
 
 // MemberMeta carries optional descriptive information for monitoring UI.
@@ -56,6 +57,7 @@ type MemberMeta struct {
 	Port           uint16
 	Region         string // GeoIP region code: "jp", "kr", "us", "hk", "tw", "other"
 	Country        string // Full country name from GeoIP
+	CountryISO     string // ISO country code from GeoIP (e.g. "US", "JP")
 	SourceKind     string
 	SourceName     string
 	SourceRef      string
@@ -90,6 +92,7 @@ type poolOutbound struct {
 	rngMu          sync.Mutex // protects rng for random mode
 	monitor        *monitor.Manager
 	candidatesPool sync.Pool
+	sticky         *stickyState
 }
 
 func newPool(ctx context.Context, _ adapter.Router, logger log.ContextLogger, tag string, options Options) (adapter.Outbound, error) {
@@ -117,6 +120,7 @@ func newPool(ctx context.Context, _ adapter.Router, logger log.ContextLogger, ta
 				return make([]*memberState, 0, memberCount)
 			},
 		},
+		sticky: newStickyState(normalized.SessionTTL),
 	}
 
 	// Register nodes immediately if monitor is available
@@ -331,17 +335,27 @@ func (p *poolOutbound) memberName(member *memberState) string {
 	return member.tag
 }
 
+// StickySnapshot exposes the current stable-bucket and session affinity state
+// for observability. Returns an empty snapshot when stickiness is not in use.
+func (p *poolOutbound) StickySnapshot() StickySnapshot {
+	if p == nil || p.sticky == nil {
+		return StickySnapshot{Buckets: map[string]string{}, Sessions: map[string]string{}}
+	}
+	return p.sticky.snapshot()
+}
+
 func (p *poolOutbound) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
 	maxRetries := p.options.MaxRetries
 	var lastErr error
 	excluded := make(map[string]struct{})
 	dst := destination.String()
+	directive := DirectiveFrom(ctx)
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if ctx.Err() != nil {
 			break
 		}
-		member, err := p.pickMember(network, excluded)
+		member, err := p.pickMember(network, excluded, directive)
 		if err != nil {
 			break
 		}
@@ -375,12 +389,13 @@ func (p *poolOutbound) ListenPacket(ctx context.Context, destination M.Socksaddr
 	var lastErr error
 	excluded := make(map[string]struct{})
 	dst := destination.String()
+	directive := DirectiveFrom(ctx)
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if ctx.Err() != nil {
 			break
 		}
-		member, err := p.pickMember(N.NetworkUDP, excluded)
+		member, err := p.pickMember(N.NetworkUDP, excluded, directive)
 		if err != nil {
 			break
 		}
@@ -409,7 +424,7 @@ func (p *poolOutbound) ListenPacket(ctx context.Context, destination M.Socksaddr
 	return nil, E.New("no healthy proxy available")
 }
 
-func (p *poolOutbound) pickMember(network string, excluded map[string]struct{}) (*memberState, error) {
+func (p *poolOutbound) pickMember(network string, excluded map[string]struct{}, directive *SelectionDirective) (*memberState, error) {
 	now := time.Now()
 	candidates := p.getCandidateBuffer()
 	sourceStates := p.sourceSelectionStates()
@@ -423,25 +438,25 @@ func (p *poolOutbound) pickMember(network string, excluded map[string]struct{}) 
 			return nil, err
 		}
 	}
-	candidates = p.availableMembersLocked(now, network, candidates, sourceStates, secondaryStates, true, true, excluded)
+	candidates = p.availableMembersLocked(now, network, candidates, sourceStates, secondaryStates, true, true, excluded, directive)
 	p.mu.Unlock()
 
 	if len(candidates) == 0 {
 		p.mu.Lock()
-		candidates = p.availableMembersLocked(now, network, candidates, sourceStates, secondaryStates, true, false, excluded)
+		candidates = p.availableMembersLocked(now, network, candidates, sourceStates, secondaryStates, true, false, excluded, directive)
 		p.mu.Unlock()
 	}
 
 	if len(candidates) == 0 {
 		p.mu.Lock()
-		candidates = p.availableMembersLocked(now, network, candidates, sourceStates, secondaryStates, false, false, excluded)
+		candidates = p.availableMembersLocked(now, network, candidates, sourceStates, secondaryStates, false, false, excluded, directive)
 		p.mu.Unlock()
 	}
 
 	if len(candidates) == 0 && len(excluded) == 0 {
 		p.mu.Lock()
 		if p.releaseIfAllBlacklistedLocked(now) {
-			candidates = p.availableMembersLocked(now, network, candidates, sourceStates, secondaryStates, false, false, excluded)
+			candidates = p.availableMembersLocked(now, network, candidates, sourceStates, secondaryStates, false, false, excluded, directive)
 		}
 		p.mu.Unlock()
 	}
@@ -451,9 +466,47 @@ func (p *poolOutbound) pickMember(network string, excluded map[string]struct{}) 
 		return nil, E.New("no healthy proxy available")
 	}
 
-	member := p.selectMember(candidates, sourceStates, secondaryStates)
+	member := p.selectMemberWithDirective(candidates, sourceStates, secondaryStates, directive)
 	p.putCandidateBuffer(candidates)
 	return member, nil
+}
+
+// selectMemberWithDirective applies stable/session stickiness when a directive
+// requests it, otherwise falls back to the pool's configured Mode selection.
+// candidates is the already filtered, healthy candidate set.
+func (p *poolOutbound) selectMemberWithDirective(
+	candidates []*memberState,
+	sourceStates map[string]monitor.SourceSelectionState,
+	secondaryStates map[string]monitor.SecondarySelectionState,
+	directive *SelectionDirective,
+) *memberState {
+	if directive == nil || p.sticky == nil {
+		return p.selectMember(candidates, sourceStates, secondaryStates)
+	}
+
+	// A manually pinned tag wins whenever it is still a healthy candidate.
+	// Otherwise we fall through to sticky promotion, which auto-fails-over to
+	// the next best node in the same bucket/session.
+	if directive.PinnedTag != "" {
+		if m := candidateByTag(candidates, directive.PinnedTag); m != nil {
+			return m
+		}
+	}
+
+	// fallback is the best candidate per the pool's configured Mode; sticky
+	// selection reuses it only when no healthy pinned member already exists.
+	fallback := p.selectMember(candidates, sourceStates, secondaryStates)
+
+	switch directive.Strategy {
+	case StrategyStable:
+		return p.sticky.pickStable(directive.Filter.bucketKey(), candidates, fallback)
+	case StrategySession:
+		// pickSession treats an empty key as "no stickiness" and just returns
+		// the fallback, so keyless callers never collapse onto one node.
+		return p.sticky.pickSession(directive.SessionKey, candidates, fallback)
+	default:
+		return fallback
+	}
 }
 
 func (p *poolOutbound) availableMembersLocked(
@@ -465,6 +518,7 @@ func (p *poolOutbound) availableMembersLocked(
 	enforceSourceExclusion bool,
 	enforceSecondaryExclusion bool,
 	excluded map[string]struct{},
+	directive *SelectionDirective,
 ) []*memberState {
 	result := buf[:0]
 	for _, member := range p.members {
@@ -478,6 +532,9 @@ func (p *poolOutbound) availableMembersLocked(
 		if network != "" && !common.Contains(member.outbound.Network(), network) {
 			continue
 		}
+		if directive != nil && !p.memberMatchesFilter(member, directive.Filter) {
+			continue
+		}
 		if enforceSourceExclusion {
 			if state, ok := sourceStates[p.sourceRefForMember(member)]; ok && state.Excluded {
 				continue
@@ -489,6 +546,57 @@ func (p *poolOutbound) availableMembersLocked(
 		result = append(result, member)
 	}
 	return result
+}
+
+// memberMatchesFilter reports whether a member satisfies the directive's
+// attribute filter (country / region / long-lived). An empty filter matches
+// every member. Country matching accepts either the ISO code or the full
+// country name so callers can pass either form.
+func (p *poolOutbound) memberMatchesFilter(member *memberState, filter NodeFilter) bool {
+	if filter.IsZero() {
+		return true
+	}
+	meta := p.options.Metadata[member.tag]
+
+	if len(filter.Countries) > 0 {
+		iso := strings.ToUpper(strings.TrimSpace(meta.CountryISO))
+		name := strings.ToUpper(strings.TrimSpace(meta.Country))
+		matched := false
+		for _, want := range filter.Countries {
+			if want == iso || want == name {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+
+	if len(filter.Regions) > 0 {
+		region := strings.ToLower(strings.TrimSpace(meta.Region))
+		matched := false
+		for _, want := range filter.Regions {
+			if want == region {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+
+	if filter.LongLived != nil {
+		if member.entry == nil {
+			return !*filter.LongLived
+		}
+		if member.entry.Snapshot().LongLived != *filter.LongLived {
+			return false
+		}
+	}
+
+	return true
 }
 
 func (p *poolOutbound) releaseIfAllBlacklistedLocked(now time.Time) bool {

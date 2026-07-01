@@ -336,3 +336,52 @@ func TestSubscriptionCacheDirResolvesRelativeDatabasePathAgainstConfigFile(t *te
 		t.Fatalf("SubscriptionCacheDir() = %q, want %q", got, want)
 	}
 }
+
+func TestRoutingTakesOverPoolInbound(t *testing.T) {
+	mk := func(enabled bool, listenerAddr string, listenerPort uint16, routingListen string) *Config {
+		c := &Config{}
+		c.Listener.Address = listenerAddr
+		c.Listener.Port = listenerPort
+		c.Routing.Enabled = enabled
+		c.Routing.Listen = routingListen
+		return c
+	}
+
+	tests := []struct {
+		name string
+		cfg  *Config
+		want bool
+	}{
+		{
+			name: "routing disabled never takes over",
+			cfg:  mk(false, "0.0.0.0", 22323, ""),
+			want: false,
+		},
+		{
+			name: "route A: default listen takes over same port",
+			cfg:  mk(true, "0.0.0.0", 22323, ""),
+			want: true,
+		},
+		{
+			name: "route A: empty host equals 0.0.0.0",
+			cfg:  mk(true, "", 22323, ""),
+			want: true,
+		},
+		{
+			name: "route A: explicit routing.listen matching port",
+			cfg:  mk(true, "0.0.0.0", 22323, "0.0.0.0:22323"),
+			want: true,
+		},
+		{
+			name: "route B: different port coexists",
+			cfg:  mk(true, "0.0.0.0", 22323, "0.0.0.0:22324"),
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		if got := tt.cfg.RoutingTakesOverPoolInbound(); got != tt.want {
+			t.Fatalf("%s: RoutingTakesOverPoolInbound() = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}

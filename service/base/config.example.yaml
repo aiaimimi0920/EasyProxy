@@ -89,6 +89,59 @@ geoip:
   #   - 更新过程采用热重载，不会中断现有连接
 
 # ───────────────────────────────────────────────────────────────
+# 智能分流入口 routing（可选，默认关闭）
+# ───────────────────────────────────────────────────────────────
+# 启用后，dispatcher 接管默认代理入口（listener 的 host:port），提供：
+#   1) 按规则分流：根据访问目标判定 直连(DIRECT) / 走代理池(PROXY)，规则语法与
+#      Clash/mihomo 基本一致
+#   2) 选节点策略：默认入口（系统代理、无参数）走 stable —— 所有需要翻墙的流量
+#      固定打到同一个长效稳定节点（防封号），该节点不可用时自动切换到下一个
+#   3) API 调用可传参覆盖：路径前缀 / X-Proxy-* 头 / 绑定端口三种方式
+#
+# 不启用时（enabled: false）运行时行为与旧版完全一致：裸 pool 入口服务所有流量、
+# 不做任何分流。
+#
+# routing:
+#   enabled: false                 # 总开关；true 时 dispatcher 接管 listener 入口
+#   # listen: "0.0.0.0:22323"      # 留空 = 接管 listener 的 host:port
+#   default_strategy: stable       # 默认入口策略：stable / session / auto（默认 stable）
+#   use_default_rules: true        # 是否附加内置“中国直连”默认规则集（默认 true）
+#   final_policy: PROXY            # 无规则命中时的兜底：PROXY / DIRECT（默认 PROXY）
+#   rules:                         # 自定义规则，优先级高于默认集，按顺序匹配
+#     - "DOMAIN-SUFFIX,example.com,DIRECT"
+#     - "DOMAIN-KEYWORD,google,PROXY"
+#     - "IP-CIDR,203.0.113.0/24,DIRECT"
+#     - "GEOIP,CN,DIRECT"          # 仅对“目标本身已是 IP”的请求生效
+#   rule_providers:                # 远程规则集（社区域名列表等），定时刷新
+#     - url: "https://example.com/china-direct.txt"
+#       policy: DIRECT
+#       behavior: domain           # domain（每行一个域名）/ classical（每行 TYPE,value）
+#       interval: 24h
+#   long_lived:                    # “长效节点”判定阈值（stable 防封号用）
+#     min_uptime: 2h               # 持续在线时长达标（默认 2h）
+#     min_success_rate: 0.9        # 成功率达标（默认 0.9）
+#   session:
+#     ttl: 10m                     # session 策略的会话粘性空闲过期（默认 10m）
+#
+# API 传参速查（仅在 routing.enabled 时生效）：
+#   路径前缀:  CONNECT stable+us/example.com:443
+#              GET http://代理/session+sid=job42/...
+#     令牌:    auto|stable|session  jp|kr|us|hk|tw|other  cc=US  long|nolong
+#              pin=<节点tag>  sid=<会话key>  split|nosplit
+#   HTTP 头:   X-Proxy-Strategy / X-Proxy-Country / X-Proxy-Region /
+#              X-Proxy-Long-Lived / X-Proxy-Pin / X-Proxy-Session / X-Proxy-Split
+#   SOCKS5:    用 username 字段承载令牌，语法与路径前缀完全一致（行业惯例）。
+#              入口端口同时支持 HTTP/HTTPS CONNECT 与 SOCKS5（按首字节自动识别）。
+#              例: socks5h://stable+us+sid=job42@代理:22323
+#                  username = "stable+us+sid=job42"  （+ 之后即令牌串）
+#              鉴权: 配了 listener.password 时，SOCKS 的 password 必须匹配；
+#                    username 的首段（+ 之前）比对 listener.username，
+#                    之后为令牌。未配鉴权时 username 纯作令牌用。
+#   说明:      X-Proxy-Split: off / nosplit 令牌  → 关闭分流、全程走代理（爬虫常用）
+#              session 未显式给 sid 时，按客户端来源 IP 兜底保持会话粘性
+#   可观测:    GET /api/routing/status  查看规则数 / 默认策略 / 当前粘性绑定
+
+# ───────────────────────────────────────────────────────────────
 # 订阅自动刷新配置（可选）
 # ───────────────────────────────────────────────────────────────
 # subscription_refresh:

@@ -120,6 +120,7 @@ func Build(cfg *config.Config) (option.Options, error) {
 			regionInfo := geoLookup.LookupURI(node.URI)
 			meta.Region = regionInfo.Code
 			meta.Country = regionInfo.Country
+			meta.CountryISO = regionInfo.ISOCode
 			regionMembers[regionInfo.Code] = append(regionMembers[regionInfo.Code], tag)
 		} else {
 			meta.Region = geoip.RegionOther
@@ -175,13 +176,23 @@ func Build(cfg *config.Config) (option.Options, error) {
 		return option.Options{}, fmt.Errorf("unsupported mode %s", cfg.Mode)
 	}
 
-	// Build pool inbound (single entry point for all nodes)
+	// Build pool inbound (single entry point for all nodes).
+	//
+	// When the smart dispatch entry takes over the same host:port (routing route
+	// A), the plain pool inbound must be omitted so the dispatcher can bind that
+	// port. The pool *outbound* is still built below — the dispatcher dials it
+	// directly with the per-request selection directive — so health checks,
+	// blacklisting, and stats are unchanged.
 	if enablePoolInbound {
-		inbound, err := buildPoolInbound(cfg)
-		if err != nil {
-			return option.Options{}, err
+		if !cfg.RoutingTakesOverPoolInbound() {
+			inbound, err := buildPoolInbound(cfg)
+			if err != nil {
+				return option.Options{}, err
+			}
+			inbounds = append(inbounds, inbound)
+		} else {
+			log.Printf("🧭 routing entry takes over %s; plain pool inbound omitted", cfg.DispatchListen())
 		}
-		inbounds = append(inbounds, inbound)
 		poolOptions := poolout.Options{
 			Mode:              cfg.Pool.Mode,
 			Members:           memberTags,
@@ -189,6 +200,7 @@ func Build(cfg *config.Config) (option.Options, error) {
 			BlacklistDuration: cfg.Pool.BlacklistDuration,
 			Metadata:          metadata,
 			MaxRetries:        cfg.Pool.MaxRetries,
+			SessionTTL:        cfg.Routing.Session.TTL,
 		}
 		outbounds = append(outbounds, option.Outbound{
 			Type:    poolout.Type,

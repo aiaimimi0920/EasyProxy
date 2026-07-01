@@ -19,6 +19,7 @@ import (
 	"easy_proxies/internal/store"
 
 	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/include"
 )
 
@@ -379,6 +380,36 @@ func (m *Manager) MonitorServer() *monitor.Server {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.monitorServer
+}
+
+// PoolOutbound returns the live proxy-pool outbound from the current box, or
+// nil if no box is running or the pool outbound is absent. It always reads the
+// current box so callers stay correct across reloads (which swap the box).
+func (m *Manager) PoolOutbound() (adapter.Outbound, bool) {
+	m.mu.RLock()
+	b := m.currentBox
+	m.mu.RUnlock()
+	if b == nil {
+		return nil, false
+	}
+	return b.Outbound().Outbound(pool.Tag)
+}
+
+// StickySnapshot returns the live pool's stable/session affinity snapshot, or
+// (zero, false) when no pool outbound is currently running.
+func (m *Manager) StickySnapshot() (pool.StickySnapshot, bool) {
+	out, ok := m.PoolOutbound()
+	if !ok || out == nil {
+		return pool.StickySnapshot{}, false
+	}
+	type stickyReporter interface {
+		StickySnapshot() pool.StickySnapshot
+	}
+	sr, ok := out.(stickyReporter)
+	if !ok {
+		return pool.StickySnapshot{}, false
+	}
+	return sr.StickySnapshot(), true
 }
 
 // PrepareMonitor initializes the shared monitor manager/server ahead of the

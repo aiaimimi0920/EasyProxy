@@ -383,6 +383,7 @@ func TestAvailableMembersLockedExcludesBadSecondaryClusters(t *testing.T) {
 		true,
 		true,
 		nil,
+		nil,
 	)
 	if len(candidates) != 1 || candidates[0].tag != "good-node" {
 		t.Fatalf("expected only good-node to remain after secondary exclusion, got %+v", candidates)

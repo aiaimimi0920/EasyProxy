@@ -110,6 +110,7 @@ cp ./config.example.yaml ./config.yaml
 - `source_sync.connector_runtime.*`: 当 manifest 含有 `connector_type = ech_worker` 时，本地拉起 `ech-workers` 并转换成临时上游代理
 - `connectors[]` / manifest `connector`: 也支持 `connector_type = zenproxy_client`，运行时会请求 ZenProxy `/api/client/fetch` 并把返回的 sing-box outbound 转成临时节点
 - 纯 `source_sync` / 纯 connector 场景现在也可直接启动，不再需要本地占位节点
+- `routing.*`: 智能分流入口（默认关闭）。开启后接管 `listener` 端口，HTTP/HTTPS 与 SOCKS5 同端口共存，提供「规则分流（直连/代理）+ 选节点策略（stable/session/auto）+ 节点属性筛选（国家/地区/长效）」三层能力。默认入口（系统代理、无参数）走「中国直连 + 其余 stable 长效稳定」；API 调用可用路径前缀 / `X-Proxy-*` 头 / SOCKS5 username 令牌覆盖。详见 [`docs/smart-routing.md`](../../docs/smart-routing.md)
 
 管理 API 的可观测性补充：
 
@@ -123,6 +124,10 @@ cp ./config.example.yaml ./config.yaml
 - `GET /api/debug`
   - 现在也会附带 `source_ref` / `source_name` / `source_kind` 与
     `effective_available` 等字段，方便逐节点排查
+  - 每个节点还附带 `long_lived` / `uptime_seconds`，用于长效节点判定
+- `GET /api/routing/status`
+  - 仅在 `routing.enabled` 时有意义，返回智能分流入口的监听地址、默认策略、
+    规则数、兜底策略，以及当前 stable 桶 / session 会话的粘性绑定快照
 
 ---
 

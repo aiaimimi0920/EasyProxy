@@ -62,6 +62,9 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		ProxyPassword:  proxyPassword,
 		ExternalIP:     cfg.ExternalIP,
 		SkipCertVerify: cfg.SkipCertVerify,
+
+		LongLivedMinUptime:      cfg.Routing.LongLived.MinUptime,
+		LongLivedMinSuccessRate: cfg.Routing.LongLived.MinSuccessRate,
 	}
 
 	// ── 4. Bootstrap runtime-only sources before initial startup ──
@@ -108,6 +111,19 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// (e.g., user enables subscriptions via WebUI). The manager's internal
 	// refresh loop checks config state to decide when to actually refresh.
 	subMgr.Start()
+
+	// ── 6b. Start the smart dispatch entry (opt-in via routing.enabled). When
+	// disabled this is a no-op and the plain pool inbound keeps serving all
+	// traffic exactly as before. When enabled the dispatcher takes over the
+	// proxy entry, performing rule-based splitting + strategy node selection
+	// while sharing the same underlying pool.
+	dispatchSrv, dispatchGeo := startDispatch(ctx, cfg, boxMgr)
+	if dispatchSrv != nil {
+		defer dispatchSrv.Stop()
+	}
+	if dispatchGeo != nil {
+		defer dispatchGeo.Close()
+	}
 
 	// ── 7. Start periodic stats flush ──
 	statsCtx, statsCancel := context.WithCancel(ctx)

@@ -27,6 +27,12 @@ type Config struct {
 	ProxyPassword  string // 代理池的密码（用于导出）
 	ExternalIP     string // 外部 IP 地址，用于导出时替换 0.0.0.0
 	SkipCertVerify bool   // 全局跳过 SSL 证书验证
+
+	// LongLivedMinUptime / LongLivedMinSuccessRate control when a node is
+	// considered "long-lived" (stable enough for sticky/anti-ban use). Zero
+	// values fall back to defaults (2h / 0.9).
+	LongLivedMinUptime      time.Duration
+	LongLivedMinSuccessRate float64
 }
 
 type ProbeTargetSpec struct {
@@ -68,6 +74,18 @@ type TimelineEvent struct {
 
 const maxTimelineSize = 20
 
+// Long-lived (长效) judgement defaults. A node is considered long-lived when it
+// has been continuously known for at least defaultLongLivedMinUptime and its
+// reported success rate is at least defaultLongLivedMinSuccessRate, while it is
+// currently effectively available.
+const (
+	defaultLongLivedMinUptime      = 2 * time.Hour
+	defaultLongLivedMinSuccessRate = 0.9
+	// minimum reported samples before success-rate gating applies, avoids a
+	// single early success marking a node long-lived prematurely.
+	longLivedMinSamples = 5
+)
+
 // Snapshot is a runtime view of a proxy node.
 type Snapshot struct {
 	NodeInfo
@@ -96,6 +114,8 @@ type Snapshot struct {
 	TrafficProvenUsable       bool            `json:"traffic_proven_usable"`
 	EffectiveAvailable        bool            `json:"effective_available"`
 	AvailabilitySource        string          `json:"availability_source,omitempty"`
+	LongLived                 bool            `json:"long_lived"`
+	UptimeSeconds             int64           `json:"uptime_seconds"`
 	TotalUpload               int64           `json:"total_upload"`
 	TotalDownload             int64           `json:"total_download"`
 	UploadSpeed               int64           `json:"upload_speed"`   // bytes/sec
@@ -240,7 +260,10 @@ type entry struct {
 	release          releaseFunc
 	initialCheckDone bool
 	available        bool
-	reloadGen        uint64 // generation counter to track active registrations
+	firstSeenAt        time.Time     // first registration time, used for long-lived uptime
+	longLivedMinUptime time.Duration // resolved long-lived min uptime threshold
+	longLivedMinRate   float64       // resolved long-lived min success-rate threshold
+	reloadGen          uint64        // generation counter to track active registrations
 	mu               sync.RWMutex
 }
 
@@ -716,19 +739,42 @@ func (m *Manager) ClearNodes() {
 func (m *Manager) Register(info NodeInfo) *EntryHandle {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	minUptime, minRate := m.longLivedThresholds()
 	e, ok := m.nodes[info.Tag]
 	if !ok {
 		e = &entry{
-			info:      info,
-			timeline:  make([]TimelineEvent, 0, maxTimelineSize),
-			reloadGen: m.reloadGen,
+			info:               info,
+			timeline:           make([]TimelineEvent, 0, maxTimelineSize),
+			reloadGen:          m.reloadGen,
+			firstSeenAt:        time.Now(),
+			longLivedMinUptime: minUptime,
+			longLivedMinRate:   minRate,
 		}
 		m.nodes[info.Tag] = e
 	} else {
 		e.info = info
 		e.reloadGen = m.reloadGen
+		if e.firstSeenAt.IsZero() {
+			e.firstSeenAt = time.Now()
+		}
+		e.longLivedMinUptime = minUptime
+		e.longLivedMinRate = minRate
 	}
 	return &EntryHandle{ref: e}
+}
+
+// longLivedThresholds resolves configured long-lived thresholds, falling back
+// to defaults when unset.
+func (m *Manager) longLivedThresholds() (time.Duration, float64) {
+	minUptime := m.cfg.LongLivedMinUptime
+	if minUptime <= 0 {
+		minUptime = defaultLongLivedMinUptime
+	}
+	minRate := m.cfg.LongLivedMinSuccessRate
+	if minRate <= 0 {
+		minRate = defaultLongLivedMinSuccessRate
+	}
+	return minUptime, minRate
 }
 
 func (m *Manager) resetInitialProbeGate() {
@@ -1326,7 +1372,36 @@ func (e *entry) snapshot() Snapshot {
 	snap.EffectiveAvailable = effectiveAvailable
 	snap.TrafficProvenUsable = trafficProvenUsable
 	snap.AvailabilitySource = availabilitySource
+
+	if !e.firstSeenAt.IsZero() {
+		uptime := now.Sub(e.firstSeenAt)
+		if uptime > 0 {
+			snap.UptimeSeconds = int64(uptime / time.Second)
+		}
+		minUptime := e.longLivedMinUptime
+		if minUptime <= 0 {
+			minUptime = defaultLongLivedMinUptime
+		}
+		minRate := e.longLivedMinRate
+		if minRate <= 0 {
+			minRate = defaultLongLivedMinSuccessRate
+		}
+		snap.LongLived = effectiveAvailable &&
+			uptime >= minUptime &&
+			reportedSuccessRate(e.reportSuccess, e.reportFailure) >= minRate
+	}
 	return snap
+}
+
+// reportedSuccessRate returns the success ratio over reported probe/feedback
+// outcomes. With no samples it returns 1.0 so a freshly-seen node is not
+// penalized before any probe has run (it still fails the uptime gate anyway).
+func reportedSuccessRate(success, failure int64) float64 {
+	total := success + failure
+	if total <= 0 {
+		return 1.0
+	}
+	return float64(success) / float64(total)
 }
 
 func (e *entry) trafficProvenUsableLocked(now time.Time) bool {

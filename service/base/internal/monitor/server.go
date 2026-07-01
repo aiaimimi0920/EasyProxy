@@ -67,6 +67,23 @@ type SourceSyncReporter interface {
 	SourceSyncStatus() SourceSyncStatus
 }
 
+// RoutingReporter exposes read-only smart-dispatch routing state for the
+// management API. Implemented by the box manager when routing is active.
+type RoutingReporter interface {
+	RoutingStatus() RoutingStatus
+}
+
+// RoutingStatus is the observability view of the smart dispatch entry.
+type RoutingStatus struct {
+	Enabled         bool              `json:"enabled"`
+	Listen          string            `json:"listen,omitempty"`
+	DefaultStrategy string            `json:"default_strategy,omitempty"`
+	FinalPolicy     string            `json:"final_policy,omitempty"`
+	RuleCount       int               `json:"rule_count"`
+	StickyBuckets   map[string]string `json:"sticky_buckets,omitempty"`  // filter bucket → pinned node tag
+	StickySessions  map[string]string `json:"sticky_sessions,omitempty"` // session key → bound node tag
+}
+
 // SubscriptionStatus represents subscription refresh status.
 type SubscriptionStatus struct {
 	Enabled          bool      `json:"enabled"`           // Whether auto-refresh is enabled in config
@@ -105,6 +122,7 @@ type Server struct {
 	nodeMgr      NodeManager
 	connectorMgr ConnectorManager
 	sourceSync   SourceSyncReporter
+	routing      RoutingReporter
 	proxyCompat  *proxyCompatState
 
 	// Serializes compatibility checkout selection/store so concurrent callers
@@ -168,6 +186,7 @@ func NewServer(cfg Config, mgr *Manager, logger *log.Logger) *Server {
 	mux.HandleFunc("/api/subscription/refresh", s.withAuth(s.handleSubscriptionRefresh))
 	mux.HandleFunc("/api/source-sync/status", s.withAuth(s.handleSourceSyncStatus))
 	mux.HandleFunc("/api/source-sync/source-health", s.withAuth(s.handleSourceSyncSourceHealth))
+	mux.HandleFunc("/api/routing/status", s.withAuth(s.handleRoutingStatus))
 	mux.HandleFunc("/api/reload", s.withAuth(s.handleReload))
 	mux.HandleFunc("/proxy/catalog", s.withAuth(s.handleProxyCatalog))
 	mux.HandleFunc("/proxy/snapshot", s.withAuth(s.handleProxySnapshot))
@@ -193,6 +212,13 @@ func (s *Server) SetSubscriptionRefresher(sr SubscriptionRefresher) {
 func (s *Server) SetSourceSyncReporter(sr SourceSyncReporter) {
 	if s != nil {
 		s.sourceSync = sr
+	}
+}
+
+// SetRoutingReporter enables the /api/routing/status endpoint.
+func (s *Server) SetRoutingReporter(rr RoutingReporter) {
+	if s != nil {
+		s.routing = rr
 	}
 }
 
@@ -1590,6 +1616,18 @@ func (s *Server) handleSourceSyncStatus(w http.ResponseWriter, r *http.Request) 
 	}
 
 	writeJSON(w, s.sourceSync.SourceSyncStatus())
+}
+
+func (s *Server) handleRoutingStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if s.routing == nil {
+		writeJSON(w, RoutingStatus{Enabled: false})
+		return
+	}
+	writeJSON(w, s.routing.RoutingStatus())
 }
 
 func (s *Server) handleSourceSyncSourceHealth(w http.ResponseWriter, r *http.Request) {

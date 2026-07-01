@@ -48,8 +48,45 @@ type Config struct {
 	SkipCertVerify      bool                      `yaml:"skip_cert_verify"` // 全局跳过 SSL 证书验证
 	DatabasePath        string                    `yaml:"database_path"`    // SQLite 数据库路径，默认 data/data.db
 	ExtraListeners      []ExtraListenerConfig     `yaml:"extra_listeners"`  // 额外监听端口（不同选择策略）
+	Routing             RoutingConfig             `yaml:"routing"`          // 智能分流 + 多策略选节点入口
 
 	filePath string `yaml:"-"` // 配置文件路径，用于保存
+}
+
+// RoutingConfig controls the smart dispatch entry: rule-based traffic splitting
+// (DIRECT vs PROXY) plus strategy-based node selection (stable / session /
+// attribute filters). When disabled the runtime behaves exactly as before: the
+// plain pool inbound serves all traffic with no splitting.
+type RoutingConfig struct {
+	Enabled         bool            `yaml:"enabled"`           // 是否启用智能分流入口（默认关闭，保持旧行为）
+	Listen          string          `yaml:"listen"`            // 智能入口监听地址，默认接管 listener 的 host:port
+	DefaultStrategy string          `yaml:"default_strategy"`  // 默认入口策略：stable / session / auto（默认 stable）
+	UseDefaultRules *bool           `yaml:"use_default_rules"` // 是否附加内置“中国直连”默认规则集（默认 true）
+	FinalPolicy     string          `yaml:"final_policy"`     // 兜底策略：DIRECT / PROXY（默认 PROXY）
+	Rules           []string        `yaml:"rules"`            // 自定义分流规则，按顺序优先于默认集
+	RuleProviders   []RuleProvider  `yaml:"rule_providers"`   // 远程规则集
+	LongLived       LongLivedConfig `yaml:"long_lived"`       // 长效节点判定阈值
+	Session         SessionConfig   `yaml:"session"`          // 会话粘性参数
+}
+
+// RuleProvider describes a remote rule list applied with a single policy.
+type RuleProvider struct {
+	URL      string        `yaml:"url"`
+	Policy   string        `yaml:"policy"`   // DIRECT / PROXY
+	Behavior string        `yaml:"behavior"` // domain / ipcidr / classical（默认 domain）
+	Interval time.Duration `yaml:"interval"` // 刷新间隔（默认 24h）
+}
+
+// LongLivedConfig sets when a node is considered "long-lived" (stable enough for
+// anti-ban stable strategy). Zero values fall back to defaults (2h / 0.9).
+type LongLivedConfig struct {
+	MinUptime      time.Duration `yaml:"min_uptime"`       // 最小在线时长（默认 2h）
+	MinSuccessRate float64       `yaml:"min_success_rate"` // 最小成功率 0-1（默认 0.9）
+}
+
+// SessionConfig controls session stickiness for the session strategy.
+type SessionConfig struct {
+	TTL time.Duration `yaml:"ttl"` // 会话空闲过期时间（默认 10m）
 }
 
 // ExtraListenerConfig defines an additional listener with its own pool selection mode.
@@ -525,6 +562,30 @@ func (c *Config) applyDefaults() error {
 		c.SourceSync.ConnectorRuntime.PreferredIP.IPFilePath = "/usr/local/share/cfst/ip.txt"
 	}
 
+	// Routing / smart-dispatch defaults. The feature is opt-in (Enabled defaults
+	// to false) so existing deployments keep their current behaviour untouched.
+	if strings.TrimSpace(c.Routing.DefaultStrategy) == "" {
+		c.Routing.DefaultStrategy = "stable"
+	}
+	if c.Routing.LongLived.MinUptime <= 0 {
+		c.Routing.LongLived.MinUptime = 2 * time.Hour
+	}
+	if c.Routing.LongLived.MinSuccessRate <= 0 {
+		c.Routing.LongLived.MinSuccessRate = 0.9
+	}
+	if c.Routing.Session.TTL <= 0 {
+		c.Routing.Session.TTL = 10 * time.Minute
+	}
+	if c.Routing.UseDefaultRules == nil {
+		useDefault := true
+		c.Routing.UseDefaultRules = &useDefault
+	}
+	for idx := range c.Routing.RuleProviders {
+		if c.Routing.RuleProviders[idx].Interval <= 0 {
+			c.Routing.RuleProviders[idx].Interval = 24 * time.Hour
+		}
+	}
+
 	if c.LogLevel == "" {
 		c.LogLevel = "info"
 	}
@@ -793,6 +854,63 @@ func (c *Config) ManagementEnabled() bool {
 		return true
 	}
 	return *c.Management.Enabled
+}
+
+// RoutingUseDefaultRules reports whether the built-in default rule set should be
+// appended after user rules. Defaults to true when unset.
+func (c *Config) RoutingUseDefaultRules() bool {
+	if c == nil || c.Routing.UseDefaultRules == nil {
+		return true
+	}
+	return *c.Routing.UseDefaultRules
+}
+
+// DispatchListen returns the host:port the smart dispatch entry should bind when
+// routing is enabled. An explicit routing.listen wins; otherwise the dispatcher
+// takes over the plain listener's host:port (route A — it becomes the default
+// proxy entry). This is the single source of truth shared by the builder (to
+// decide whether to drop the pool inbound) and app wiring (to start the server).
+func (c *Config) DispatchListen() string {
+	if c == nil {
+		return ""
+	}
+	if listen := strings.TrimSpace(c.Routing.Listen); listen != "" {
+		return listen
+	}
+	host := strings.TrimSpace(c.Listener.Address)
+	if host == "" {
+		host = "0.0.0.0"
+	}
+	return net.JoinHostPort(host, strconv.Itoa(int(c.Listener.Port)))
+}
+
+// RoutingTakesOverPoolInbound reports whether the smart dispatch entry binds the
+// same host:port as the plain pool inbound. When true the builder must omit the
+// pool inbound so the dispatcher can bind that port (the pool outbound is still
+// built and dialed directly by the dispatcher). When false (routing disabled, or
+// routing.listen points at a different port — route B) both entries coexist.
+func (c *Config) RoutingTakesOverPoolInbound() bool {
+	if c == nil || !c.Routing.Enabled {
+		return false
+	}
+	poolInbound := net.JoinHostPort(normalizeHostForCompare(c.Listener.Address), strconv.Itoa(int(c.Listener.Port)))
+	dispatch := c.DispatchListen()
+	if host, port, err := net.SplitHostPort(dispatch); err == nil {
+		dispatch = net.JoinHostPort(normalizeHostForCompare(host), port)
+	}
+	return dispatch == poolInbound
+}
+
+// normalizeHostForCompare canonicalizes bind hosts so that equivalent forms
+// ("", "0.0.0.0", "::") compare equal when deciding port takeover.
+func normalizeHostForCompare(host string) string {
+	h := strings.TrimSpace(host)
+	switch h {
+	case "", "0.0.0.0", "::", "[::]":
+		return "0.0.0.0"
+	default:
+		return h
+	}
 }
 
 // ConnectorRuntimeEnabled reports whether manifest connectors should be executed locally.
