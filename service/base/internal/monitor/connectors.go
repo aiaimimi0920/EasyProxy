@@ -91,17 +91,29 @@ func (p connectorPayload) toConfig(existing *config.ConnectorSourceConfig) confi
 
 func (s *Server) SetConnectorManager(cm ConnectorManager) {
 	if s != nil {
+		s.depsMu.Lock()
 		s.connectorMgr = cm
+		s.depsMu.Unlock()
 	}
 }
 
-func (s *Server) ensureConnectorManager(w http.ResponseWriter) bool {
-	if s.connectorMgr == nil {
+func (s *Server) connectorManagerSnapshot() ConnectorManager {
+	if s == nil {
+		return nil
+	}
+	s.depsMu.RLock()
+	defer s.depsMu.RUnlock()
+	return s.connectorMgr
+}
+
+func (s *Server) ensureConnectorManager(w http.ResponseWriter) (ConnectorManager, bool) {
+	connectorMgr := s.connectorManagerSnapshot()
+	if connectorMgr == nil {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		writeJSON(w, map[string]any{"error": "连接器管理未启用"})
-		return false
+		return nil, false
 	}
-	return true
+	return connectorMgr, true
 }
 
 func (s *Server) respondConnectorError(w http.ResponseWriter, err error) {
@@ -117,13 +129,14 @@ func (s *Server) respondConnectorError(w http.ResponseWriter, err error) {
 }
 
 func (s *Server) handleConfigConnectors(w http.ResponseWriter, r *http.Request) {
-	if !s.ensureConnectorManager(w) {
+	connectorMgr, ok := s.ensureConnectorManager(w)
+	if !ok {
 		return
 	}
 
 	switch r.Method {
 	case http.MethodGet:
-		connectors, err := s.connectorMgr.ListConfigConnectors(r.Context())
+		connectors, err := connectorMgr.ListConfigConnectors(r.Context())
 		if err != nil {
 			s.respondConnectorError(w, err)
 			return
@@ -136,13 +149,13 @@ func (s *Server) handleConfigConnectors(w http.ResponseWriter, r *http.Request) 
 			writeJSON(w, map[string]any{"error": "请求格式错误"})
 			return
 		}
-		connector, err := s.connectorMgr.CreateConnector(r.Context(), payload.toConfig(nil))
+		connector, err := connectorMgr.CreateConnector(r.Context(), payload.toConfig(nil))
 		if err != nil {
 			s.respondConnectorError(w, err)
 			return
 		}
 		message := "连接器已添加"
-		if err := s.connectorMgr.RefreshRuntimeSources(r.Context()); err != nil {
+		if err := connectorMgr.RefreshRuntimeSources(r.Context()); err != nil {
 			message += "，但自动刷新失败，请手动刷新"
 		} else {
 			message += "，并已自动刷新"
@@ -154,7 +167,8 @@ func (s *Server) handleConfigConnectors(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleConfigConnectorItem(w http.ResponseWriter, r *http.Request) {
-	if !s.ensureConnectorManager(w) {
+	connectorMgr, ok := s.ensureConnectorManager(w)
+	if !ok {
 		return
 	}
 
@@ -177,7 +191,7 @@ func (s *Server) handleConfigConnectorItem(w http.ResponseWriter, r *http.Reques
 			writeJSON(w, map[string]any{"error": "请求格式错误"})
 			return
 		}
-		currentConnectors, err := s.connectorMgr.ListConfigConnectors(r.Context())
+		currentConnectors, err := connectorMgr.ListConfigConnectors(r.Context())
 		if err != nil {
 			s.respondConnectorError(w, err)
 			return
@@ -190,13 +204,13 @@ func (s *Server) handleConfigConnectorItem(w http.ResponseWriter, r *http.Reques
 				break
 			}
 		}
-		connector, err := s.connectorMgr.UpdateConnector(r.Context(), connectorName, payload.toConfig(existing))
+		connector, err := connectorMgr.UpdateConnector(r.Context(), connectorName, payload.toConfig(existing))
 		if err != nil {
 			s.respondConnectorError(w, err)
 			return
 		}
 		message := "连接器已更新"
-		if err := s.connectorMgr.RefreshRuntimeSources(r.Context()); err != nil {
+		if err := connectorMgr.RefreshRuntimeSources(r.Context()); err != nil {
 			message += "，但自动刷新失败，请手动刷新"
 		} else {
 			message += "，并已自动刷新"
@@ -216,7 +230,7 @@ func (s *Server) handleConfigConnectorItem(w http.ResponseWriter, r *http.Reques
 			writeJSON(w, map[string]any{"error": "缺少 enabled 字段"})
 			return
 		}
-		if err := s.connectorMgr.SetConnectorEnabled(r.Context(), connectorName, *body.Enabled); err != nil {
+		if err := connectorMgr.SetConnectorEnabled(r.Context(), connectorName, *body.Enabled); err != nil {
 			s.respondConnectorError(w, err)
 			return
 		}
@@ -224,19 +238,19 @@ func (s *Server) handleConfigConnectorItem(w http.ResponseWriter, r *http.Reques
 		if !*body.Enabled {
 			action = "已禁用"
 		}
-		if err := s.connectorMgr.RefreshRuntimeSources(r.Context()); err != nil {
+		if err := connectorMgr.RefreshRuntimeSources(r.Context()); err != nil {
 			action += "，但自动刷新失败，请手动刷新"
 		} else {
 			action += "，并已自动刷新"
 		}
 		writeJSON(w, map[string]any{"message": action})
 	case http.MethodDelete:
-		if err := s.connectorMgr.DeleteConnector(r.Context(), connectorName); err != nil {
+		if err := connectorMgr.DeleteConnector(r.Context(), connectorName); err != nil {
 			s.respondConnectorError(w, err)
 			return
 		}
 		message := "连接器已删除"
-		if err := s.connectorMgr.RefreshRuntimeSources(r.Context()); err != nil {
+		if err := connectorMgr.RefreshRuntimeSources(r.Context()); err != nil {
 			message += "，但自动刷新失败，请手动刷新"
 		} else {
 			message += "，并已自动刷新"
@@ -248,7 +262,8 @@ func (s *Server) handleConfigConnectorItem(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) handleConnectorPreferredIPRefresh(w http.ResponseWriter, r *http.Request) {
-	if !s.ensureConnectorManager(w) {
+	connectorMgr, ok := s.ensureConnectorManager(w)
+	if !ok {
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -274,7 +289,7 @@ func (s *Server) handleConnectorPreferredIPRefresh(w http.ResponseWriter, r *htt
 		}
 	}
 
-	result, err := s.connectorMgr.RefreshPreferredEntryIPs(r.Context(), connectorName, options)
+	result, err := connectorMgr.RefreshPreferredEntryIPs(r.Context(), connectorName, options)
 	if err != nil {
 		s.respondConnectorError(w, err)
 		return

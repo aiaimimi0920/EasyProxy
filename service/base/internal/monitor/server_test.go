@@ -2,6 +2,7 @@ package monitor
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,12 +11,280 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"easy_proxies/internal/config"
 )
+
+type recordingRoutingController struct {
+	applyCalls  int
+	applyResult bool
+	lastConfig  *config.Config
+}
+
+func TestSetConfigDoesNotHoldCfgMuWhileWaitingForConfigRead(t *testing.T) {
+	s := &Server{}
+	cfg := &config.Config{}
+	cfg.Lock()
+	started := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		close(started)
+		s.SetConfig(cfg)
+		close(done)
+	}()
+	<-started
+
+	deadline := time.Now().Add(100 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if !s.cfgMu.TryRLock() {
+			cfg.Unlock()
+			<-done
+			t.Fatal("SetConfig acquired cfgMu before it could read the config")
+		}
+		s.cfgMu.RUnlock()
+		runtime.Gosched()
+	}
+	cfg.Unlock()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("SetConfig did not complete after the config read lock was released")
+	}
+}
+
+func TestNodeHandlerKeepsDependencySnapshotAcrossManagerReplacement(t *testing.T) {
+	mgr, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	defer mgr.Stop()
+	server := NewServer(Config{}, mgr, log.New(io.Discard, "", 0))
+	if server == nil {
+		t.Fatal("NewServer() returned nil")
+	}
+	original := &swappingNodeManager{server: server}
+	replacement := &swappingNodeManager{}
+	original.replacement = replacement
+	server.SetNodeManager(original)
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/nodes/config/node", strings.NewReader(`{"enabled":true}`))
+	rec := httptest.NewRecorder()
+	server.handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PATCH status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if got := original.reloadCalls.Load(); got != 1 {
+		t.Fatalf("original manager reload calls = %d, want 1", got)
+	}
+	if got := replacement.reloadCalls.Load(); got != 0 {
+		t.Fatalf("replacement manager reload calls = %d, want 0", got)
+	}
+}
+
+func TestConnectorHandlerKeepsDependencySnapshotAcrossManagerReplacement(t *testing.T) {
+	mgr, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	defer mgr.Stop()
+	server := NewServer(Config{}, mgr, log.New(io.Discard, "", 0))
+	if server == nil {
+		t.Fatal("NewServer() returned nil")
+	}
+	original := &swappingConnectorManager{server: server}
+	replacement := &swappingConnectorManager{}
+	original.replacement = replacement
+	server.SetConnectorManager(original)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/connectors/config", strings.NewReader(`{"name":"connector","input":"https://example.com/sub"}`))
+	rec := httptest.NewRecorder()
+	server.handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if got := original.createCalls.Load(); got != 1 {
+		t.Fatalf("original manager create calls = %d, want 1", got)
+	}
+	if got := original.refreshCalls.Load(); got != 1 {
+		t.Fatalf("original manager refresh calls = %d, want 1", got)
+	}
+	if got := replacement.refreshCalls.Load(); got != 0 {
+		t.Fatalf("replacement manager refresh calls = %d, want 0", got)
+	}
+}
+
+func TestListenerTransitionAppliesTargetConfigBeforeActivationAndRestoresOnRollback(t *testing.T) {
+	mgr, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	defer mgr.Stop()
+	oldListen := freeLifecycleListen(t)
+	newListen := freeLifecycleListenDifferent(t, oldListen)
+	enabled := true
+	oldCfg := &config.Config{Management: config.ManagementConfig{
+		Enabled:  &enabled,
+		Listen:   oldListen,
+		Password: "old-password",
+	}}
+	server := NewServer(Config{Enabled: true, Listen: oldListen, Password: "old-password"}, mgr, log.New(io.Discard, "", 0))
+	server.SetConfig(oldCfg)
+	if err := server.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	defer shutdownLifecycleServer(server)
+
+	targetCfg := &config.Config{Management: config.ManagementConfig{
+		Enabled:  &enabled,
+		Listen:   newListen,
+		Password: "new-password",
+	}}
+	transition, err := server.PrepareListener(true, newListen, targetCfg)
+	if err != nil {
+		t.Fatalf("PrepareListener() error = %v", err)
+	}
+	if err := transition.Activate(context.Background()); err != nil {
+		t.Fatalf("Activate() error = %v", err)
+	}
+	waitLifecycleListen(t, newListen, true)
+	if got := monitorRequestStatus(t, newListen, ""); got != http.StatusUnauthorized {
+		t.Fatalf("new listener without auth status = %d, want 401", got)
+	}
+	if got := monitorRequestStatus(t, newListen, "old-password"); got != http.StatusUnauthorized {
+		t.Fatalf("new listener with old password status = %d, want 401", got)
+	}
+	if got := monitorRequestStatus(t, newListen, "new-password"); got != http.StatusOK {
+		t.Fatalf("new listener with target password status = %d, want 200", got)
+	}
+	if err := transition.Rollback(); err != nil {
+		t.Fatalf("Rollback() error = %v", err)
+	}
+	waitLifecycleListen(t, newListen, false)
+	waitLifecycleListen(t, oldListen, true)
+	if got := monitorRequestStatus(t, oldListen, "new-password"); got != http.StatusUnauthorized {
+		t.Fatalf("rolled-back listener with target password status = %d, want 401", got)
+	}
+	if got := monitorRequestStatus(t, oldListen, "old-password"); got != http.StatusOK {
+		t.Fatalf("rolled-back listener with old password status = %d, want 200", got)
+	}
+}
+
+func monitorRequestStatus(t *testing.T, listen, password string) int {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, "http://"+listen+"/api/nodes", nil)
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+	if password != "" {
+		req.Header.Set("Authorization", password)
+	}
+	response, err := (&http.Client{Timeout: time.Second}).Do(req)
+	if err != nil {
+		t.Fatalf("GET monitor listener %s: %v", listen, err)
+	}
+	defer response.Body.Close()
+	return response.StatusCode
+}
+
+type swappingNodeManager struct {
+	server      *Server
+	replacement NodeManager
+	reloadCalls atomic.Int32
+}
+
+type swappingConnectorManager struct {
+	server       *Server
+	replacement  ConnectorManager
+	createCalls  atomic.Int32
+	refreshCalls atomic.Int32
+}
+
+func (m *swappingConnectorManager) ListConfigConnectors(context.Context) ([]config.ConnectorSourceConfig, error) {
+	return nil, nil
+}
+
+func (m *swappingConnectorManager) CreateConnector(
+	_ context.Context,
+	connector config.ConnectorSourceConfig,
+) (config.ConnectorSourceConfig, error) {
+	m.createCalls.Add(1)
+	if m.server != nil && m.replacement != nil {
+		m.server.SetConnectorManager(m.replacement)
+	}
+	return connector, nil
+}
+
+func (m *swappingConnectorManager) UpdateConnector(
+	_ context.Context,
+	_ string,
+	connector config.ConnectorSourceConfig,
+) (config.ConnectorSourceConfig, error) {
+	return connector, nil
+}
+
+func (m *swappingConnectorManager) DeleteConnector(context.Context, string) error { return nil }
+
+func (m *swappingConnectorManager) SetConnectorEnabled(context.Context, string, bool) error {
+	return nil
+}
+
+func (m *swappingConnectorManager) RefreshRuntimeSources(context.Context) error {
+	m.refreshCalls.Add(1)
+	return nil
+}
+
+func (m *swappingConnectorManager) RefreshPreferredEntryIPs(
+	context.Context,
+	string,
+	PreferredIPRefreshOptions,
+) (*PreferredIPRefreshResult, error) {
+	return &PreferredIPRefreshResult{}, nil
+}
+
+func (m *swappingNodeManager) ListConfigNodes(context.Context) ([]config.NodeConfig, error) {
+	return nil, nil
+}
+
+func (m *swappingNodeManager) CreateNode(_ context.Context, node config.NodeConfig) (config.NodeConfig, error) {
+	return node, nil
+}
+
+func (m *swappingNodeManager) UpdateNode(_ context.Context, _ string, node config.NodeConfig) (config.NodeConfig, error) {
+	return node, nil
+}
+
+func (m *swappingNodeManager) DeleteNode(context.Context, string) error { return nil }
+
+func (m *swappingNodeManager) SetNodeEnabled(context.Context, string, bool) error {
+	if m.server != nil && m.replacement != nil {
+		m.server.SetNodeManager(m.replacement)
+	}
+	return nil
+}
+
+func (m *swappingNodeManager) TriggerReload(context.Context) error {
+	m.reloadCalls.Add(1)
+	return nil
+}
+
+func (r *recordingRoutingController) RoutingStatus() RoutingStatus {
+	return RoutingStatus{}
+}
+
+func (r *recordingRoutingController) ApplyHot(cfg *config.Config) bool {
+	r.applyCalls++
+	if cfg != nil {
+		cfg.RLock()
+		r.lastConfig = cfg.Clone()
+		cfg.RUnlock()
+	}
+	return r.applyResult
+}
 
 func TestWithAuthAllowsDirectManagementPassword(t *testing.T) {
 	s := &Server{
@@ -576,6 +845,139 @@ func TestHandleSettingsReportsReloadRequirement(t *testing.T) {
 			}
 			if got := payload["need_reload"]; got != tt.wantReload {
 				t.Fatalf("expected need_reload=%v, got %v", tt.wantReload, got)
+			}
+		})
+	}
+}
+
+func TestUpdateRoutingConfigReloadMatrix(t *testing.T) {
+	baseRequest := routingConfigPayload{
+		Enabled:            true,
+		DefaultStrategy:    "stable",
+		UseDefaultRules:    true,
+		FinalPolicy:        "PROXY",
+		LongLivedMinUptime: "2h",
+		LongLivedMinRate:   0.9,
+		SessionTTL:         "10m",
+	}
+
+	tests := []struct {
+		name        string
+		mutate      func(*routingConfigPayload)
+		wantReload  bool
+		wantApply   bool
+		wantUptime  time.Duration
+		wantRate    float64
+		wantSession time.Duration
+	}{
+		{
+			name: "uptime threshold hot applies",
+			mutate: func(req *routingConfigPayload) {
+				req.LongLivedMinUptime = "45m"
+			},
+			wantApply:   true,
+			wantUptime:  45 * time.Minute,
+			wantRate:    0.9,
+			wantSession: 10 * time.Minute,
+		},
+		{
+			name: "success rate threshold hot applies",
+			mutate: func(req *routingConfigPayload) {
+				req.LongLivedMinRate = 0.75
+			},
+			wantApply:   true,
+			wantUptime:  2 * time.Hour,
+			wantRate:    0.75,
+			wantSession: 10 * time.Minute,
+		},
+		{
+			name: "zero thresholds restore runtime defaults without reload",
+			mutate: func(req *routingConfigPayload) {
+				req.LongLivedMinUptime = ""
+				req.LongLivedMinRate = 0
+			},
+			wantApply:   true,
+			wantUptime:  0,
+			wantRate:    0,
+			wantSession: 10 * time.Minute,
+		},
+		{
+			name: "enabled change requires reload",
+			mutate: func(req *routingConfigPayload) {
+				req.Enabled = false
+			},
+			wantReload:  true,
+			wantUptime:  2 * time.Hour,
+			wantRate:    0.9,
+			wantSession: 10 * time.Minute,
+		},
+		{
+			name: "listen change requires reload",
+			mutate: func(req *routingConfigPayload) {
+				req.Listen = "127.0.0.1:24444"
+			},
+			wantReload:  true,
+			wantUptime:  2 * time.Hour,
+			wantRate:    0.9,
+			wantSession: 10 * time.Minute,
+		},
+		{
+			name: "session ttl change requires reload",
+			mutate: func(req *routingConfigPayload) {
+				req.SessionTTL = "20m"
+			},
+			wantReload:  true,
+			wantUptime:  2 * time.Hour,
+			wantRate:    0.9,
+			wantSession: 20 * time.Minute,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			useDefaults := true
+			cfg := &config.Config{}
+			cfg.Routing.Enabled = true
+			cfg.Routing.DefaultStrategy = "stable"
+			cfg.Routing.UseDefaultRules = &useDefaults
+			cfg.Routing.FinalPolicy = "PROXY"
+			cfg.Routing.LongLived.MinUptime = 2 * time.Hour
+			cfg.Routing.LongLived.MinSuccessRate = 0.9
+			cfg.Routing.Session.TTL = 10 * time.Minute
+
+			configPath := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(configPath, []byte("{}\n"), 0o644); err != nil {
+				t.Fatalf("WriteFile() error = %v", err)
+			}
+			cfg.SetFilePath(configPath)
+
+			routing := &recordingRoutingController{applyResult: true}
+			server := &Server{
+				cfgSrc:  cfg,
+				routing: routing,
+				logger:  log.New(io.Discard, "", 0),
+			}
+
+			req := baseRequest
+			tt.mutate(&req)
+			gotReload, err := server.updateRoutingConfig(req)
+			if err != nil {
+				t.Fatalf("updateRoutingConfig() error = %v", err)
+			}
+			if gotReload != tt.wantReload {
+				t.Fatalf("reload = %v, want %v", gotReload, tt.wantReload)
+			}
+			if gotApply := routing.applyCalls > 0; gotApply != tt.wantApply {
+				t.Fatalf("hot apply = %v (%d calls), want %v", gotApply, routing.applyCalls, tt.wantApply)
+			}
+			if cfg.Routing.LongLived.MinUptime != tt.wantUptime {
+				t.Fatalf("uptime = %s, want %s", cfg.Routing.LongLived.MinUptime, tt.wantUptime)
+			}
+			if cfg.Routing.LongLived.MinSuccessRate != tt.wantRate {
+				t.Fatalf("rate = %.2f, want %.2f", cfg.Routing.LongLived.MinSuccessRate, tt.wantRate)
+			}
+			if cfg.Routing.Session.TTL != tt.wantSession {
+				t.Fatalf("session ttl = %s, want %s", cfg.Routing.Session.TTL, tt.wantSession)
 			}
 		})
 	}

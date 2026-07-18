@@ -2008,14 +2008,15 @@ func (s *Server) resolveProxyCompatRuntime(r *http.Request) proxyCompatRuntime {
 	s.cfgMu.RLock()
 	cfgSrc := s.cfgSrc
 	s.cfgMu.RUnlock()
+	runtimeCfg := s.runtimeConfig()
 
 	listenerPort := 22323
 	listenerProtocol := "http"
 	listenerUsername := ""
 	listenerPassword := ""
 	nodeProtocol := "http"
-	nodeUsername := s.cfg.ProxyUsername
-	nodePassword := s.cfg.ProxyPassword
+	nodeUsername := runtimeCfg.ProxyUsername
+	nodePassword := runtimeCfg.ProxyPassword
 	managementPort := 29888
 	mode := ""
 	createdAt := time.Now().Format(time.RFC3339)
@@ -2058,7 +2059,7 @@ func (s *Server) resolveProxyCompatRuntime(r *http.Request) proxyCompatRuntime {
 		nodePassword = listenerPassword
 	}
 
-	host := inferCompatRequestHost(r, s.cfg.ExternalIP)
+	host := inferCompatRequestHost(r, runtimeCfg.ExternalIP)
 	scheme := inferCompatRequestScheme(r)
 	refScheme := "easy-proxy"
 	if scheme == "https" {

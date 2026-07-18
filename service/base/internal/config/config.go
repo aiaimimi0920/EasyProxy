@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -1692,35 +1693,161 @@ func (c *Config) Clone() *Config {
 	if c == nil {
 		return nil
 	}
-	cloned := *c
-	cloned.mu = sync.RWMutex{} // fresh mutex for the clone
+	cloned := Config{
+		Mode:                c.Mode,
+		Listener:            c.Listener,
+		MultiPort:           c.MultiPort,
+		Pool:                c.Pool,
+		Management:          c.Management,
+		SubscriptionRefresh: c.SubscriptionRefresh,
+		SourceSync:          c.SourceSync,
+		GeoIP:               c.GeoIP,
+		Nodes:               cloneConfigSlice(c.Nodes),
+		Connectors:          cloneConfigSlice(c.Connectors),
+		NodesFile:           c.NodesFile,
+		Subscriptions:       cloneConfigSlice(c.Subscriptions),
+		ExternalIP:          c.ExternalIP,
+		LogLevel:            c.LogLevel,
+		SkipCertVerify:      c.SkipCertVerify,
+		DatabasePath:        c.DatabasePath,
+		ExtraListeners:      cloneConfigSlice(c.ExtraListeners),
+		Routing:             c.Routing,
+		filePath:            c.filePath,
+	}
 
-	// Deep copy slices
-	if c.Nodes != nil {
-		cloned.Nodes = make([]NodeConfig, len(c.Nodes))
-		copy(cloned.Nodes, c.Nodes)
-	}
-	if c.Connectors != nil {
-		cloned.Connectors = make([]ConnectorSourceConfig, len(c.Connectors))
-		for idx, connector := range c.Connectors {
-			cloned.Connectors[idx] = connector
-			if connector.ConnectorConfig != nil {
-				cloned.Connectors[idx].ConnectorConfig = make(map[string]any, len(connector.ConnectorConfig))
-				for key, value := range connector.ConnectorConfig {
-					cloned.Connectors[idx].ConnectorConfig[key] = value
-				}
-			}
-		}
-	}
-	if c.Subscriptions != nil {
-		cloned.Subscriptions = make([]string, len(c.Subscriptions))
-		copy(cloned.Subscriptions, c.Subscriptions)
-	}
-	if c.SourceSync.FallbackSubscriptions != nil {
-		cloned.SourceSync.FallbackSubscriptions = make([]string, len(c.SourceSync.FallbackSubscriptions))
-		copy(cloned.SourceSync.FallbackSubscriptions, c.SourceSync.FallbackSubscriptions)
+	cloned.Management.Enabled = cloneConfigBool(c.Management.Enabled)
+	cloned.Management.ProbeTargets = cloneConfigSlice(c.Management.ProbeTargets)
+	cloned.Routing.UseDefaultRules = cloneConfigBool(c.Routing.UseDefaultRules)
+	cloned.Routing.Rules = cloneConfigSlice(c.Routing.Rules)
+	cloned.Routing.RuleProviders = cloneConfigSlice(c.Routing.RuleProviders)
+	cloned.SourceSync.FallbackSubscriptions = cloneConfigSlice(c.SourceSync.FallbackSubscriptions)
+	cloned.SourceSync.ConnectorRuntime.Enabled = cloneConfigBool(c.SourceSync.ConnectorRuntime.Enabled)
+	for idx := range cloned.Connectors {
+		cloned.Connectors[idx].ConnectorConfig = cloneConfigStringMap(c.Connectors[idx].ConnectorConfig)
 	}
 	return &cloned
+}
+
+func cloneConfigSlice[T any](values []T) []T {
+	if values == nil {
+		return nil
+	}
+	cloned := make([]T, len(values))
+	copy(cloned, values)
+	return cloned
+}
+
+func cloneConfigBool(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+func cloneConfigStringMap(values map[string]any) map[string]any {
+	if values == nil {
+		return nil
+	}
+	return cloneConfigValue(values).(map[string]any)
+}
+
+func cloneConfigValue(value any) any {
+	if value == nil {
+		return nil
+	}
+	cloned := cloneConfigReflectValue(reflect.ValueOf(value), make(map[configCloneVisit]reflect.Value))
+	return cloned.Interface()
+}
+
+type configCloneVisit struct {
+	typ      reflect.Type
+	kind     reflect.Kind
+	pointer  uintptr
+	length   int
+	capacity int
+}
+
+func cloneConfigReflectValue(value reflect.Value, visited map[configCloneVisit]reflect.Value) reflect.Value {
+	if !value.IsValid() {
+		return value
+	}
+
+	switch value.Kind() {
+	case reflect.Interface:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		cloned := reflect.New(value.Type()).Elem()
+		cloned.Set(cloneConfigReflectValue(value.Elem(), visited))
+		return cloned
+	case reflect.Map:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		visit := configCloneVisit{
+			typ:     value.Type(),
+			kind:    value.Kind(),
+			pointer: value.Pointer(),
+		}
+		if cloned, ok := visited[visit]; ok {
+			return cloned
+		}
+		cloned := reflect.MakeMapWithSize(value.Type(), value.Len())
+		visited[visit] = cloned
+		iter := value.MapRange()
+		for iter.Next() {
+			cloned.SetMapIndex(iter.Key(), cloneConfigReflectValue(iter.Value(), visited))
+		}
+		return cloned
+	case reflect.Slice:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		visit := configCloneVisit{
+			typ:      value.Type(),
+			kind:     value.Kind(),
+			pointer:  value.Pointer(),
+			length:   value.Len(),
+			capacity: value.Cap(),
+		}
+		if cloned, ok := visited[visit]; ok {
+			return cloned
+		}
+		cloned := reflect.MakeSlice(value.Type(), value.Len(), value.Cap())
+		visited[visit] = cloned
+		for idx := 0; idx < value.Len(); idx++ {
+			cloned.Index(idx).Set(cloneConfigReflectValue(value.Index(idx), visited))
+		}
+		return cloned
+	case reflect.Array:
+		cloned := reflect.New(value.Type()).Elem()
+		for idx := 0; idx < value.Len(); idx++ {
+			cloned.Index(idx).Set(cloneConfigReflectValue(value.Index(idx), visited))
+		}
+		return cloned
+	case reflect.Pointer:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		if value.Elem().Kind() == reflect.Struct {
+			return value
+		}
+		visit := configCloneVisit{
+			typ:     value.Type(),
+			kind:    value.Kind(),
+			pointer: value.Pointer(),
+		}
+		if cloned, ok := visited[visit]; ok {
+			return cloned
+		}
+		cloned := reflect.New(value.Type().Elem())
+		visited[visit] = cloned
+		cloned.Elem().Set(cloneConfigReflectValue(value.Elem(), visited))
+		return cloned
+	default:
+		return value
+	}
 }
 
 // FilePath returns the config file path.

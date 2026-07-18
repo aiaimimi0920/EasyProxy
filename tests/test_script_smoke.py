@@ -1,9 +1,12 @@
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+import yaml
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -63,6 +66,35 @@ class ScriptSmokeTests(unittest.TestCase):
             self.assertIn("easyproxy", args)
             self.assertIn("-ReleaseTag", args)
             self.assertIn("smoke-tag", args)
+
+    def test_root_routing_config_renders_into_service_config(self):
+        root_config_path = REPO_ROOT / "config.example.yaml"
+        root = yaml.safe_load(root_config_path.read_text(encoding="utf-8")) or {}
+        runtime = root.get("serviceBase", {}).get("runtime", {})
+        self.assertIn("routing", runtime, "config.example.yaml must expose the canonical routing block")
+        self.assertFalse(runtime["routing"].get("enabled", True))
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "service-config.yaml"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(REPO_ROOT / "scripts" / "render-derived-configs.py"),
+                    "--root-config",
+                    str(root_config_path),
+                    "--service-output",
+                    str(output),
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            self.assertEqual(result.returncode, 0, msg=result.stderr or result.stdout)
+            rendered = yaml.safe_load(output.read_text(encoding="utf-8")) or {}
+            self.assertEqual(rendered["routing"]["enabled"], False)
+            self.assertEqual(rendered["routing"]["final_policy"], "PROXY")
+            self.assertIn("long_lived", rendered["routing"])
 
     def test_deploy_subproject_dispatches_publish_service_base_config(self):
         with tempfile.TemporaryDirectory() as temp_dir:

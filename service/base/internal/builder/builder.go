@@ -193,6 +193,12 @@ func Build(cfg *config.Config) (option.Options, error) {
 		} else {
 			log.Printf("🧭 routing entry takes over %s; plain pool inbound omitted", cfg.DispatchListen())
 		}
+	}
+
+	// Smart routing dials the global pool outbound directly. Pure multi-port
+	// mode therefore still needs proxy-pool even though it has no plain pool
+	// inbound and keeps its per-node pools below.
+	if enablePoolInbound || cfg.Routing.Enabled {
 		poolOptions := poolout.Options{
 			Mode:              cfg.Pool.Mode,
 			Members:           memberTags,
@@ -207,6 +213,8 @@ func Build(cfg *config.Config) (option.Options, error) {
 			Tag:     poolout.Tag,
 			Options: &poolOptions,
 		})
+	}
+	if enablePoolInbound {
 		route.Final = poolout.Tag
 	}
 

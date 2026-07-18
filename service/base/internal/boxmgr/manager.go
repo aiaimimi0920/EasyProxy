@@ -59,11 +59,34 @@ type ConfigUpdateListener interface {
 	OnConfigUpdate(cfg *config.Config)
 }
 
+// ReloadState is an immutable snapshot of one side of a reload transaction.
+type ReloadState struct {
+	Config *config.Config
+	Idle   bool
+}
+
+// ReloadLifecycleListener coordinates components that must change topology
+// around a box reload. CompleteReload runs after the candidate box is live.
+type ReloadLifecycleListener interface {
+	PrepareReload(ctx context.Context, from, to ReloadState) error
+	CompleteReload(ctx context.Context, from, to ReloadState) error
+	FailedReload(ctx context.Context, from, to ReloadState, cause error, restored bool) error
+}
+
+type managedBox interface {
+	Start() error
+	Close() error
+	Outbound() adapter.OutboundManager
+}
+
+type boxFactory func(ctx context.Context, cfg *config.Config) (managedBox, error)
+
 // Manager owns the lifecycle of the active sing-box instance.
 type Manager struct {
-	mu sync.RWMutex
+	mu       sync.RWMutex
+	reloadMu sync.Mutex
 
-	currentBox    *box.Box
+	currentBox    managedBox
 	monitorMgr    *monitor.Manager
 	monitorServer *monitor.Server
 	cfg           *config.Config
@@ -77,8 +100,14 @@ type Manager struct {
 	baseCtx            context.Context
 	healthCheckStarted bool
 	configListeners    []ConfigUpdateListener
+	reloadListeners    []ReloadLifecycleListener
 	idle               bool // true when manager was started but stopped due to 0 enabled nodes
 	ephemeralNodes     []config.NodeConfig
+	boxFactory         boxFactory
+	portReleaseDelay   time.Duration
+
+	lastAppliedCfg  *config.Config
+	lastAppliedIdle bool
 
 	// lastAppliedMode and lastAppliedBasePort track the mode/BasePort from the
 	// last successful Start/Reload. Used by TriggerReload to detect changes,
@@ -90,8 +119,9 @@ type Manager struct {
 // New creates a BoxManager with the given config.
 func New(cfg *config.Config, monitorCfg monitor.Config, opts ...Option) *Manager {
 	m := &Manager{
-		cfg:        cfg,
-		monitorCfg: monitorCfg,
+		cfg:              cfg,
+		monitorCfg:       monitorCfg,
+		portReleaseDelay: 500 * time.Millisecond,
 	}
 	m.applyConfigSettings(cfg)
 	for _, opt := range opts {
@@ -108,11 +138,11 @@ func New(cfg *config.Config, monitorCfg monitor.Config, opts ...Option) *Manager
 
 // Start creates and starts the initial sing-box instance.
 func (m *Manager) Start(ctx context.Context) error {
+	m.reloadMu.Lock()
+	defer m.reloadMu.Unlock()
+
 	if ctx == nil {
 		ctx = context.Background()
-	}
-	if err := m.ensureMonitor(ctx); err != nil {
-		return err
 	}
 
 	m.mu.Lock()
@@ -124,17 +154,27 @@ func (m *Manager) Start(ctx context.Context) error {
 		m.mu.Unlock()
 		return errors.New("sing-box already running")
 	}
-	m.applyConfigSettings(m.cfg)
 	m.baseCtx = ctx
-	cfg := m.cfg
+	sharedCfg := m.cfg
 	m.mu.Unlock()
 
+	cfg := snapshotConfig(sharedCfg)
+	if cfg == nil {
+		return errors.New("box manager requires config")
+	}
+	m.mu.Lock()
+	m.applyConfigSettings(cfg)
+	m.mu.Unlock()
+	if err := m.ensureMonitor(ctx); err != nil {
+		return err
+	}
+
 	// Try to start, with automatic port conflict resolution
-	var instance *box.Box
+	var instance managedBox
 	maxRetries := 10
 	for retry := 0; retry < maxRetries; retry++ {
 		var err error
-		instance, err = m.createBox(ctx, cfg)
+		instance, err = m.createManagedBox(ctx, cfg)
 		if err != nil {
 			return err
 		}
@@ -158,9 +198,17 @@ func (m *Manager) Start(ctx context.Context) error {
 
 	m.mu.Lock()
 	m.currentBox = instance
+	m.cfg = cfg
+	m.idle = false
+	m.lastAppliedCfg = snapshotConfig(cfg)
+	m.lastAppliedIdle = false
 	m.lastAppliedMode = cfg.Mode
 	m.lastAppliedBasePort = cfg.MultiPort.BasePort
+	monitorServer := m.monitorServer
 	m.mu.Unlock()
+	if monitorServer != nil {
+		monitorServer.SetConfig(cfg)
+	}
 
 	// Start periodic health check after nodes are registered
 	m.mu.Lock()
@@ -194,6 +242,13 @@ func (m *Manager) Reload(newCfg *config.Config) error {
 	if newCfg == nil {
 		return errors.New("new config is nil")
 	}
+	m.reloadMu.Lock()
+	defer m.reloadMu.Unlock()
+
+	targetCfg := snapshotConfig(newCfg)
+	if targetCfg == nil {
+		return errors.New("new config is nil")
+	}
 
 	m.mu.Lock()
 	if m.currentBox == nil && !m.idle {
@@ -202,16 +257,36 @@ func (m *Manager) Reload(newCfg *config.Config) error {
 	}
 	ctx := m.baseCtx
 	oldBox := m.currentBox
-	oldCfg := m.cfg
-	prevMonitorCfg := m.monitorCfg
-	m.currentBox = nil // Mark as reloading
+	lastAppliedCfg := m.lastAppliedCfg
+	sharedCfg := m.cfg
+	oldIdle := m.lastAppliedIdle
+	currentIdle := m.idle
+	reloadListeners := append([]ReloadLifecycleListener(nil), m.reloadListeners...)
 	m.mu.Unlock()
+	oldCfg := snapshotConfig(lastAppliedCfg)
+	if oldCfg == nil {
+		oldCfg = snapshotConfig(sharedCfg)
+		oldIdle = currentIdle
+	}
 
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	from := ReloadState{Config: snapshotConfig(oldCfg), Idle: oldIdle}
+	to := ReloadState{Config: snapshotConfig(targetCfg), Idle: false}
+	for _, listener := range reloadListeners {
+		if err := listener.PrepareReload(ctx, cloneReloadState(from), cloneReloadState(to)); err != nil {
+			cause := fmt.Errorf("prepare reload: %w", err)
+			m.restoreAppliedState(ctx, oldCfg, oldIdle, oldBox)
+			restored, restoreErr := m.notifyReloadFailed(ctx, reloadListeners, from, to, cause, true)
+			if restored {
+				m.notifyConfigListeners(m.activeConfig())
+			}
+			return errors.Join(cause, restoreErr)
+		}
+	}
 
-	m.logger.Infof("reloading with %d nodes", len(newCfg.Nodes))
+	m.logger.Infof("reloading with %d nodes", len(targetCfg.Nodes))
 
 	// For multi-port mode, we must close old instance first to release ports
 	// This causes a brief interruption but avoids port conflicts
@@ -220,44 +295,78 @@ func (m *Manager) Reload(newCfg *config.Config) error {
 		if err := oldBox.Close(); err != nil {
 			m.logger.Warnf("error closing old instance: %v", err)
 		}
-		// Give OS time to release ports
-		time.Sleep(500 * time.Millisecond)
 	}
+	m.mu.Lock()
+	if m.currentBox == oldBox {
+		m.currentBox = nil
+	}
+	releaseDelay := m.portReleaseDelay
+	m.mu.Unlock()
+	if releaseDelay > 0 {
+		time.Sleep(releaseDelay)
+	}
+	sharedStateTxn := pool.BeginSharedStateTransaction()
 
 	// Begin a new reload generation. Nodes re-registered during createBox will
 	// be marked with the new generation; stale (disabled/removed) nodes will be
 	// swept after the new box is successfully started.
+	var candidateGeneration monitor.Generation
 	if m.monitorMgr != nil {
-		m.monitorMgr.BeginReload()
+		candidateGeneration = m.monitorMgr.BeginReload()
+	}
+	m.mu.Lock()
+	probeConfigErr := m.applyMonitorProbeSettings(targetCfg)
+	m.mu.Unlock()
+	if probeConfigErr != nil {
+		cause := fmt.Errorf("apply candidate probe settings: %w", probeConfigErr)
+		return m.failReload(ctx, reloadListeners, from, to, cause, nil, oldCfg, oldIdle, sharedStateTxn)
 	}
 
-	// Reset shared state store to ensure clean state for new config
-	pool.ResetSharedStateStore()
-
 	// Create and start new box instance with automatic port conflict resolution
-	var instance *box.Box
+	var instance managedBox
 	maxRetries := 10
+	var startErr error
+	started := false
 	for retry := 0; retry < maxRetries; retry++ {
 		var err error
-		instance, err = m.createBox(ctx, newCfg)
+		instance, err = m.createManagedBox(ctx, targetCfg)
 		if err != nil {
-			m.rollbackToOldConfig(ctx, oldCfg)
-			return fmt.Errorf("create new box: %w", err)
+			cause := fmt.Errorf("create new box: %w", err)
+			return m.failReload(ctx, reloadListeners, from, to, cause, instance, oldCfg, oldIdle, sharedStateTxn)
 		}
 		if err = instance.Start(); err != nil {
-			_ = instance.Close()
 			// Check if it's a port conflict error
 			if conflictPort := extractPortFromBindError(err); conflictPort > 0 {
 				m.logger.Warnf("port %d is in use, reassigning and retrying...", conflictPort)
-				if reassigned := reassignConflictingPort(newCfg, conflictPort); reassigned {
-					pool.ResetSharedStateStore()
+				if reassigned := reassignConflictingPort(targetCfg, conflictPort); reassigned {
+					if closeErr := instance.Close(); closeErr != nil {
+						cause := errors.Join(
+							fmt.Errorf("start new box: %w", err),
+							fmt.Errorf("close conflicted candidate: %w", closeErr),
+						)
+						return m.failReload(ctx, reloadListeners, from, to, cause, instance, oldCfg, oldIdle, sharedStateTxn)
+					}
+					instance = nil
+					if resetErr := sharedStateTxn.ResetCandidate(); resetErr != nil {
+						cause := errors.Join(
+							fmt.Errorf("start new box: %w", err),
+							fmt.Errorf("reset candidate shared state: %w", resetErr),
+						)
+						return m.failReload(ctx, reloadListeners, from, to, cause, nil, oldCfg, oldIdle, sharedStateTxn)
+					}
+					startErr = err
 					continue
 				}
 			}
-			m.rollbackToOldConfig(ctx, oldCfg)
-			return fmt.Errorf("start new box: %w", err)
+			cause := fmt.Errorf("start new box: %w", err)
+			return m.failReload(ctx, reloadListeners, from, to, cause, instance, oldCfg, oldIdle, sharedStateTxn)
 		}
+		started = true
 		break // Success
+	}
+	if !started {
+		cause := fmt.Errorf("start new box after %d retries: %w", maxRetries, startErr)
+		return m.failReload(ctx, reloadListeners, from, to, cause, instance, oldCfg, oldIdle, sharedStateTxn)
 	}
 
 	// Sweep stale monitor entries (disabled/removed nodes) now that the new box
@@ -266,46 +375,88 @@ func (m *Manager) Reload(newCfg *config.Config) error {
 		m.monitorMgr.SweepStaleNodes()
 	}
 
-	m.applyConfigSettings(newCfg)
-
-	m.mu.Lock()
-	m.currentBox = instance
-	m.cfg = newCfg
-	m.idle = false // Clear idle state on successful reload
-	m.lastAppliedMode = newCfg.Mode
-	m.lastAppliedBasePort = newCfg.MultiPort.BasePort
-	// Update monitor server's config reference so settings API reads the latest config
-	if m.monitorServer != nil {
-		m.monitorServer.SetConfig(newCfg)
-	}
-	// Notify config update listeners (e.g., subscription manager)
-	listeners := make([]ConfigUpdateListener, len(m.configListeners))
-	copy(listeners, m.configListeners)
-	m.mu.Unlock()
-
-	for _, l := range listeners {
-		l.OnConfigUpdate(newCfg)
-	}
-
-	// Reload 成功后立即触发 1 次全量探测（内部去重，避免多次 Reload 造成突发）。
-	// 与启动阶段不同，订阅刷新后的新节点集如果健康度达不到最小阈值，
-	// 应该视为坏池子并回滚，而不是继续覆盖旧的可用池。
-	if m.monitorMgr != nil {
-		m.monitorMgr.RequestProbeAllOnce(periodicHealthTimeout)
-	}
-	if newCfg.SubscriptionRefresh.MinAvailableNodes > 0 {
-		timeout := newCfg.SubscriptionRefresh.HealthCheckTimeout
+	if targetCfg.SubscriptionRefresh.MinAvailableNodes > 0 {
+		timeout := targetCfg.SubscriptionRefresh.HealthCheckTimeout
 		if timeout <= 0 {
 			timeout = defaultHealthCheckTimeout
 		}
-		if err := m.waitForHealthCheck(timeout); err != nil {
-			m.logger.Warnf("reload health check failed: %v", err)
-			m.rollbackToOldConfig(ctx, oldCfg)
-			return fmt.Errorf("reload health check failed: %w", err)
+		probeCtx, cancel := context.WithTimeout(ctx, timeout)
+		summary, probeErr := m.monitorMgr.ProbeGeneration(probeCtx, candidateGeneration, timeout)
+		cancel()
+		if probeErr != nil || summary.Available < targetCfg.SubscriptionRefresh.MinAvailableNodes {
+			healthErr := probeErr
+			if healthErr == nil {
+				healthErr = fmt.Errorf(
+					"%d/%d candidate nodes available (need >= %d)",
+					summary.Available,
+					summary.Total,
+					targetCfg.SubscriptionRefresh.MinAvailableNodes,
+				)
+			}
+			m.logger.Warnf("reload health check failed: %v", healthErr)
+			cause := fmt.Errorf("reload health check failed: %w", healthErr)
+			return m.failReload(ctx, reloadListeners, from, to, cause, instance, oldCfg, oldIdle, sharedStateTxn)
+		}
+	} else if m.monitorMgr != nil {
+		m.monitorMgr.RequestProbeAllOnce(periodicHealthTimeout)
+	}
+	monitorTransition, err := m.prepareMonitorServerTransition(targetCfg)
+	if err != nil {
+		cause := fmt.Errorf("prepare monitor listener: %w", err)
+		return m.failReload(ctx, reloadListeners, from, to, cause, instance, oldCfg, oldIdle, sharedStateTxn)
+	}
+
+	m.mu.Lock()
+	m.currentBox = instance
+	m.cfg = targetCfg
+	m.idle = false
+	m.mu.Unlock()
+
+	for _, listener := range reloadListeners {
+		if err := listener.CompleteReload(ctx, cloneReloadState(from), cloneReloadState(to)); err != nil {
+			if monitorTransition != nil {
+				monitorTransition.Abort()
+			}
+			cause := fmt.Errorf("complete reload: %w", err)
+			return m.failReload(ctx, reloadListeners, from, to, cause, instance, oldCfg, oldIdle, sharedStateTxn)
 		}
 	}
-	m.syncMonitorServerLifecycle(ctx, prevMonitorCfg, newCfg)
-	m.logger.Infof("reload completed successfully with %d nodes", len(newCfg.Nodes))
+	if monitorTransition != nil {
+		if err := monitorTransition.Activate(ctx); err != nil {
+			monitorTransition.Abort()
+			cause := fmt.Errorf("activate monitor listener: %w", err)
+			return m.failReload(ctx, reloadListeners, from, to, cause, instance, oldCfg, oldIdle, sharedStateTxn)
+		}
+	}
+	if err := sharedStateTxn.Commit(); err != nil {
+		if monitorTransition != nil {
+			_ = monitorTransition.Rollback()
+		}
+		cause := fmt.Errorf("commit candidate shared state: %w", err)
+		return m.failReload(ctx, reloadListeners, from, to, cause, instance, oldCfg, oldIdle, sharedStateTxn)
+	}
+	if monitorTransition != nil {
+		monitorTransition.Finalize()
+	}
+
+	m.mu.Lock()
+	m.applyConfigSettings(targetCfg)
+	m.lastAppliedCfg = snapshotConfig(targetCfg)
+	m.lastAppliedIdle = false
+	m.lastAppliedMode = targetCfg.Mode
+	m.lastAppliedBasePort = targetCfg.MultiPort.BasePort
+	monitorServer := m.monitorServer
+	listeners := append([]ConfigUpdateListener(nil), m.configListeners...)
+	m.mu.Unlock()
+
+	if monitorServer != nil {
+		monitorServer.SetConfig(targetCfg)
+	}
+	for _, listener := range listeners {
+		listener.OnConfigUpdate(targetCfg)
+	}
+
+	m.logger.Infof("reload completed successfully with %d nodes", len(targetCfg.Nodes))
 	return nil
 }
 
@@ -316,56 +467,214 @@ func (m *Manager) AddConfigListener(l ConfigUpdateListener) {
 	m.configListeners = append(m.configListeners, l)
 }
 
-// rollbackToOldConfig attempts to restart with the previous configuration.
-func (m *Manager) rollbackToOldConfig(ctx context.Context, oldCfg *config.Config) {
+// AddReloadLifecycleListener registers a listener for transactional reload hooks.
+func (m *Manager) AddReloadLifecycleListener(l ReloadLifecycleListener) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.reloadListeners = append(m.reloadListeners, l)
+}
+
+// failReload closes a rejected candidate and restores the last applied state.
+func (m *Manager) failReload(
+	ctx context.Context,
+	reloadListeners []ReloadLifecycleListener,
+	from ReloadState,
+	to ReloadState,
+	cause error,
+	candidate managedBox,
+	oldCfg *config.Config,
+	oldIdle bool,
+	sharedStateTxn *pool.SharedStateTransaction,
+) error {
+	m.mu.Lock()
+	if candidate != nil && m.currentBox == candidate {
+		m.currentBox = nil
+	}
+	m.mu.Unlock()
+	var candidateCloseErr error
+	if candidate != nil {
+		if err := candidate.Close(); err != nil {
+			candidateCloseErr = fmt.Errorf("close failed candidate: %w", err)
+			m.logger.Warnf("%v", candidateCloseErr)
+		}
+	}
+
+	rollbackErr := m.rollbackToOldConfig(ctx, oldCfg, oldIdle, sharedStateTxn)
+	restored := rollbackErr == nil && candidateCloseErr == nil
+	restored, listenerErr := m.notifyReloadFailed(ctx, reloadListeners, from, to, cause, restored)
+	if restored {
+		m.notifyConfigListeners(m.activeConfig())
+	}
+	var wrappedRollbackErr error
+	if rollbackErr != nil {
+		wrappedRollbackErr = fmt.Errorf("rollback failed: %w", rollbackErr)
+	}
+	var wrappedListenerErr error
+	if listenerErr != nil {
+		wrappedListenerErr = fmt.Errorf("reload listener restore failed: %w", listenerErr)
+	}
+	return errors.Join(cause, candidateCloseErr, wrappedRollbackErr, wrappedListenerErr)
+}
+
+func (m *Manager) notifyReloadFailed(
+	ctx context.Context,
+	listeners []ReloadLifecycleListener,
+	from ReloadState,
+	to ReloadState,
+	cause error,
+	restored bool,
+) (bool, error) {
+	var restoreErr error
+	for _, listener := range listeners {
+		if err := listener.FailedReload(ctx, cloneReloadState(from), cloneReloadState(to), cause, restored); err != nil {
+			restored = false
+			restoreErr = errors.Join(restoreErr, err)
+		}
+	}
+	return restored, restoreErr
+}
+
+func (m *Manager) notifyConfigListeners(cfg *config.Config) {
+	m.mu.RLock()
+	listeners := append([]ConfigUpdateListener(nil), m.configListeners...)
+	m.mu.RUnlock()
+	for _, listener := range listeners {
+		listener.OnConfigUpdate(cfg)
+	}
+}
+
+func (m *Manager) activeConfig() *config.Config {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.cfg
+}
+
+func (m *Manager) restoreAppliedState(_ context.Context, cfg *config.Config, idle bool, instance managedBox) {
+	activeCfg := snapshotConfig(cfg)
+	m.mu.Lock()
+	m.currentBox = instance
+	m.cfg = activeCfg
+	m.idle = idle
+	m.lastAppliedIdle = idle
+	if activeCfg != nil {
+		m.applyConfigSettings(activeCfg)
+		m.lastAppliedMode = activeCfg.Mode
+		m.lastAppliedBasePort = activeCfg.MultiPort.BasePort
+	}
+	monitorServer := m.monitorServer
+	m.mu.Unlock()
+
+	if monitorServer != nil {
+		monitorServer.SetConfig(activeCfg)
+	}
+}
+
+func (m *Manager) rollbackToOldConfig(
+	ctx context.Context,
+	oldCfg *config.Config,
+	oldIdle bool,
+	sharedStateTxn *pool.SharedStateTransaction,
+) error {
 	if oldCfg == nil {
-		return
+		m.mu.Lock()
+		m.currentBox = nil
+		m.mu.Unlock()
+		return errors.New("previous config is nil")
+	}
+
+	if sharedStateTxn != nil {
+		if err := sharedStateTxn.Rollback(); err != nil {
+			m.clearFailedRollbackState(ctx, oldCfg)
+			return fmt.Errorf("restore previous shared state: %w", err)
+		}
+	}
+	var rollbackGeneration monitor.Generation
+	if m.monitorMgr != nil {
+		rollbackGeneration = m.monitorMgr.BeginReload()
+	}
+	m.mu.Lock()
+	probeConfigErr := m.applyMonitorProbeSettings(oldCfg)
+	m.mu.Unlock()
+	if probeConfigErr != nil {
+		m.clearFailedRollbackState(ctx, oldCfg)
+		return fmt.Errorf("restore previous probe settings: %w", probeConfigErr)
+	}
+	if oldIdle {
+		if m.monitorMgr != nil {
+			m.monitorMgr.SweepStaleNodes()
+		}
+		m.restoreAppliedState(ctx, oldCfg, true, nil)
+		return nil
 	}
 	m.logger.Warnf("attempting rollback to previous config...")
-	instance, err := m.createBox(ctx, oldCfg)
+	instance, err := m.createManagedBox(ctx, oldCfg)
 	if err != nil {
 		m.logger.Errorf("rollback failed to create box: %v", err)
-		return
+		m.clearFailedRollbackState(ctx, oldCfg)
+		return err
 	}
 	if err := instance.Start(); err != nil {
 		_ = instance.Close()
 		m.logger.Errorf("rollback failed to start box: %v", err)
-		return
+		m.clearFailedRollbackState(ctx, oldCfg)
+		return err
 	}
-	m.mu.Lock()
-	m.currentBox = instance
-	m.cfg = oldCfg
-	listeners := make([]ConfigUpdateListener, len(m.configListeners))
-	copy(listeners, m.configListeners)
-	m.mu.Unlock()
-
-	for _, l := range listeners {
-		l.OnConfigUpdate(oldCfg)
+	if m.monitorMgr != nil {
+		m.monitorMgr.SweepStaleNodes()
+	}
+	m.restoreAppliedState(ctx, oldCfg, false, instance)
+	if m.monitorMgr != nil {
+		if _, ok := m.monitorMgr.ProbeTargets(); ok {
+			probeCtx := ctx
+			if probeCtx == nil {
+				probeCtx = context.Background()
+			}
+			go func(generation monitor.Generation) {
+				_, _ = m.monitorMgr.ProbeGeneration(probeCtx, generation, periodicHealthTimeout)
+			}(rollbackGeneration)
+		}
 	}
 	m.logger.Infof("rollback successful")
+	return nil
+}
+
+func (m *Manager) clearFailedRollbackState(ctx context.Context, oldCfg *config.Config) {
+	pool.ResetSharedStateStore()
+	if m.monitorMgr != nil {
+		m.monitorMgr.BeginReload()
+		m.monitorMgr.SweepStaleNodes()
+	}
+	m.restoreAppliedState(ctx, oldCfg, false, nil)
 }
 
 // Close terminates the active instance and auxiliary components.
 func (m *Manager) Close() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.reloadMu.Lock()
+	defer m.reloadMu.Unlock()
 
-	var err error
-	if m.currentBox != nil {
-		err = m.currentBox.Close()
-		m.currentBox = nil
-	}
-	if m.monitorServer != nil {
-		m.monitorServer.Shutdown(context.Background())
-		m.monitorServer = nil
-	}
-	if m.monitorMgr != nil {
-		m.monitorMgr.Stop()
-		m.monitorMgr = nil
-		m.healthCheckStarted = false
-	}
+	m.mu.Lock()
+	currentBox := m.currentBox
+	monitorServer := m.monitorServer
+	monitorMgr := m.monitorMgr
+	m.currentBox = nil
+	m.monitorServer = nil
+	m.monitorMgr = nil
+	m.healthCheckStarted = false
 	m.baseCtx = nil
-	return err
+	m.idle = false
+	m.mu.Unlock()
+
+	var closeErr error
+	if currentBox != nil {
+		closeErr = errors.Join(closeErr, currentBox.Close())
+	}
+	if monitorServer != nil {
+		monitorServer.Shutdown(context.Background())
+	}
+	if monitorMgr != nil {
+		monitorMgr.Stop()
+	}
+	return closeErr
 }
 
 // MonitorManager returns the shared monitor manager.
@@ -373,6 +682,19 @@ func (m *Manager) MonitorManager() *monitor.Manager {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.monitorMgr
+}
+
+// SetLongLivedThresholds updates the live monitor without rebuilding sing-box.
+func (m *Manager) SetLongLivedThresholds(minUptime time.Duration, minRate float64) {
+	m.mu.Lock()
+	m.monitorCfg.LongLivedMinUptime = minUptime
+	m.monitorCfg.LongLivedMinSuccessRate = minRate
+	monitorMgr := m.monitorMgr
+	m.mu.Unlock()
+
+	if monitorMgr != nil {
+		monitorMgr.SetLongLivedThresholds(minUptime, minRate)
+	}
 }
 
 // MonitorServer returns the monitor HTTP server.
@@ -450,8 +772,15 @@ func (m *Manager) createBox(ctx context.Context, cfg *config.Config) (*box.Box, 
 	return instance, nil
 }
 
+func (m *Manager) createManagedBox(ctx context.Context, cfg *config.Config) (managedBox, error) {
+	if m.boxFactory != nil {
+		return m.boxFactory(ctx, cfg)
+	}
+	return m.createBox(ctx, cfg)
+}
+
 // gracefulSwitch swaps the current box with a new one.
-func (m *Manager) gracefulSwitch(newBox *box.Box) error {
+func (m *Manager) gracefulSwitch(newBox managedBox) error {
 	if newBox == nil {
 		return errors.New("new box is nil")
 	}
@@ -471,7 +800,7 @@ func (m *Manager) gracefulSwitch(newBox *box.Box) error {
 }
 
 // drainOldBox waits for drain timeout then closes the old box.
-func (m *Manager) drainOldBox(oldBox *box.Box, timeout time.Duration) {
+func (m *Manager) drainOldBox(oldBox managedBox, timeout time.Duration) {
 	if oldBox == nil {
 		return
 	}
@@ -487,7 +816,11 @@ func (m *Manager) drainOldBox(oldBox *box.Box, timeout time.Duration) {
 
 // waitForHealthCheck polls until enough nodes are available or timeout.
 func (m *Manager) waitForHealthCheck(timeout time.Duration) error {
-	if m.monitorMgr == nil || m.minAvailableNodes <= 0 {
+	return m.waitForHealthCheckAtLeast(timeout, m.minAvailableNodes)
+}
+
+func (m *Manager) waitForHealthCheckAtLeast(timeout time.Duration, minAvailableNodes int) error {
+	if m.monitorMgr == nil || minAvailableNodes <= 0 {
 		return nil
 	}
 	if timeout <= 0 {
@@ -500,12 +833,12 @@ func (m *Manager) waitForHealthCheck(timeout time.Duration) error {
 
 	for {
 		available, total := m.availableNodeCount()
-		if available >= m.minAvailableNodes {
+		if available >= minAvailableNodes {
 			m.logger.Infof("health check passed: %d/%d nodes available", available, total)
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("timeout: %d/%d nodes available (need >= %d)", available, total, m.minAvailableNodes)
+			return fmt.Errorf("timeout: %d/%d nodes available (need >= %d)", available, total, minAvailableNodes)
 		}
 		<-ticker.C
 	}
@@ -595,35 +928,54 @@ func (m *Manager) restoreMonitorStatsFromStore(ctx context.Context) error {
 // ensureMonitor initializes monitor manager and server if needed.
 func (m *Manager) ensureMonitor(ctx context.Context) error {
 	m.mu.Lock()
-	if m.monitorMgr != nil {
-		m.mu.Unlock()
-		return nil
+	monitorMgr := m.monitorMgr
+	createdManager := false
+	if monitorMgr == nil {
+		var err error
+		monitorMgr, err = monitor.NewManager(m.monitorCfg)
+		if err != nil {
+			m.mu.Unlock()
+			return fmt.Errorf("init monitor manager: %w", err)
+		}
+		monitorMgr.SetLogger(monitorLoggerAdapter{logger: m.logger})
+		m.monitorMgr = monitorMgr
+		createdManager = true
 	}
 
-	monitorMgr, err := monitor.NewManager(m.monitorCfg)
-	if err != nil {
-		m.mu.Unlock()
-		return fmt.Errorf("init monitor manager: %w", err)
+	createdServer := false
+	if m.monitorServer == nil {
+		m.monitorServer = monitor.NewServer(m.monitorCfg, monitorMgr, log.Default())
+		createdServer = true
 	}
-	monitorMgr.SetLogger(monitorLoggerAdapter{logger: m.logger})
-	m.monitorMgr = monitorMgr
-
-	var serverToStart *monitor.Server
-	if m.monitorCfg.Enabled {
-		if m.monitorServer == nil {
-			serverToStart = monitor.NewServer(m.monitorCfg, monitorMgr, log.Default())
-			m.monitorServer = serverToStart
-		}
-		// Set NodeManager for config CRUD endpoints
-		if m.monitorServer != nil {
-			m.monitorServer.SetNodeManager(m)
-		}
-		// Note: StartPeriodicHealthCheck is called after nodes are registered in Start()
-	}
+	server := m.monitorServer
+	store := m.store
+	startEnabled := m.monitorCfg.Enabled
 	m.mu.Unlock()
 
-	if serverToStart != nil {
-		serverToStart.Start(ctx)
+	if server != nil {
+		server.SetNodeManager(m)
+		server.SetStore(store)
+		if startEnabled {
+			if err := server.Start(ctx); err != nil {
+				if createdServer {
+					shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+					server.Shutdown(shutdownCtx)
+					cancel()
+				}
+				if createdManager {
+					monitorMgr.Stop()
+				}
+				m.mu.Lock()
+				if createdServer && m.monitorServer == server {
+					m.monitorServer = nil
+				}
+				if createdManager && m.monitorMgr == monitorMgr {
+					m.monitorMgr = nil
+				}
+				m.mu.Unlock()
+				return fmt.Errorf("start monitor server: %w", err)
+			}
+		}
 	}
 	return nil
 }
@@ -650,74 +1002,64 @@ func (m *Manager) applyConfigSettings(cfg *config.Config) {
 		m.monitorCfg.ProxyUsername = cfg.Listener.Username
 		m.monitorCfg.ProxyPassword = cfg.Listener.Password
 	}
-	m.monitorCfg.ProbeTarget = cfg.Management.ProbeTarget
-	m.monitorCfg.ProbeTargets = append([]string(nil), cfg.Management.ProbeTargets...)
-	m.monitorCfg.SkipCertVerify = cfg.SkipCertVerify
-	if m.monitorMgr != nil {
-		m.monitorMgr.SetSkipCertVerify(cfg.SkipCertVerify)
-		if err := m.monitorMgr.UpdateProbeTargets(cfg.Management.ProbeTargets, cfg.Management.ProbeTarget); err != nil {
-			m.logger.Warnf("failed to update probe targets from config: %v", err)
-		}
+	if err := m.applyMonitorProbeSettings(cfg); err != nil {
+		m.logger.Warnf("failed to update probe settings from config: %v", err)
 	}
 }
 
-func (m *Manager) syncMonitorServerLifecycle(ctx context.Context, prev monitor.Config, activeCfg *config.Config) {
+func (m *Manager) applyMonitorProbeSettings(cfg *config.Config) error {
+	if cfg == nil {
+		return nil
+	}
+	m.monitorCfg.ProbeTarget = cfg.Management.ProbeTarget
+	m.monitorCfg.ProbeTargets = append([]string(nil), cfg.Management.ProbeTargets...)
+	m.monitorCfg.SkipCertVerify = cfg.SkipCertVerify
+	if m.monitorMgr == nil {
+		return nil
+	}
+	m.monitorMgr.SetSkipCertVerify(cfg.SkipCertVerify)
+	return m.monitorMgr.UpdateProbeTargets(cfg.Management.ProbeTargets, cfg.Management.ProbeTarget)
+}
+
+func (m *Manager) prepareMonitorServerTransition(activeCfg *config.Config) (*monitor.ListenerTransition, error) {
 	if activeCfg == nil {
-		return
+		return nil, nil
 	}
-
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
-	m.mu.RLock()
-	currentCfg := m.monitorCfg
-	currentServer := m.monitorServer
-	currentMgr := m.monitorMgr
-	currentStore := m.store
-	m.mu.RUnlock()
-
-	if currentMgr == nil {
-		return
-	}
-
-	needsRestart := prev.Enabled != currentCfg.Enabled || prev.Listen != currentCfg.Listen
-
-	if !currentCfg.Enabled {
-		if currentServer != nil {
-			currentServer.Shutdown(context.Background())
-			m.mu.Lock()
-			if m.monitorServer == currentServer {
-				m.monitorServer = nil
-			}
-			m.mu.Unlock()
-		}
-		return
-	}
-
-	if currentServer != nil && !needsRestart {
-		currentServer.SetConfig(activeCfg)
-		return
-	}
-
-	if currentServer != nil {
-		currentServer.Shutdown(context.Background())
-	}
-
-	server := monitor.NewServer(currentCfg, currentMgr, log.Default())
-	if server == nil {
-		return
-	}
-	server.SetNodeManager(m)
-	server.SetStore(currentStore)
-	server.SetConfig(activeCfg)
-	server.Start(ctx)
-
 	m.mu.Lock()
-	if m.monitorServer == nil || m.monitorServer == currentServer {
+	monitorMgr := m.monitorMgr
+	server := m.monitorServer
+	store := m.store
+	if monitorMgr != nil && server == nil {
+		server = monitor.NewServer(m.monitorCfg, monitorMgr, log.Default())
 		m.monitorServer = server
 	}
 	m.mu.Unlock()
+	if monitorMgr == nil || server == nil {
+		return nil, nil
+	}
+	server.SetNodeManager(m)
+	server.SetStore(store)
+	return server.PrepareListener(activeCfg.ManagementEnabled(), activeCfg.Management.Listen, activeCfg)
+}
+
+func (m *Manager) syncMonitorServerLifecycle(
+	ctx context.Context,
+	_ monitor.Config,
+	activeCfg *config.Config,
+) error {
+	transition, err := m.prepareMonitorServerTransition(activeCfg)
+	if err != nil || transition == nil {
+		return err
+	}
+	if err := transition.Activate(ctx); err != nil {
+		transition.Abort()
+		return err
+	}
+	transition.Finalize()
+	if server := m.MonitorServer(); server != nil {
+		server.SetConfig(activeCfg)
+	}
+	return nil
 }
 
 func hasRuntimeSourceRefs(cfg *config.Config) bool {
@@ -1216,45 +1558,120 @@ func (m *Manager) ReloadWithPortMap(newCfg *config.Config, portMap map[string]ui
 // The manager enters an idle state and can be resumed by TriggerReload when
 // nodes are re-enabled.
 func (m *Manager) enterIdle(newCfg *config.Config) error {
+	if newCfg == nil {
+		return errors.New("new config is nil")
+	}
+	m.reloadMu.Lock()
+	defer m.reloadMu.Unlock()
+
+	targetCfg := snapshotConfig(newCfg)
 	m.mu.Lock()
+	if m.currentBox == nil && !m.idle {
+		m.mu.Unlock()
+		return errors.New("manager not started")
+	}
 	oldBox := m.currentBox
-	wasIdle := m.idle
-	m.currentBox = nil
-	m.idle = true
-	m.cfg = newCfg
+	lastAppliedCfg := m.lastAppliedCfg
+	sharedCfg := m.cfg
+	oldIdle := m.lastAppliedIdle
+	currentIdle := m.idle
 	ctx := m.baseCtx
-	// Update monitor server's config reference
-	if m.monitorServer != nil {
-		m.monitorServer.SetConfig(newCfg)
-	}
-	listeners := make([]ConfigUpdateListener, len(m.configListeners))
-	copy(listeners, m.configListeners)
+	reloadListeners := append([]ReloadLifecycleListener(nil), m.reloadListeners...)
 	m.mu.Unlock()
-
-	if wasIdle {
-		m.logger.Infof("already idle, updated config (still 0 enabled nodes)")
-		return nil
+	oldCfg := snapshotConfig(lastAppliedCfg)
+	if oldCfg == nil {
+		oldCfg = snapshotConfig(sharedCfg)
+		oldIdle = currentIdle
 	}
 
-	// Stop the running instance
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	from := ReloadState{Config: snapshotConfig(oldCfg), Idle: oldIdle}
+	to := ReloadState{Config: snapshotConfig(targetCfg), Idle: true}
+	for _, listener := range reloadListeners {
+		if err := listener.PrepareReload(ctx, cloneReloadState(from), cloneReloadState(to)); err != nil {
+			cause := fmt.Errorf("prepare idle reload: %w", err)
+			m.restoreAppliedState(ctx, oldCfg, oldIdle, oldBox)
+			restored, restoreErr := m.notifyReloadFailed(ctx, reloadListeners, from, to, cause, true)
+			if restored {
+				m.notifyConfigListeners(m.activeConfig())
+			}
+			return errors.Join(cause, restoreErr)
+		}
+	}
+
 	if oldBox != nil {
 		m.logger.Infof("stopping instance (all nodes disabled)...")
 		if err := oldBox.Close(); err != nil {
 			m.logger.Warnf("error closing instance during idle transition: %v", err)
 		}
 	}
+	m.mu.Lock()
+	if m.currentBox == oldBox {
+		m.currentBox = nil
+	}
+	m.mu.Unlock()
 
-	// Clean up monitor and shared state
+	sharedStateTxn := pool.BeginSharedStateTransaction()
 	if m.monitorMgr != nil {
 		m.monitorMgr.BeginReload()
 		m.monitorMgr.SweepStaleNodes()
 	}
-	pool.ResetSharedStateStore()
+	monitorTransition, err := m.prepareMonitorServerTransition(targetCfg)
+	if err != nil {
+		cause := fmt.Errorf("prepare idle monitor listener: %w", err)
+		return m.failReload(ctx, reloadListeners, from, to, cause, nil, oldCfg, oldIdle, sharedStateTxn)
+	}
 
-	_ = ctx // baseCtx preserved for future resume
+	m.mu.Lock()
+	m.currentBox = nil
+	m.cfg = targetCfg
+	m.idle = true
+	m.mu.Unlock()
 
-	for _, l := range listeners {
-		l.OnConfigUpdate(newCfg)
+	for _, listener := range reloadListeners {
+		if err := listener.CompleteReload(ctx, cloneReloadState(from), cloneReloadState(to)); err != nil {
+			if monitorTransition != nil {
+				monitorTransition.Abort()
+			}
+			cause := fmt.Errorf("complete idle reload: %w", err)
+			return m.failReload(ctx, reloadListeners, from, to, cause, nil, oldCfg, oldIdle, sharedStateTxn)
+		}
+	}
+	if monitorTransition != nil {
+		if err := monitorTransition.Activate(ctx); err != nil {
+			monitorTransition.Abort()
+			cause := fmt.Errorf("activate idle monitor listener: %w", err)
+			return m.failReload(ctx, reloadListeners, from, to, cause, nil, oldCfg, oldIdle, sharedStateTxn)
+		}
+	}
+	if err := sharedStateTxn.Commit(); err != nil {
+		if monitorTransition != nil {
+			_ = monitorTransition.Rollback()
+		}
+		cause := fmt.Errorf("commit idle shared state: %w", err)
+		return m.failReload(ctx, reloadListeners, from, to, cause, nil, oldCfg, oldIdle, sharedStateTxn)
+	}
+	if monitorTransition != nil {
+		monitorTransition.Finalize()
+	}
+
+	m.mu.Lock()
+	m.applyConfigSettings(targetCfg)
+	m.lastAppliedCfg = snapshotConfig(targetCfg)
+	m.lastAppliedIdle = true
+	m.lastAppliedMode = targetCfg.Mode
+	m.lastAppliedBasePort = targetCfg.MultiPort.BasePort
+	monitorServer := m.monitorServer
+	listeners := append([]ConfigUpdateListener(nil), m.configListeners...)
+	m.mu.Unlock()
+
+	if monitorServer != nil {
+		monitorServer.SetConfig(targetCfg)
+	}
+	for _, listener := range listeners {
+		listener.OnConfigUpdate(targetCfg)
 	}
 
 	m.logger.Infof("entered idle state (0 enabled nodes); re-enable nodes and reload to resume")
@@ -1348,6 +1765,22 @@ func cloneNodes(nodes []config.NodeConfig) []config.NodeConfig {
 	return out
 }
 
+func snapshotConfig(cfg *config.Config) *config.Config {
+	if cfg == nil {
+		return nil
+	}
+	cfg.RLock()
+	defer cfg.RUnlock()
+	return cfg.Clone()
+}
+
+func cloneReloadState(state ReloadState) ReloadState {
+	return ReloadState{
+		Config: snapshotConfig(state.Config),
+		Idle:   state.Idle,
+	}
+}
+
 func filterPersistentConfigNodes(nodes []config.NodeConfig) []config.NodeConfig {
 	filtered := make([]config.NodeConfig, 0, len(nodes))
 	for _, node := range nodes {
@@ -1368,10 +1801,7 @@ func (m *Manager) SetEphemeralNodes(nodes []config.NodeConfig) {
 }
 
 func (m *Manager) copyConfigLocked() *config.Config {
-	if m.cfg == nil {
-		return nil
-	}
-	return m.cfg.Clone()
+	return snapshotConfig(m.cfg)
 }
 
 func (m *Manager) nodeIndexLocked(name string) int {

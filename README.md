@@ -63,6 +63,40 @@ as:
 - `upstreams/misub/.env`
 - `workers/ech-workers-cloudflare/.dev.vars`
 
+The root `config.yaml` remains canonical for script-driven deployments. The
+rendered `deploy/service/base/config.yaml` is a derived runtime file: settings
+saved through the WebUI persist there, but the next root render/deploy can
+replace them with `serviceBase.runtime` from the root config. Promote durable
+WebUI changes back into the root config before redeploying.
+
+### Smart Routing Docker Entry
+
+Smart routing is disabled in the example config. To enable the default Docker
+path, set `serviceBase.runtime.routing.enabled: true` and leave
+`routing.listen` empty. This is route A: the dispatcher takes over the existing
+`listener` address and port, so the standard `22323:22323` publication remains
+valid.
+
+Setting `routing.listen` to another port selects route B. The plain pool entry
+continues on `listener.port`, while the dispatcher uses the custom port. Add a
+matching Docker `ports` entry through a Compose override or deployment-specific
+compose file; changing YAML alone does not publish that port on the host.
+
+Runtime config source precedence is deliberate:
+
+1. An existing file at `EASY_PROXY_CONFIG_PATH` is used at startup and skips
+   the initial R2 download.
+2. If that config is missing, an existing bootstrap JSON is used before an
+   `EASY_PROXY_IMPORT_CODE`; the import code only creates a bootstrap file when
+   one is not already present.
+3. When bootstrap sync is enabled, the background R2 sync can later replace the
+   runtime config with a newer published artifact.
+
+For normal root-script deployment, use the root config plus renderer as the
+authority. Use import-code/R2 bootstrap for source-less hosts, and avoid
+enabling R2 sync on the same runtime unless R2 is intended to own subsequent
+config updates.
+
 ## Repository Layout
 
 ```text
@@ -518,12 +552,15 @@ python -m unittest discover -s "tests" -p "test_*.py" -v
 # Aggregator regression tests
 python -m unittest discover -s "upstreams/aggregator/tests" -p "test_*.py" -v
 
-# service/base critical Go regression packages
+# Complete service/base Go regression suite
 Set-Location service/base
-go test ./internal/monitor
-go test ./internal/boxmgr
-go test ./internal/config
-go test ./internal/subscription
+go test -count=1 ./...
+
+# Embedded service/base frontend
+Set-Location frontend
+npm ci
+npm run lint
+npm run build
 ```
 
 Repository CI coverage:

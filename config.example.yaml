@@ -36,6 +36,19 @@ serviceBase:
       protocol: http
       username: ""
       password: ""
+    routing:
+      enabled: false # Opt-in smart HTTP/SOCKS entry; false preserves the plain pool listener.
+      listen: "" # Empty uses route A and takes over listener.address:listener.port.
+      default_strategy: stable # stable prefers long-lived nodes, then falls back to any healthy node.
+      use_default_rules: true # Append the built-in China-direct rules after custom/provider rules.
+      final_policy: PROXY # DIRECT or PROXY when no rule matches.
+      rules: [] # Ordered Clash-style rules, for example DOMAIN-SUFFIX,example.com,DIRECT.
+      rule_providers: [] # Remote rule lists with url, policy, behavior, and interval fields.
+      long_lived:
+        min_uptime: 2h # Minimum continuously observed uptime before preferred stable selection.
+        min_success_rate: 0.9 # Minimum reported success ratio in the range 0-1.
+      session:
+        ttl: 10m # Idle lifetime for session-strategy sticky bindings.
     management:
       enabled: true
       listen: 0.0.0.0:29888

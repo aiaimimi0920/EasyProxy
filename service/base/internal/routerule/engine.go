@@ -83,6 +83,29 @@ func New(ruleLines []string, final Policy, geo CountryLookup) *Engine {
 
 // SetRules replaces the rule list atomically (used for live reloads).
 func (e *Engine) SetRules(ruleLines []string) {
+	parsed, geoUsed, finalOverride := parseRules(ruleLines)
+	e.mu.Lock()
+	e.rules = parsed
+	e.geoUsed = geoUsed
+	if finalOverride != "" {
+		e.final = finalOverride
+	}
+	e.mu.Unlock()
+}
+
+// SetRulesAndFinal replaces the rule list and authoritative fallback policy in
+// one atomic update. FINAL entries in ruleLines are parsed for compatibility
+// but cannot override final.
+func (e *Engine) SetRulesAndFinal(ruleLines []string, final Policy) {
+	parsed, geoUsed, _ := parseRules(ruleLines)
+	e.mu.Lock()
+	e.rules = parsed
+	e.geoUsed = geoUsed
+	e.final = NormalizePolicy(string(final))
+	e.mu.Unlock()
+}
+
+func parseRules(ruleLines []string) ([]rule, bool, Policy) {
 	parsed := make([]rule, 0, len(ruleLines))
 	geoUsed := false
 	finalOverride := Policy("")
@@ -100,13 +123,7 @@ func (e *Engine) SetRules(ruleLines []string) {
 		}
 		parsed = append(parsed, r)
 	}
-	e.mu.Lock()
-	e.rules = parsed
-	e.geoUsed = geoUsed
-	if finalOverride != "" {
-		e.final = finalOverride
-	}
-	e.mu.Unlock()
+	return parsed, geoUsed, finalOverride
 }
 
 // SetGeoLookup swaps the country lookup (e.g. after the GeoIP DB is loaded).

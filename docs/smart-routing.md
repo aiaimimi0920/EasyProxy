@@ -20,9 +20,10 @@ The selection policy is composed of three independent, combinable layers.
    PROXY. Same rule model as Clash/mihomo. Answers only "does this flow need to
    be proxied?".
 2. **Strategy (用哪个节点)** — applies to PROXY flows:
-   - `stable` — pin all traffic in the same filter bucket to one long-lived
-     node (anti-ban: stable egress IP). On failure the bucket is promoted to the
-     next best healthy node automatically.
+   - `stable` — pin all traffic in the same filter bucket to one node (anti-ban:
+     stable egress IP). A new binding prefers a healthy long-lived node and
+     falls back to any healthy node when none qualify. An existing healthy
+     binding does not drift merely because a new long-lived node appears.
    - `session` — pin a session (by key, falling back to client source IP) to one
      node for the session TTL. For crawlers that need short-term IP stickiness.
    - `auto` — the pool's existing Mode selection (health-based / random /
@@ -54,6 +55,12 @@ through the dial `context`. sing-box stays a pure transport engine here.
 
 The dispatcher always reads the *live* pool outbound from the box manager
 (`PoolOutbound()`), so it stays correct across config reloads that swap the box.
+The reload lifecycle stops/rebinds the dispatcher only when enabled/listen/auth
+topology changes; source-only and rule-only reloads keep the existing listener.
+Management listener replacement applies the target config/auth snapshot before
+the new address accepts requests and restores the old snapshot on rollback.
+If candidate startup, health validation, listener binding, or lifecycle
+completion fails, boxmgr restores the last applied box and routing snapshot.
 
 ## Packages
 
@@ -69,6 +76,9 @@ The dispatcher always reads the *live* pool outbound from the box manager
   falls back byte-for-byte to the original `selectMember`.
 - `internal/monitor/` (extended) — node `firstSeenAt` + long-lived self-rating
   (uptime + success rate); `Snapshot` exposes `LongLived` / `UptimeSeconds`.
+  Reload probes bind generation, round ID, and probe revision; candidate rounds
+  supersede periodic rounds, so old/candidate late completions cannot overwrite
+  the active box's health state.
 
 ## Long-lived rating (B rule)
 
@@ -81,7 +91,8 @@ now - firstSeenAt >= routing.long_lived.min_uptime (default 2h)
   AND currently effective-available
 ```
 
-Thresholds are configurable; zero values fall back to the defaults above.
+Thresholds are configurable and hot-applied to existing monitor entries; zero
+values restore the defaults above without rebuilding sing-box.
 
 ## Stickiness semantics
 
@@ -101,8 +112,9 @@ per-pool cleanup goroutine.
 
 ## API parameters (only when `routing.enabled`)
 
-Three channels, merged in increasing priority: **port-bound < path/username <
-HTTP header**.
+Two public request channels are merged in increasing priority:
+**path/username < HTTP header**. The dispatcher also has an internal bound
+overlay, but no public configuration currently exposes port-bound directives.
 
 ### Path prefix (HTTP)
 
@@ -173,6 +185,16 @@ routing:
 
 Rule precedence inside the engine: `routing.rules` first, then provider rules,
 then the built-in default set (when `use_default_rules`), then `final_policy`.
+`final_policy` is stored separately from parsed rules, so legacy/default `FINAL`
+entries cannot silently override the configured authoritative fallback.
+
+When routing is enabled in pure `multi-port` mode, the builder still creates the
+global `proxy-pool` outbound for the dispatcher, while leaving the per-node
+listeners unchanged and omitting the ordinary global pool inbound.
+
+For Docker deployments, an empty `routing.listen` uses route A and the existing
+published listener port. A different route-B port must also be explicitly
+published by Docker/Compose; changing YAML alone cannot expose a container port.
 
 ## Observability
 
@@ -186,6 +208,11 @@ then the built-in default set (when `use_default_rules`), then `final_policy`.
 - GEOIP rules apply only to literal-IP destinations (no per-request DNS
   resolution, to avoid blocking the hot path). Domain destinations fall through
   to domain rules + FINAL.
+- SOCKS5 supports CONNECT only; UDP ASSOCIATE and BIND are not implemented.
+- Route B requires an explicit Docker/Compose port mapping for the custom
+  `routing.listen` port.
+- Port-bound fixed directives exist only as an internal dispatcher overlay and
+  are not currently exposed through user configuration.
 - The default entry shares one node across all default traffic (the anti-ban
   goal), which concentrates concurrency/bandwidth on that node by design.
 - All new behaviour is gated by `routing.enabled` and the presence of a ctx

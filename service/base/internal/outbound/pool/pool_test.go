@@ -103,6 +103,49 @@ func (failingOutbound) ListenPacket(context.Context, M.Socksaddr) (net.PacketCon
 	return nil, E.New("raw outbound intentionally unavailable")
 }
 
+type directProbeOutbound struct{}
+
+func (directProbeOutbound) Type() string           { return "test" }
+func (directProbeOutbound) Tag() string            { return "direct-probe" }
+func (directProbeOutbound) Network() []string      { return []string{"tcp"} }
+func (directProbeOutbound) Dependencies() []string { return nil }
+func (directProbeOutbound) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	address := net.JoinHostPort(destination.AddrString(), strconv.Itoa(int(destination.Port)))
+	return (&net.Dialer{}).DialContext(ctx, network, address)
+}
+func (directProbeOutbound) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, E.New("packet probe unsupported")
+}
+
+func TestPoolProbeCallbackDoesNotMutateMonitorEntryDirectly(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer origin.Close()
+	monitorMgr, err := monitor.NewManager(monitor.Config{ProbeTarget: origin.URL})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	defer monitorMgr.Stop()
+	entry := monitorMgr.Register(monitor.NodeInfo{Tag: "probe-node", Name: "probe-node"})
+	member := &memberState{tag: "probe-node", outbound: directProbeOutbound{}, entry: entry}
+	pool := &poolOutbound{ctx: context.Background(), monitor: monitorMgr}
+	probe := pool.makeProbeFunc(member)
+	if probe == nil {
+		t.Fatal("makeProbeFunc() returned nil")
+	}
+	before := entry.Snapshot()
+	if _, err := probe(context.Background()); err != nil {
+		t.Fatalf("probe callback error = %v", err)
+	}
+	after := entry.Snapshot()
+	if after.SuccessCount != before.SuccessCount || after.FailureCount != before.FailureCount ||
+		after.Available != before.Available || after.InitialCheckDone != before.InitialCheckDone ||
+		len(after.Timeline) != len(before.Timeline) {
+		t.Fatalf("probe callback mutated monitor state directly: before=%+v after=%+v", before, after)
+	}
+}
+
 func startConnectProxy(t *testing.T) (string, func()) {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -259,6 +302,236 @@ func TestSelectMemberAutoPrefersHigherAvailabilityScore(t *testing.T) {
 	}
 	if selected.tag != "healthy" {
 		t.Fatalf("expected healthy member to be selected, got %q", selected.tag)
+	}
+}
+
+func TestSelectMemberStablePrefersLongLivedCandidates(t *testing.T) {
+	mgr, err := monitor.NewManager(monitor.Config{
+		LongLivedMinUptime:      time.Nanosecond,
+		LongLivedMinSuccessRate: 0.9,
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	longEntry := mgr.Register(monitor.NodeInfo{Tag: "long-lived"})
+	longEntry.MarkInitialCheckDone(true)
+	normalEntry := mgr.Register(monitor.NodeInfo{Tag: "normal"})
+	normalEntry.MarkInitialCheckDone(true)
+	normalEntry.ApplyUsageReportFailure(20, true)
+
+	// Give the uptime threshold a chance to elapse while keeping the test
+	// independent of wall-clock hours.
+	time.Sleep(2 * time.Millisecond)
+	if !longEntry.Snapshot().LongLived {
+		t.Fatalf("expected long-lived test candidate, got %+v", longEntry.Snapshot())
+	}
+
+	p := &poolOutbound{
+		mode:   modeSequential,
+		sticky: newStickyState(time.Minute),
+	}
+	directive := &SelectionDirective{Strategy: StrategyStable}
+	got := p.selectMemberWithDirective(
+		[]*memberState{
+			{tag: "normal", entry: normalEntry},
+			{tag: "long-lived", entry: longEntry},
+		},
+		nil,
+		nil,
+		directive,
+	)
+	if got == nil || got.tag != "long-lived" {
+		t.Fatalf("stable should prefer long-lived candidate, got %+v", got)
+	}
+}
+
+func TestSelectMemberStableFallsBackWhenNoLongLivedCandidate(t *testing.T) {
+	mgr, err := monitor.NewManager(monitor.Config{
+		LongLivedMinUptime:      time.Nanosecond,
+		LongLivedMinSuccessRate: 0.9,
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	entry := mgr.Register(monitor.NodeInfo{Tag: "normal"})
+	entry.MarkInitialCheckDone(true)
+
+	p := &poolOutbound{
+		mode:   modeSequential,
+		sticky: newStickyState(time.Minute),
+	}
+	got := p.selectMemberWithDirective(
+		[]*memberState{{tag: "normal", entry: entry}},
+		nil,
+		nil,
+		&SelectionDirective{Strategy: StrategyStable},
+	)
+	if got == nil || got.tag != "normal" {
+		t.Fatalf("stable should fall back to healthy candidate, got %+v", got)
+	}
+}
+
+func TestSelectMemberStableHonorsExplicitNoLongLivedFilter(t *testing.T) {
+	mgr, err := monitor.NewManager(monitor.Config{
+		LongLivedMinUptime:      time.Nanosecond,
+		LongLivedMinSuccessRate: 0.9,
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	longEntry := mgr.Register(monitor.NodeInfo{Tag: "long-lived"})
+	longEntry.MarkInitialCheckDone(true)
+	normalEntry := mgr.Register(monitor.NodeInfo{Tag: "normal"})
+	normalEntry.MarkInitialCheckDone(true)
+	normalEntry.ApplyUsageReportFailure(20, true)
+	time.Sleep(2 * time.Millisecond)
+
+	p := &poolOutbound{
+		mode:   modeSequential,
+		sticky: newStickyState(time.Minute),
+	}
+	nolong := false
+	got := p.selectMemberWithDirective(
+		[]*memberState{
+			{tag: "normal", entry: normalEntry},
+			{tag: "long-lived", entry: longEntry},
+		},
+		nil,
+		nil,
+		&SelectionDirective{Strategy: StrategyStable, Filter: NodeFilter{LongLived: &nolong}},
+	)
+	if got == nil || got.tag != "normal" {
+		t.Fatalf("explicit nolong filter should remain strict, got %+v", got)
+	}
+}
+
+func TestAvailableMembersAppliesExplicitLongLivedFilterStrictly(t *testing.T) {
+	mgr, err := monitor.NewManager(monitor.Config{
+		LongLivedMinUptime:      time.Nanosecond,
+		LongLivedMinSuccessRate: 0.9,
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	longEntry := mgr.Register(monitor.NodeInfo{Tag: "long-lived"})
+	longEntry.MarkInitialCheckDone(true)
+	normalEntry := mgr.Register(monitor.NodeInfo{Tag: "normal"})
+	normalEntry.MarkInitialCheckDone(true)
+	normalEntry.ApplyUsageReportFailure(20, true)
+	time.Sleep(2 * time.Millisecond)
+	if !longEntry.Snapshot().LongLived || normalEntry.Snapshot().LongLived {
+		t.Fatalf("invalid test setup: long=%+v normal=%+v", longEntry.Snapshot(), normalEntry.Snapshot())
+	}
+
+	p := &poolOutbound{
+		members: []*memberState{
+			{tag: "long-lived", entry: longEntry},
+			{tag: "normal", entry: normalEntry},
+		},
+	}
+
+	for _, tt := range []struct {
+		name     string
+		wantLong bool
+		wantTag  string
+	}{
+		{name: "long", wantLong: true, wantTag: "long-lived"},
+		{name: "nolong", wantLong: false, wantTag: "normal"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := p.availableMembersLocked(
+				time.Now(),
+				"",
+				nil,
+				nil,
+				nil,
+				false,
+				false,
+				nil,
+				&SelectionDirective{Filter: NodeFilter{LongLived: &tt.wantLong}},
+			)
+			if len(got) != 1 || got[0].tag != tt.wantTag {
+				t.Fatalf("explicit %s filter returned %+v, want only %s", tt.name, got, tt.wantTag)
+			}
+		})
+	}
+}
+
+func TestSelectMemberStableHonorsPinnedHealthyNonLongLivedCandidate(t *testing.T) {
+	mgr, err := monitor.NewManager(monitor.Config{
+		LongLivedMinUptime:      time.Nanosecond,
+		LongLivedMinSuccessRate: 0.9,
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	longEntry := mgr.Register(monitor.NodeInfo{Tag: "long-lived"})
+	longEntry.MarkInitialCheckDone(true)
+	pinnedEntry := mgr.Register(monitor.NodeInfo{Tag: "pinned"})
+	pinnedEntry.MarkInitialCheckDone(true)
+	pinnedEntry.ApplyUsageReportFailure(20, true)
+	time.Sleep(2 * time.Millisecond)
+	if !longEntry.Snapshot().LongLived || pinnedEntry.Snapshot().LongLived {
+		t.Fatalf("invalid test setup: long=%+v pinned=%+v", longEntry.Snapshot(), pinnedEntry.Snapshot())
+	}
+
+	p := &poolOutbound{
+		mode:   modeSequential,
+		sticky: newStickyState(time.Minute),
+	}
+	got := p.selectMemberWithDirective(
+		[]*memberState{
+			{tag: "pinned", entry: pinnedEntry},
+			{tag: "long-lived", entry: longEntry},
+		},
+		nil,
+		nil,
+		&SelectionDirective{Strategy: StrategyStable, PinnedTag: "pinned"},
+	)
+	if got == nil || got.tag != "pinned" {
+		t.Fatalf("healthy pinned candidate should win implicit long-lived preference, got %+v", got)
+	}
+}
+
+func TestSelectMemberStableKeepsExistingBindingWhenLongLivedAppears(t *testing.T) {
+	mgr, err := monitor.NewManager(monitor.Config{
+		LongLivedMinUptime:      2 * time.Millisecond,
+		LongLivedMinSuccessRate: 0.9,
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	normalEntry := mgr.Register(monitor.NodeInfo{Tag: "normal"})
+	normalEntry.MarkInitialCheckDone(true)
+	normalEntry.ApplyUsageReportFailure(20, true)
+	longEntry := mgr.Register(monitor.NodeInfo{Tag: "long-lived"})
+	longEntry.MarkInitialCheckDone(true)
+
+	p := &poolOutbound{mode: modeSequential, sticky: newStickyState(time.Minute)}
+	directive := &SelectionDirective{Strategy: StrategyStable}
+	candidates := []*memberState{
+		{tag: "normal", entry: normalEntry},
+		{tag: "long-lived", entry: longEntry},
+	}
+
+	first := p.selectMemberWithDirective(candidates, nil, nil, directive)
+	if first == nil || first.tag != "normal" {
+		t.Fatalf("expected initial fallback to normal node, got %+v", first)
+	}
+	time.Sleep(5 * time.Millisecond)
+	if !longEntry.Snapshot().LongLived {
+		t.Fatalf("expected long-lived candidate after threshold, got %+v", longEntry.Snapshot())
+	}
+
+	second := p.selectMemberWithDirective(candidates, nil, nil, directive)
+	if second == nil || second.tag != "normal" {
+		t.Fatalf("existing stable binding should not move when long-lived appears, got %+v", second)
+	}
+	third := p.selectMemberWithDirective([]*memberState{candidates[1]}, nil, nil, directive)
+	if third == nil || third.tag != "long-lived" {
+		t.Fatalf("binding should promote after pinned node disappears, got %+v", third)
 	}
 }
 

@@ -58,11 +58,20 @@ type Server struct {
 	directDLR *net.Dialer
 	bound     directiveOverlay // parsed from cfg.BoundTokens (zero value = none)
 
+	lifecycleMu     sync.Mutex
 	mu              sync.RWMutex
 	started         bool
+	generation      uint64
 	ln              net.Listener
 	baseCtx         context.Context
+	cancel          context.CancelFunc
 	defaultStrategy pool.Strategy // hot-updatable default selection strategy
+
+	connMu      sync.Mutex
+	accepting   bool
+	connections map[net.Conn]struct{}
+	upstreams   map[net.Conn]struct{}
+	handlers    sync.WaitGroup
 }
 
 // NewServer constructs a dispatcher server. engine may be nil (then every
@@ -81,6 +90,8 @@ func NewServer(cfg Config, provider PoolProvider, engine *routerule.Engine, logg
 		logger:          logger,
 		directDLR:       &net.Dialer{Timeout: cfg.DialTimeout},
 		defaultStrategy: cfg.DefaultStrategy,
+		connections:     make(map[net.Conn]struct{}),
+		upstreams:       make(map[net.Conn]struct{}),
 	}
 	if strings.TrimSpace(cfg.BoundTokens) != "" {
 		if overlay, ok := parseTokens(cfg.BoundTokens); ok {
@@ -147,6 +158,12 @@ func (s *Server) FinalPolicy() string {
 // Start begins serving in a background goroutine. It returns once the listener
 // is bound (or immediately on bind failure reported through the error log).
 func (s *Server) Start(ctx context.Context) error {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	s.mu.Lock()
 	if s.started {
 		s.mu.Unlock()
@@ -160,25 +177,32 @@ func (s *Server) Start(ctx context.Context) error {
 	// A single listener serves both protocols: each accepted connection is
 	// sniffed (first byte 0x05 = SOCKS5, else HTTP) and parsed directly, so the
 	// dispatcher fully owns the connection lifecycle (no shared http.Server).
+	serveCtx, cancel := context.WithCancel(ctx)
+	s.generation++
+	generation := s.generation
 	s.ln = ln
-	s.baseCtx = ctx
+	s.baseCtx = serveCtx
+	s.cancel = cancel
 	s.started = true
 	s.mu.Unlock()
+	s.connMu.Lock()
+	s.accepting = true
+	s.connMu.Unlock()
 
 	go func() {
 		s.logf("🧭 smart dispatch entry listening on %s (http+socks5, default strategy: %s)", s.cfg.Listen, s.cfg.DefaultStrategy)
-		s.acceptLoop(ctx, ln)
+		s.acceptLoop(serveCtx, ln, generation)
 	}()
 	go func() {
-		<-ctx.Done()
-		s.Stop()
+		<-serveCtx.Done()
+		s.stopGeneration(generation)
 	}()
 	return nil
 }
 
 // acceptLoop accepts connections and dispatches each to the HTTP or SOCKS5
 // handler based on a one-byte protocol sniff.
-func (s *Server) acceptLoop(ctx context.Context, ln net.Listener) {
+func (s *Server) acceptLoop(ctx context.Context, ln net.Listener, generation uint64) {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -194,7 +218,14 @@ func (s *Server) acceptLoop(ctx context.Context, ln net.Listener) {
 			s.warnf("dispatch accept loop exiting: %v", err)
 			return
 		}
-		go s.handleConn(conn)
+		if !s.trackConnection(conn, generation) {
+			_ = conn.Close()
+			continue
+		}
+		go func() {
+			defer s.untrackConnection(conn)
+			s.handleConn(conn)
+		}()
 	}
 }
 
@@ -257,14 +288,111 @@ func (s *Server) serveHTTP(conn net.Conn, br *bufio.Reader) {
 
 // Stop gracefully shuts the server down.
 func (s *Server) Stop() {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	s.stopLocked()
+}
+
+func (s *Server) stopGeneration(generation uint64) {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	s.mu.RLock()
+	current := s.started && s.generation == generation
+	s.mu.RUnlock()
+	if !current {
+		return
+	}
+	s.stopLocked()
+}
+
+// stopLocked stops one server generation. The caller must hold lifecycleMu.
+func (s *Server) stopLocked() {
+
 	s.mu.Lock()
 	ln := s.ln
+	cancel := s.cancel
+	generation := s.generation
 	s.ln = nil
+	s.cancel = nil
 	s.started = false
 	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+
+	s.connMu.Lock()
+	s.accepting = false
+	connections := make([]net.Conn, 0, len(s.connections))
+	for conn := range s.connections {
+		connections = append(connections, conn)
+	}
+	upstreams := make([]net.Conn, 0, len(s.upstreams))
+	for conn := range s.upstreams {
+		upstreams = append(upstreams, conn)
+	}
+	s.connMu.Unlock()
+
 	if ln != nil {
 		_ = ln.Close()
 	}
+	for _, conn := range connections {
+		_ = conn.Close()
+	}
+	for _, conn := range upstreams {
+		_ = conn.Close()
+	}
+	s.handlers.Wait()
+	s.mu.Lock()
+	if !s.started && s.generation == generation {
+		s.baseCtx = nil
+	}
+	s.mu.Unlock()
+}
+
+func (s *Server) trackConnection(conn net.Conn, generation uint64) bool {
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
+	s.mu.RLock()
+	currentGeneration := s.generation
+	s.mu.RUnlock()
+	if !s.accepting || currentGeneration != generation {
+		return false
+	}
+	s.connections[conn] = struct{}{}
+	s.handlers.Add(1)
+	return true
+}
+
+func (s *Server) untrackConnection(conn net.Conn) {
+	s.connMu.Lock()
+	delete(s.connections, conn)
+	s.connMu.Unlock()
+	s.handlers.Done()
+}
+
+func (s *Server) trackUpstream(conn net.Conn) (net.Conn, error) {
+	if conn == nil {
+		return nil, fmt.Errorf("dispatch dial returned a nil connection")
+	}
+	tracked := &trackedUpstreamConn{Conn: conn, server: s}
+	s.connMu.Lock()
+	if !s.accepting {
+		s.connMu.Unlock()
+		_ = conn.Close()
+		return nil, fmt.Errorf("dispatch server is stopping")
+	}
+	if s.upstreams == nil {
+		s.upstreams = make(map[net.Conn]struct{})
+	}
+	s.upstreams[tracked] = struct{}{}
+	s.connMu.Unlock()
+	return tracked, nil
+}
+
+func (s *Server) untrackUpstream(conn net.Conn) {
+	s.connMu.Lock()
+	delete(s.upstreams, conn)
+	s.connMu.Unlock()
 }
 
 func (s *Server) logf(format string, args ...any) {
@@ -327,7 +455,7 @@ func (s *Server) handleConnectConn(conn net.Conn, req *http.Request) {
 		return
 	}
 
-	res, policy := s.resolveDirective(parseHeaders(req.Header).merge(overlay), host, clientIP(conn.RemoteAddr().String()))
+	res, policy := s.resolveDirective(connectRequestOverlay(req, overlay), host, clientIP(conn.RemoteAddr().String()))
 
 	target, err := s.dial(s.baseContext(), N.NetworkTCP, host, port, res, policy)
 	if err != nil {
@@ -341,6 +469,16 @@ func (s *Server) handleConnectConn(conn net.Conn, req *http.Request) {
 		return
 	}
 	relay(conn, target)
+}
+
+// connectRequestOverlay merges CONNECT path tokens with HTTP headers. Headers
+// are the highest-priority per-request source, matching the documented order:
+// port-bound < path/username < HTTP headers.
+func connectRequestOverlay(req *http.Request, pathOverlay directiveOverlay) directiveOverlay {
+	if req == nil {
+		return pathOverlay
+	}
+	return pathOverlay.merge(parseHeaders(req.Header))
 }
 
 // handleHTTPConn proxies a plain (non-CONNECT) HTTP request on the connection
@@ -412,7 +550,7 @@ func (s *Server) dial(ctx context.Context, network, host string, port uint16, re
 		if err != nil {
 			return nil, fmt.Errorf("direct: %w", err)
 		}
-		return conn, nil
+		return s.trackUpstream(conn)
 	}
 
 	out, ok := s.provider.PoolOutbound()
@@ -425,7 +563,7 @@ func (s *Server) dial(ctx context.Context, network, host string, port uint16, re
 	if err != nil {
 		return nil, fmt.Errorf("proxy: %w", err)
 	}
-	return conn, nil
+	return s.trackUpstream(conn)
 }
 
 // relay performs a bidirectional copy between two connections and returns when
@@ -452,6 +590,28 @@ func closeWrite(c net.Conn) {
 	if cw, ok := c.(closeWriter); ok {
 		_ = cw.CloseWrite()
 	}
+}
+
+type trackedUpstreamConn struct {
+	net.Conn
+	server *Server
+	once   sync.Once
+}
+
+func (c *trackedUpstreamConn) Close() error {
+	var closeErr error
+	c.once.Do(func() {
+		c.server.untrackUpstream(c)
+		closeErr = c.Conn.Close()
+	})
+	return closeErr
+}
+
+func (c *trackedUpstreamConn) CloseWrite() error {
+	if writer, ok := c.Conn.(closeWriter); ok {
+		return writer.CloseWrite()
+	}
+	return nil
 }
 
 // peekedConn wraps a net.Conn whose stream has been buffered for protocol

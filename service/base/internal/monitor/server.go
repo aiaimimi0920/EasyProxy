@@ -111,12 +111,22 @@ type SubscriptionStatus struct {
 
 // Server exposes HTTP endpoints for monitoring.
 type Server struct {
-	cfg    Config
-	cfgMu  sync.RWMutex   // protects cfgSrc pointer assignment and local cfg fields
-	cfgSrc *config.Config // 可持久化的配置对象; fields protected by cfgSrc.mu
-	mgr    *Manager
-	srv    *http.Server
-	logger *log.Logger
+	cfg     Config
+	cfgMu   sync.RWMutex   // protects cfgSrc pointer assignment and local cfg fields
+	cfgSrc  *config.Config // 可持久化的配置对象; fields protected by cfgSrc.mu
+	mgr     *Manager
+	handler http.Handler
+
+	lifecycleMu sync.Mutex
+	srv         *http.Server
+	listener    net.Listener
+	listen      string
+	shutdown    bool
+	watchOnce   sync.Once
+	doneOnce    sync.Once
+	logger      *log.Logger
+
+	depsMu sync.RWMutex
 	store  store.Store // 数据存储
 
 	// Session management
@@ -142,9 +152,10 @@ type Server struct {
 	proxyCompatCheckoutMu sync.Mutex
 }
 
-// NewServer constructs a server; it can be nil when disabled.
+// NewServer constructs the reusable monitor runtime. A disabled config creates
+// a dormant server so integrations can be wired before management is enabled.
 func NewServer(cfg Config, mgr *Manager, logger *log.Logger) *Server {
-	if !cfg.Enabled || mgr == nil {
+	if mgr == nil {
 		return nil
 	}
 	if logger == nil {
@@ -211,20 +222,290 @@ func NewServer(cfg Config, mgr *Manager, logger *log.Logger) *Server {
 
 	// Default handler for static assets (React App)
 	mux.HandleFunc("/", s.handleIndex)
-	s.srv = &http.Server{Addr: cfg.Listen, Handler: mux}
+	s.handler = mux
 	return s
+}
+
+const listenerShutdownTimeout = 2 * time.Second
+
+// ListenerTransition holds a pre-bound listener change. The old listener keeps
+// serving until Finalize, which makes activation rollback-safe and prevents a
+// reload handler from synchronously shutting down the server handling itself.
+type ListenerTransition struct {
+	server *Server
+
+	oldServer   *http.Server
+	oldListener net.Listener
+	oldListen   string
+
+	newServer   *http.Server
+	newListener net.Listener
+	newListen   string
+	enabled     bool
+	noChange    bool
+
+	oldConfigSource  *config.Config
+	oldRuntimeConfig Config
+	targetConfig     *config.Config
+	targetRuntime    persistedServerConfig
+	hasTargetConfig  bool
+	configApplied    bool
+
+	mu        sync.Mutex
+	activated bool
+	done      bool
+}
+
+// PrepareListener synchronously binds a replacement address without disturbing
+// the active listener. Bind failures therefore leave the old endpoint intact.
+func (s *Server) PrepareListener(enabled bool, listen string, targetConfigs ...*config.Config) (*ListenerTransition, error) {
+	if s == nil {
+		return nil, errors.New("monitor server is nil")
+	}
+	listen = strings.TrimSpace(listen)
+	if enabled && listen == "" {
+		return nil, errors.New("monitor listen address is empty")
+	}
+	var targetConfig *config.Config
+	if len(targetConfigs) > 0 {
+		targetConfig = targetConfigs[0]
+	}
+	targetRuntime, hasTargetConfig := snapshotPersistedServerConfig(targetConfig)
+	s.cfgMu.RLock()
+	oldConfigSource := s.cfgSrc
+	oldRuntimeConfig := cloneRuntimeConfig(s.cfg)
+	s.cfgMu.RUnlock()
+
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.shutdown {
+		return nil, errors.New("monitor server is shut down")
+	}
+	transition := &ListenerTransition{
+		server:           s,
+		oldServer:        s.srv,
+		oldListener:      s.listener,
+		oldListen:        s.listen,
+		enabled:          enabled,
+		newListen:        listen,
+		oldConfigSource:  oldConfigSource,
+		oldRuntimeConfig: oldRuntimeConfig,
+		targetConfig:     targetConfig,
+		targetRuntime:    targetRuntime,
+		hasTargetConfig:  hasTargetConfig,
+	}
+	if enabled && s.srv != nil && s.listen == listen {
+		transition.noChange = true
+		return transition, nil
+	}
+	if !enabled {
+		return transition, nil
+	}
+
+	listener, err := net.Listen("tcp", listen)
+	if err != nil {
+		return nil, fmt.Errorf("bind monitor listener %s: %w", listen, err)
+	}
+	transition.newListener = listener
+	transition.newServer = &http.Server{Addr: listen, Handler: s.handler}
+	return transition, nil
+}
+
+// Activate publishes the prepared listener while deliberately leaving the old
+// listener alive. Call Finalize after the surrounding reload commits, or
+// Rollback if a later transaction step fails.
+func (t *ListenerTransition) Activate(ctx context.Context) error {
+	if t == nil || t.server == nil {
+		return errors.New("monitor listener transition is nil")
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.done {
+		return errors.New("monitor listener transition already completed")
+	}
+	if t.activated {
+		return nil
+	}
+
+	s := t.server
+	s.lifecycleMu.Lock()
+	if s.shutdown {
+		s.lifecycleMu.Unlock()
+		return errors.New("monitor server is shut down")
+	}
+	if s.srv != t.oldServer || s.listener != t.oldListener || s.listen != t.oldListen {
+		s.lifecycleMu.Unlock()
+		return errors.New("monitor listener changed after transition preparation")
+	}
+	if t.hasTargetConfig {
+		s.applyPreparedConfig(t.targetConfig, t.targetRuntime)
+		t.configApplied = true
+	}
+	if !t.noChange {
+		if t.enabled {
+			s.srv = t.newServer
+			s.listener = t.newListener
+			s.listen = t.newListen
+			s.serveLocked(t.newServer, t.newListener, t.newListen)
+		} else {
+			s.srv = nil
+			s.listener = nil
+			s.listen = ""
+		}
+	}
+	s.watchContextLocked(ctx)
+	s.lifecycleMu.Unlock()
+	t.activated = true
+	return nil
+}
+
+// Finalize commits the transition and drains the old HTTP server asynchronously
+// with a bounded timeout, allowing a request served by the old listener to
+// finish after triggering its own reload.
+func (t *ListenerTransition) Finalize() {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	if t.done {
+		t.mu.Unlock()
+		return
+	}
+	if !t.activated {
+		listener := t.newListener
+		t.done = true
+		t.mu.Unlock()
+		if listener != nil {
+			_ = listener.Close()
+		}
+		return
+	}
+	if t.noChange {
+		t.done = true
+		t.mu.Unlock()
+		return
+	}
+	oldServer := t.oldServer
+	newServer := t.newServer
+	t.done = true
+	t.mu.Unlock()
+	if oldServer != nil && oldServer != newServer {
+		shutdownHTTPServerAsync(oldServer)
+	}
+}
+
+// Rollback restores the still-serving old listener and closes the prepared or
+// activated candidate listener.
+func (t *ListenerTransition) Rollback() error {
+	if t == nil || t.server == nil {
+		return errors.New("monitor listener transition is nil")
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.done {
+		return errors.New("monitor listener transition already completed")
+	}
+
+	s := t.server
+	if !t.activated {
+		t.done = true
+		if t.newListener != nil {
+			_ = t.newListener.Close()
+		}
+		return nil
+	}
+	if t.activated {
+		s.lifecycleMu.Lock()
+		if !t.noChange {
+			currentMatches := false
+			if t.enabled {
+				currentMatches = s.srv == t.newServer && s.listener == t.newListener && s.listen == t.newListen
+			} else {
+				currentMatches = s.srv == nil && s.listener == nil && s.listen == ""
+			}
+			if !currentMatches {
+				s.lifecycleMu.Unlock()
+				return errors.New("monitor listener changed after transition activation")
+			}
+			s.srv = t.oldServer
+			s.listener = t.oldListener
+			s.listen = t.oldListen
+		}
+		if t.configApplied {
+			s.restorePreparedConfig(t.oldConfigSource, t.oldRuntimeConfig)
+		}
+		s.lifecycleMu.Unlock()
+	}
+	t.done = true
+	if t.newServer != nil && t.newServer != t.oldServer {
+		shutdownHTTPServerAsync(t.newServer)
+	} else if t.newListener != nil {
+		_ = t.newListener.Close()
+	}
+	return nil
+}
+
+// Abort releases a prepared transition. It is safe before or after Activate.
+func (t *ListenerTransition) Abort() {
+	if t != nil {
+		_ = t.Rollback()
+	}
+}
+
+func (s *Server) serveLocked(server *http.Server, listener net.Listener, listen string) {
+	if server == nil || listener == nil {
+		return
+	}
+	s.logger.Printf("Starting monitor server on %s", listen)
+	go func() {
+		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
+			s.logger.Printf("❌ Monitor server error: %v", err)
+		}
+	}()
+	s.logger.Printf("✅ Monitor server started on http://%s", listen)
+}
+
+func (s *Server) watchContextLocked(ctx context.Context) {
+	if ctx == nil || ctx.Done() == nil {
+		return
+	}
+	s.watchOnce.Do(func() {
+		go func() {
+			<-ctx.Done()
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), listenerShutdownTimeout)
+			defer cancel()
+			s.Shutdown(shutdownCtx)
+		}()
+	})
+}
+
+func shutdownHTTPServerAsync(server *http.Server) {
+	if server == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), listenerShutdownTimeout)
+		defer cancel()
+		if err := server.Shutdown(ctx); err != nil {
+			_ = server.Close()
+		}
+	}()
 }
 
 // SetSubscriptionRefresher sets the subscription refresher for API endpoints.
 func (s *Server) SetSubscriptionRefresher(sr SubscriptionRefresher) {
 	if s != nil {
+		s.depsMu.Lock()
 		s.subRefresher = sr
+		s.depsMu.Unlock()
 	}
 }
 
 func (s *Server) SetSourceSyncReporter(sr SourceSyncReporter) {
 	if s != nil {
+		s.depsMu.Lock()
 		s.sourceSync = sr
+		s.depsMu.Unlock()
 	}
 }
 
@@ -233,22 +514,73 @@ func (s *Server) SetSourceSyncReporter(sr SourceSyncReporter) {
 // hot-apply hook used after a routing config edit.
 func (s *Server) SetRoutingController(rc RoutingController) {
 	if s != nil {
+		s.depsMu.Lock()
 		s.routing = rc
+		s.depsMu.Unlock()
 	}
 }
 
 // SetNodeManager enables config-node CRUD endpoints.
 func (s *Server) SetNodeManager(nm NodeManager) {
 	if s != nil {
+		s.depsMu.Lock()
 		s.nodeMgr = nm
+		s.depsMu.Unlock()
 	}
 }
 
 // SetStore sets the data store for session persistence and other operations.
 func (s *Server) SetStore(st store.Store) {
 	if s != nil {
+		s.depsMu.Lock()
 		s.store = st
+		s.depsMu.Unlock()
 	}
+}
+
+func (s *Server) subscriptionRefresherSnapshot() SubscriptionRefresher {
+	if s == nil {
+		return nil
+	}
+	s.depsMu.RLock()
+	defer s.depsMu.RUnlock()
+	return s.subRefresher
+}
+
+func (s *Server) sourceSyncSnapshot() SourceSyncReporter {
+	if s == nil {
+		return nil
+	}
+	s.depsMu.RLock()
+	defer s.depsMu.RUnlock()
+	return s.sourceSync
+}
+
+func (s *Server) routingSnapshot() RoutingController {
+	if s == nil {
+		return nil
+	}
+	s.depsMu.RLock()
+	defer s.depsMu.RUnlock()
+	return s.routing
+}
+
+func (s *Server) nodeManagerSnapshot() NodeManager {
+	if s == nil {
+		return nil
+	}
+	s.depsMu.RLock()
+	defer s.depsMu.RUnlock()
+	return s.nodeMgr
+}
+
+func (s *Server) storeSnapshot() store.Store {
+	if s == nil {
+		return nil
+	}
+	s.depsMu.RLock()
+	defer s.depsMu.RUnlock()
+	return s.store
 }
 
 // SetConfig binds the persistable config object for settings API.
@@ -256,27 +588,81 @@ func (s *Server) SetConfig(cfg *config.Config) {
 	if s == nil {
 		return
 	}
+	runtimeCfg, hasConfig := snapshotPersistedServerConfig(cfg)
 	s.cfgMu.Lock()
 	defer s.cfgMu.Unlock()
 	s.cfgSrc = cfg
-	if cfg != nil {
-		cfg.RLock()
-		s.cfg.Enabled = cfg.ManagementEnabled()
-		s.cfg.Listen = cfg.Management.Listen
-		s.cfg.ExternalIP = cfg.ExternalIP
-		s.cfg.ProbeTarget = cfg.Management.ProbeTarget
-		s.cfg.ProbeTargets = append([]string(nil), cfg.Management.ProbeTargets...)
-		s.cfg.Password = cfg.Management.Password
-		if cfg.Mode == "hybrid" || cfg.Mode == "multi-port" {
-			s.cfg.ProxyUsername = cfg.MultiPort.Username
-			s.cfg.ProxyPassword = cfg.MultiPort.Password
-		} else {
-			s.cfg.ProxyUsername = cfg.Listener.Username
-			s.cfg.ProxyPassword = cfg.Listener.Password
-		}
-		s.cfg.SkipCertVerify = cfg.SkipCertVerify
-		cfg.RUnlock()
+	if hasConfig {
+		applyPersistedServerConfig(&s.cfg, runtimeCfg)
 	}
+}
+
+type persistedServerConfig struct {
+	enabled        bool
+	listen         string
+	externalIP     string
+	probeTarget    string
+	probeTargets   []string
+	password       string
+	proxyUsername  string
+	proxyPassword  string
+	skipCertVerify bool
+}
+
+func snapshotPersistedServerConfig(cfg *config.Config) (persistedServerConfig, bool) {
+	if cfg == nil {
+		return persistedServerConfig{}, false
+	}
+	cfg.RLock()
+	defer cfg.RUnlock()
+	snapshot := persistedServerConfig{
+		enabled:        cfg.ManagementEnabled(),
+		listen:         cfg.Management.Listen,
+		externalIP:     cfg.ExternalIP,
+		probeTarget:    cfg.Management.ProbeTarget,
+		probeTargets:   append([]string(nil), cfg.Management.ProbeTargets...),
+		password:       cfg.Management.Password,
+		skipCertVerify: cfg.SkipCertVerify,
+	}
+	if cfg.Mode == "hybrid" || cfg.Mode == "multi-port" {
+		snapshot.proxyUsername = cfg.MultiPort.Username
+		snapshot.proxyPassword = cfg.MultiPort.Password
+	} else {
+		snapshot.proxyUsername = cfg.Listener.Username
+		snapshot.proxyPassword = cfg.Listener.Password
+	}
+	return snapshot, true
+}
+
+func applyPersistedServerConfig(dst *Config, snapshot persistedServerConfig) {
+	dst.Enabled = snapshot.enabled
+	dst.Listen = snapshot.listen
+	dst.ExternalIP = snapshot.externalIP
+	dst.ProbeTarget = snapshot.probeTarget
+	dst.ProbeTargets = append([]string(nil), snapshot.probeTargets...)
+	dst.Password = snapshot.password
+	dst.ProxyUsername = snapshot.proxyUsername
+	dst.ProxyPassword = snapshot.proxyPassword
+	dst.SkipCertVerify = snapshot.skipCertVerify
+}
+
+func cloneRuntimeConfig(cfg Config) Config {
+	cfg.ProbeTargets = append([]string(nil), cfg.ProbeTargets...)
+	return cfg
+}
+
+func (s *Server) applyPreparedConfig(source *config.Config, snapshot persistedServerConfig) {
+	s.cfgMu.Lock()
+	s.cfgSrc = source
+	applyPersistedServerConfig(&s.cfg, snapshot)
+	s.cfgMu.Unlock()
+}
+
+func (s *Server) restorePreparedConfig(source *config.Config, runtimeCfg Config) {
+	s.cfgMu.Lock()
+	s.cfgSrc = source
+	s.cfg = cloneRuntimeConfig(runtimeCfg)
+	s.cfgMu.Unlock()
 }
 
 func settingsChangeRequiresReload(c *config.Config, req allSettingsRequest) bool {
@@ -667,7 +1053,8 @@ func (s *Server) updateAllSettings(req allSettingsRequest) error {
 	// Subscriptions
 	c.Subscriptions = req.Subscriptions
 
-	// Sync ALL monitor-level config fields for runtime effect
+	// Sync ALL monitor-level config fields for runtime effect.
+	s.cfgMu.Lock()
 	s.cfg.Enabled = c.ManagementEnabled()
 	s.cfg.Listen = c.Management.Listen
 	s.cfg.ExternalIP = c.ExternalIP
@@ -677,6 +1064,7 @@ func (s *Server) updateAllSettings(req allSettingsRequest) error {
 	s.cfg.Password = c.Management.Password    // 密码立即生效
 	s.cfg.ProxyUsername = c.Listener.Username // 代理认证立即生效
 	s.cfg.ProxyPassword = c.Listener.Password
+	s.cfgMu.Unlock()
 
 	if err := c.SaveSettings(); err != nil {
 		return fmt.Errorf("保存配置失败: %w", err)
@@ -700,47 +1088,61 @@ func (s *Server) updateAllSettings(req allSettingsRequest) error {
 	return nil
 }
 
-// Start launches the HTTP server.
-func (s *Server) Start(ctx context.Context) {
-	if s == nil || s.srv == nil {
-		return
+// Start synchronously binds and activates the configured HTTP listener.
+func (s *Server) Start(ctx context.Context) error {
+	if s == nil {
+		return nil
 	}
-	s.logger.Printf("Starting monitor server on %s", s.cfg.Listen)
-	go func() {
-		if err := s.srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			s.logger.Printf("❌ Monitor server error: %v", err)
-		}
-	}()
-	// Wait for server to actually start listening
-	for i := 0; i < 10; i++ {
-		conn, err := net.DialTimeout("tcp", s.cfg.Listen, 50*time.Millisecond)
-		if err == nil {
-			conn.Close()
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
+	s.cfgMu.RLock()
+	enabled := s.cfg.Enabled
+	listen := s.cfg.Listen
+	s.cfgMu.RUnlock()
+	if !enabled {
+		return nil
 	}
-	s.logger.Printf("✅ Monitor server started on http://%s", s.cfg.Listen)
-
-	go func() {
-		<-ctx.Done()
-		s.Shutdown(context.Background())
-	}()
+	transition, err := s.PrepareListener(true, listen)
+	if err != nil {
+		return err
+	}
+	if err := transition.Activate(ctx); err != nil {
+		transition.Abort()
+		return err
+	}
+	transition.Finalize()
+	return nil
 }
 
 // Shutdown stops the server gracefully.
 func (s *Server) Shutdown(ctx context.Context) {
-	if s == nil || s.srv == nil {
+	if s == nil {
 		return
 	}
-	// Signal background goroutines to stop
-	select {
-	case <-s.done:
-		// already closed
-	default:
-		close(s.done)
+	s.lifecycleMu.Lock()
+	if s.shutdown {
+		s.lifecycleMu.Unlock()
+		return
 	}
-	_ = s.srv.Shutdown(ctx)
+	s.shutdown = true
+	server := s.srv
+	s.srv = nil
+	s.listener = nil
+	s.listen = ""
+	s.doneOnce.Do(func() { close(s.done) })
+	s.lifecycleMu.Unlock()
+	if server == nil {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, listenerShutdownTimeout)
+		defer cancel()
+	}
+	if err := server.Shutdown(ctx); err != nil {
+		_ = server.Close()
+	}
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -1280,8 +1682,9 @@ func writeJSON(w http.ResponseWriter, payload any) {
 // withAuth 认证中间件，如果配置了密码则需要验证
 func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		password := s.managementPassword()
 		// 如果没有配置密码，直接放行
-		if s.cfg.Password == "" {
+		if password == "" {
 			next(w, r)
 			return
 		}
@@ -1323,11 +1726,12 @@ func bearerTokenFromHeader(authHeader string) (string, bool) {
 }
 
 func (s *Server) validateManagementPassword(authHeader string) bool {
-	if s == nil || s.cfg.Password == "" {
+	password := s.managementPassword()
+	if password == "" {
 		return false
 	}
 
-	if secureCompareStrings(authHeader, s.cfg.Password) {
+	if secureCompareStrings(authHeader, password) {
 		return true
 	}
 
@@ -1336,13 +1740,34 @@ func (s *Server) validateManagementPassword(authHeader string) bool {
 		return false
 	}
 
-	return secureCompareStrings(token, s.cfg.Password)
+	return secureCompareStrings(token, password)
+}
+
+func (s *Server) managementPassword() string {
+	if s == nil {
+		return ""
+	}
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	return s.cfg.Password
+}
+
+func (s *Server) runtimeConfig() Config {
+	if s == nil {
+		return Config{}
+	}
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	cfg := s.cfg
+	cfg.ProbeTargets = append([]string(nil), s.cfg.ProbeTargets...)
+	return cfg
 }
 
 // handleAuth 处理登录认证
 func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
+	password := s.managementPassword()
 	// 如果没有配置密码，直接返回成功（不需要token）
-	if s.cfg.Password == "" {
+	if password == "" {
 		writeJSON(w, map[string]any{"message": "无需密码", "no_password": true})
 		return
 	}
@@ -1369,7 +1794,7 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 使用 constant-time 比较防止时序攻击
-	if !secureCompareStrings(req.Password, s.cfg.Password) {
+	if !secureCompareStrings(req.Password, password) {
 		// 添加随机延迟防止暴力破解
 		time.Sleep(time.Duration(100+mathrand.Intn(200)) * time.Millisecond)
 		w.WriteHeader(http.StatusUnauthorized)
@@ -1436,7 +1861,8 @@ func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	if !s.ensureNodeManager(w) {
+	nodeManager, ok := s.requireNodeManager(w)
+	if !ok {
 		return
 	}
 
@@ -1492,7 +1918,7 @@ func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
 			URI:  line,
 		}
 
-		if _, err := s.nodeMgr.CreateNode(r.Context(), node); err != nil {
+		if _, err := nodeManager.CreateNode(r.Context(), node); err != nil {
 			errs = append(errs, fmt.Sprintf("添加节点 %q 失败: %v", name, err))
 			continue
 		}
@@ -1559,7 +1985,8 @@ func (s *Server) handleSubscriptionStatus(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if s.subRefresher == nil {
+	subRefresher := s.subscriptionRefresherSnapshot()
+	if subRefresher == nil {
 		// No subscription manager — read config directly to provide accurate status
 		s.cfgMu.RLock()
 		c := s.cfgSrc
@@ -1580,7 +2007,7 @@ func (s *Server) handleSubscriptionStatus(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	status := s.subRefresher.Status()
+	status := subRefresher.Status()
 	writeJSON(w, map[string]any{
 		"enabled":           status.Enabled,
 		"has_subscriptions": status.HasSubscriptions,
@@ -1600,19 +2027,20 @@ func (s *Server) handleSubscriptionRefresh(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if s.subRefresher == nil {
+	subRefresher := s.subscriptionRefresherSnapshot()
+	if subRefresher == nil {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		writeJSON(w, map[string]any{"error": "订阅管理器未初始化，请重启程序"})
 		return
 	}
 
-	if err := s.subRefresher.RefreshNow(); err != nil {
+	if err := subRefresher.RefreshNow(); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		writeJSON(w, map[string]any{"error": err.Error()})
 		return
 	}
 
-	status := s.subRefresher.Status()
+	status := subRefresher.Status()
 	writeJSON(w, map[string]any{
 		"message":    "刷新成功",
 		"node_count": status.NodeCount,
@@ -1625,12 +2053,13 @@ func (s *Server) handleSourceSyncStatus(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if s.sourceSync == nil {
+	sourceSync := s.sourceSyncSnapshot()
+	if sourceSync == nil {
 		writeJSON(w, SourceSyncStatus{})
 		return
 	}
 
-	writeJSON(w, s.sourceSync.SourceSyncStatus())
+	writeJSON(w, sourceSync.SourceSyncStatus())
 }
 
 func (s *Server) handleRoutingStatus(w http.ResponseWriter, r *http.Request) {
@@ -1638,11 +2067,12 @@ func (s *Server) handleRoutingStatus(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	if s.routing == nil {
+	routing := s.routingSnapshot()
+	if routing == nil {
 		writeJSON(w, RoutingStatus{Enabled: false})
 		return
 	}
-	writeJSON(w, s.routing.RoutingStatus())
+	writeJSON(w, routing.RoutingStatus())
 }
 
 // routingConfigPayload is the editable smart-routing configuration exchanged by
@@ -1788,11 +2218,11 @@ func (s *Server) updateRoutingConfig(req routingConfigPayload) (bool, error) {
 
 	// Determine whether the change needs a full reload BEFORE mutating config:
 	// enable/disable and listen-address edits change whether the pool inbound
-	// binds the entry port, which only the sing-box rebuild can effect.
+	// binds the entry port, while session TTL changes rebuild sticky state.
+	// Long-lived thresholds are propagated directly to existing monitor entries.
 	c.Lock()
 	reloadNeeded := c.Routing.Enabled != req.Enabled ||
 		strings.TrimSpace(c.Routing.Listen) != strings.TrimSpace(req.Listen) ||
-		c.Routing.LongLived.MinUptime != llUptime ||
 		c.Routing.Session.TTL != sessionTTL
 
 	c.Routing.Enabled = req.Enabled
@@ -1803,25 +2233,20 @@ func (s *Server) updateRoutingConfig(req routingConfigPayload) (bool, error) {
 	c.Routing.FinalPolicy = strings.TrimSpace(req.FinalPolicy)
 	c.Routing.Rules = append([]string(nil), req.Rules...)
 	c.Routing.RuleProviders = providers
-	if llUptime > 0 {
-		c.Routing.LongLived.MinUptime = llUptime
-	}
-	if req.LongLivedMinRate > 0 {
-		c.Routing.LongLived.MinSuccessRate = req.LongLivedMinRate
-	}
-	if sessionTTL > 0 {
-		c.Routing.Session.TTL = sessionTTL
-	}
+	c.Routing.LongLived.MinUptime = llUptime
+	c.Routing.LongLived.MinSuccessRate = req.LongLivedMinRate
+	c.Routing.Session.TTL = sessionTTL
 	err := c.SaveSettings()
 	c.Unlock()
 	if err != nil {
 		return false, fmt.Errorf("保存配置失败: %w", err)
 	}
 
-	// Hot-apply rule/strategy edits when routing is running and no structural
-	// (enable/listen/threshold) change forces a reload.
-	if !reloadNeeded && s.routing != nil {
-		if applied := s.routing.ApplyHot(c); applied {
+	// Hot-apply rules, strategy, final policy, providers, and long-lived
+	// thresholds when no structural change forces a reload.
+	routing := s.routingSnapshot()
+	if !reloadNeeded && routing != nil {
+		if applied := routing.ApplyHot(c); applied {
 			return false, nil
 		}
 		// Not hot-appliable (e.g. routing running-state mismatch) → reload.
@@ -1829,8 +2254,6 @@ func (s *Server) updateRoutingConfig(req routingConfigPayload) (bool, error) {
 	}
 	return reloadNeeded, nil
 }
-
-
 
 func (s *Server) handleSourceSyncSourceHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -1914,13 +2337,14 @@ func (p nodePayload) toConfig() config.NodeConfig {
 
 // handleConfigNodes handles GET (list) and POST (create) for config nodes.
 func (s *Server) handleConfigNodes(w http.ResponseWriter, r *http.Request) {
-	if !s.ensureNodeManager(w) {
+	nodeManager, ok := s.requireNodeManager(w)
+	if !ok {
 		return
 	}
 
 	switch r.Method {
 	case http.MethodGet:
-		nodes, err := s.nodeMgr.ListConfigNodes(r.Context())
+		nodes, err := nodeManager.ListConfigNodes(r.Context())
 		if err != nil {
 			s.respondNodeError(w, err)
 			return
@@ -1933,7 +2357,7 @@ func (s *Server) handleConfigNodes(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, map[string]any{"error": "请求格式错误"})
 			return
 		}
-		node, err := s.nodeMgr.CreateNode(r.Context(), payload.toConfig())
+		node, err := nodeManager.CreateNode(r.Context(), payload.toConfig())
 		if err != nil {
 			s.respondNodeError(w, err)
 			return
@@ -1946,7 +2370,8 @@ func (s *Server) handleConfigNodes(w http.ResponseWriter, r *http.Request) {
 
 // handleConfigNodeItem handles PUT (update) and DELETE for a specific config node.
 func (s *Server) handleConfigNodeItem(w http.ResponseWriter, r *http.Request) {
-	if !s.ensureNodeManager(w) {
+	nodeManager, ok := s.requireNodeManager(w)
+	if !ok {
 		return
 	}
 
@@ -1966,7 +2391,7 @@ func (s *Server) handleConfigNodeItem(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, map[string]any{"error": "请求格式错误"})
 			return
 		}
-		node, err := s.nodeMgr.UpdateNode(r.Context(), nodeName, payload.toConfig())
+		node, err := nodeManager.UpdateNode(r.Context(), nodeName, payload.toConfig())
 		if err != nil {
 			s.respondNodeError(w, err)
 			return
@@ -1986,7 +2411,7 @@ func (s *Server) handleConfigNodeItem(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, map[string]any{"error": "缺少 enabled 字段"})
 			return
 		}
-		if err := s.nodeMgr.SetNodeEnabled(r.Context(), nodeName, *body.Enabled); err != nil {
+		if err := nodeManager.SetNodeEnabled(r.Context(), nodeName, *body.Enabled); err != nil {
 			s.respondNodeError(w, err)
 			return
 		}
@@ -1996,7 +2421,7 @@ func (s *Server) handleConfigNodeItem(w http.ResponseWriter, r *http.Request) {
 		}
 		// Auto-reload after toggle
 		reloadMsg := ""
-		if err := s.nodeMgr.TriggerReload(r.Context()); err != nil {
+		if err := nodeManager.TriggerReload(r.Context()); err != nil {
 			s.logger.Printf("auto-reload after toggle failed: %v", err)
 			reloadMsg = "（自动重载失败，请手动重载）"
 		} else {
@@ -2004,7 +2429,7 @@ func (s *Server) handleConfigNodeItem(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, map[string]any{"message": fmt.Sprintf("节点 %s %s%s", nodeName, action, reloadMsg)})
 	case http.MethodDelete:
-		if err := s.nodeMgr.DeleteNode(r.Context(), nodeName); err != nil {
+		if err := nodeManager.DeleteNode(r.Context(), nodeName); err != nil {
 			s.respondNodeError(w, err)
 			return
 		}
@@ -2020,7 +2445,8 @@ func (s *Server) handleConfigNodesBatchToggle(w http.ResponseWriter, r *http.Req
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	if !s.ensureNodeManager(w) {
+	nodeManager, ok := s.requireNodeManager(w)
+	if !ok {
 		return
 	}
 
@@ -2042,7 +2468,7 @@ func (s *Server) handleConfigNodesBatchToggle(w http.ResponseWriter, r *http.Req
 	var errs []string
 	successCount := 0
 	for _, name := range body.Names {
-		if err := s.nodeMgr.SetNodeEnabled(r.Context(), name, body.Enabled); err != nil {
+		if err := nodeManager.SetNodeEnabled(r.Context(), name, body.Enabled); err != nil {
 			errs = append(errs, fmt.Sprintf("%s: %v", name, err))
 		} else {
 			successCount++
@@ -2057,7 +2483,7 @@ func (s *Server) handleConfigNodesBatchToggle(w http.ResponseWriter, r *http.Req
 	// Auto-reload after batch toggle
 	reloadMsg := ""
 	if successCount > 0 {
-		if err := s.nodeMgr.TriggerReload(r.Context()); err != nil {
+		if err := nodeManager.TriggerReload(r.Context()); err != nil {
 			s.logger.Printf("auto-reload after batch toggle failed: %v", err)
 			reloadMsg = "（自动重载失败，请手动重载）"
 		} else {
@@ -2082,7 +2508,8 @@ func (s *Server) handleConfigNodesBatchDelete(w http.ResponseWriter, r *http.Req
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	if !s.ensureNodeManager(w) {
+	nodeManager, ok := s.requireNodeManager(w)
+	if !ok {
 		return
 	}
 
@@ -2103,7 +2530,7 @@ func (s *Server) handleConfigNodesBatchDelete(w http.ResponseWriter, r *http.Req
 	var errs []string
 	successCount := 0
 	for _, name := range body.Names {
-		if err := s.nodeMgr.DeleteNode(r.Context(), name); err != nil {
+		if err := nodeManager.DeleteNode(r.Context(), name); err != nil {
 			errs = append(errs, fmt.Sprintf("%s: %v", name, err))
 		} else {
 			successCount++
@@ -2113,7 +2540,7 @@ func (s *Server) handleConfigNodesBatchDelete(w http.ResponseWriter, r *http.Req
 	// Auto-reload after batch delete
 	reloadMsg := ""
 	if successCount > 0 {
-		if err := s.nodeMgr.TriggerReload(r.Context()); err != nil {
+		if err := nodeManager.TriggerReload(r.Context()); err != nil {
 			s.logger.Printf("auto-reload after batch delete failed: %v", err)
 			reloadMsg = "（自动重载失败，请手动重载）"
 		} else {
@@ -2138,11 +2565,12 @@ func (s *Server) handleReload(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	if !s.ensureNodeManager(w) {
+	nodeManager, ok := s.requireNodeManager(w)
+	if !ok {
 		return
 	}
 
-	if err := s.nodeMgr.TriggerReload(r.Context()); err != nil {
+	if err := nodeManager.TriggerReload(r.Context()); err != nil {
 		s.respondNodeError(w, err)
 		return
 	}
@@ -2151,13 +2579,14 @@ func (s *Server) handleReload(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) ensureNodeManager(w http.ResponseWriter) bool {
-	if s.nodeMgr == nil {
+func (s *Server) requireNodeManager(w http.ResponseWriter) (NodeManager, bool) {
+	nodeManager := s.nodeManagerSnapshot()
+	if nodeManager == nil {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		writeJSON(w, map[string]any{"error": "节点管理未启用"})
-		return false
+		return nil, false
 	}
-	return true
+	return nodeManager, true
 }
 
 func (s *Server) respondNodeError(w http.ResponseWriter, err error) {
@@ -2198,13 +2627,14 @@ func (s *Server) createSession() (*Session, error) {
 	}
 
 	// Persist to Store if available
-	if s.store != nil {
+	storeRef := s.storeSnapshot()
+	if storeRef != nil {
 		storeSession := &store.Session{
 			Token:     session.Token,
 			CreatedAt: session.CreatedAt,
 			ExpiresAt: session.ExpiresAt,
 		}
-		if err := s.store.CreateSession(context.Background(), storeSession); err != nil {
+		if err := storeRef.CreateSession(context.Background(), storeSession); err != nil {
 			s.logger.Printf("Failed to persist session to store: %v", err)
 		}
 	}
@@ -2219,6 +2649,7 @@ func (s *Server) createSession() (*Session, error) {
 
 // validateSession checks if a session token is valid and not expired.
 func (s *Server) validateSession(token string) bool {
+	storeRef := s.storeSnapshot()
 	// Check in-memory cache first
 	s.sessionMu.RLock()
 	session, exists := s.sessions[token]
@@ -2230,8 +2661,8 @@ func (s *Server) validateSession(token string) bool {
 			delete(s.sessions, token)
 			s.sessionMu.Unlock()
 			// Also delete from store
-			if s.store != nil {
-				_ = s.store.DeleteSession(context.Background(), token)
+			if storeRef != nil {
+				_ = storeRef.DeleteSession(context.Background(), token)
 			}
 			return false
 		}
@@ -2239,13 +2670,13 @@ func (s *Server) validateSession(token string) bool {
 	}
 
 	// Fallback: check Store (e.g., after restart)
-	if s.store != nil {
-		storeSess, err := s.store.GetSession(context.Background(), token)
+	if storeRef != nil {
+		storeSess, err := storeRef.GetSession(context.Background(), token)
 		if err != nil || storeSess == nil {
 			return false
 		}
 		if time.Now().After(storeSess.ExpiresAt) {
-			_ = s.store.DeleteSession(context.Background(), token)
+			_ = storeRef.DeleteSession(context.Background(), token)
 			return false
 		}
 		// Restore to in-memory cache
@@ -2282,8 +2713,8 @@ func (s *Server) cleanupExpiredSessions() {
 			s.sessionMu.Unlock()
 
 			// Also cleanup in Store
-			if s.store != nil {
-				_ = s.store.CleanupExpiredSessions(context.Background())
+			if storeRef := s.storeSnapshot(); storeRef != nil {
+				_ = storeRef.CleanupExpiredSessions(context.Background())
 			}
 		}
 	}

@@ -117,12 +117,17 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// traffic exactly as before. When enabled the dispatcher takes over the
 	// proxy entry, performing rule-based splitting + strategy node selection
 	// while sharing the same underlying pool. The controller also lets the
-	// management API hot-apply rule/strategy edits without a full reload.
+	// management API hot-apply rule/strategy edits and coordinates dispatcher
+	// topology transactionally around future box reloads.
 	routingCtl := NewRoutingController(ctx, boxMgr)
-	routingCtl.Start(cfg)
 	defer routingCtl.Stop()
+	boxMgr.AddReloadLifecycleListener(routingCtl)
+	boxMgr.AddConfigListener(routingCtl)
 	if server := boxMgr.MonitorServer(); server != nil {
 		server.SetRoutingController(routingCtl)
+	}
+	if err := routingCtl.Start(cfg); err != nil {
+		return fmt.Errorf("start smart routing controller: %w", err)
 	}
 
 	// ── 7. Start periodic stats flush ──

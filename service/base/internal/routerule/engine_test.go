@@ -206,3 +206,21 @@ func TestSetRules_Reload(t *testing.T) {
 		t.Errorf("after reload b.com should be PROXY: got %s", got)
 	}
 }
+
+func TestSetRulesAndFinal_Authoritative(t *testing.T) {
+	e := New(nil, PolicyProxy, nil)
+	e.SetRulesAndFinal([]string{
+		"DOMAIN-SUFFIX,provider.example,PROXY",
+		"FINAL,PROXY",
+	}, PolicyDirect)
+
+	if got := e.Match("provider.example"); got != PolicyProxy {
+		t.Fatalf("explicit provider rule should remain active: got %s", got)
+	}
+	if got := e.Match("unmatched.example"); got != PolicyDirect {
+		t.Fatalf("authoritative final should override legacy FINAL rule: got %s, want %s", got, PolicyDirect)
+	}
+	if got := e.Final(); got != PolicyDirect {
+		t.Fatalf("Final() should expose the authoritative policy: got %s, want %s", got, PolicyDirect)
+	}
+}

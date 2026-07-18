@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -21,21 +22,69 @@ type sharedMemberState struct {
 	totalDownload    atomic.Int64
 }
 
-var sharedStateStore sync.Map // map[tag]*sharedMemberState
+type sharedStateRegistry struct {
+	states sync.Map // map[tag]*sharedMemberState
+}
+
+var sharedStateStore atomic.Pointer[sharedStateRegistry]
+
+func init() {
+	sharedStateStore.Store(&sharedStateRegistry{})
+}
+
+// SharedStateStoreSnapshot identifies one immutable registry generation. The
+// member states inside the registry remain live so detached old connections can
+// finish updating their own counters while a reload candidate is evaluated.
+type SharedStateStoreSnapshot struct {
+	registry *sharedStateRegistry
+}
+
+// SharedStateTransaction isolates a reload candidate from the last applied
+// registry. Commit keeps the candidate registry; Rollback restores the exact
+// old registry object and all of its failure/traffic/active state.
+type SharedStateTransaction struct {
+	mu        sync.Mutex
+	old       *sharedStateRegistry
+	candidate *sharedStateRegistry
+	done      bool
+}
+
+func (r *sharedStateRegistry) detachEntries() {
+	if r == nil {
+		return
+	}
+	r.states.Range(func(_, value any) bool {
+		value.(*sharedMemberState).entry.Store(nil)
+		return true
+	})
+}
+
+func currentSharedStateRegistry() *sharedStateRegistry {
+	registry := sharedStateStore.Load()
+	if registry != nil {
+		return registry
+	}
+	registry = &sharedStateRegistry{}
+	if sharedStateStore.CompareAndSwap(nil, registry) {
+		return registry
+	}
+	return sharedStateStore.Load()
+}
 
 // acquireSharedState returns the shared state for a tag, creating if needed.
 func acquireSharedState(tag string) *sharedMemberState {
-	if v, ok := sharedStateStore.Load(tag); ok {
+	registry := currentSharedStateRegistry()
+	if v, ok := registry.states.Load(tag); ok {
 		return v.(*sharedMemberState)
 	}
 	state := &sharedMemberState{}
-	actual, _ := sharedStateStore.LoadOrStore(tag, state)
+	actual, _ := registry.states.LoadOrStore(tag, state)
 	return actual.(*sharedMemberState)
 }
 
 // lookupSharedState returns the shared state if it exists.
 func lookupSharedState(tag string) (*sharedMemberState, bool) {
-	v, ok := sharedStateStore.Load(tag)
+	v, ok := currentSharedStateRegistry().states.Load(tag)
 	if !ok {
 		return nil, false
 	}
@@ -44,10 +93,84 @@ func lookupSharedState(tag string) (*sharedMemberState, bool) {
 
 // ResetSharedStateStore clears all shared state (used during config reload).
 func ResetSharedStateStore() {
-	sharedStateStore.Range(func(key, _ any) bool {
-		sharedStateStore.Delete(key)
-		return true
-	})
+	old := sharedStateStore.Swap(&sharedStateRegistry{})
+	old.detachEntries()
+}
+
+// SnapshotSharedStateStore returns the identity of the active registry.
+func SnapshotSharedStateStore() SharedStateStoreSnapshot {
+	return SharedStateStoreSnapshot{registry: currentSharedStateRegistry()}
+}
+
+// BeginSharedStateTransaction atomically installs a fresh candidate registry
+// while retaining the previous registry for an exact rollback.
+func BeginSharedStateTransaction() *SharedStateTransaction {
+	candidate := &sharedStateRegistry{}
+	old := sharedStateStore.Swap(candidate)
+	if old == nil {
+		old = &sharedStateRegistry{}
+	}
+	// The old box is already being retired when a transaction starts. Its
+	// connections may still finish asynchronously, but their callbacks must not
+	// write through a monitor entry that the candidate will reuse.
+	old.detachEntries()
+	return &SharedStateTransaction{old: old, candidate: candidate}
+}
+
+// ResetCandidate discards state created by a rejected candidate retry without
+// changing the registry retained for rollback.
+func (t *SharedStateTransaction) ResetCandidate() error {
+	if t == nil {
+		return errors.New("shared state transaction is nil")
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.done {
+		return errors.New("shared state transaction already completed")
+	}
+	next := &sharedStateRegistry{}
+	if !sharedStateStore.CompareAndSwap(t.candidate, next) {
+		return errors.New("shared state candidate registry is no longer active")
+	}
+	t.candidate.detachEntries()
+	t.candidate = next
+	return nil
+}
+
+// Commit retains the active candidate registry.
+func (t *SharedStateTransaction) Commit() error {
+	if t == nil {
+		return errors.New("shared state transaction is nil")
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.done {
+		return errors.New("shared state transaction already completed")
+	}
+	if sharedStateStore.Load() != t.candidate {
+		return errors.New("shared state candidate registry is no longer active")
+	}
+	t.old.detachEntries()
+	t.done = true
+	return nil
+}
+
+// Rollback restores the exact registry that was active before the transaction.
+func (t *SharedStateTransaction) Rollback() error {
+	if t == nil {
+		return errors.New("shared state transaction is nil")
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.done {
+		return errors.New("shared state transaction already completed")
+	}
+	if !sharedStateStore.CompareAndSwap(t.candidate, t.old) {
+		return errors.New("shared state candidate registry is no longer active")
+	}
+	t.candidate.detachEntries()
+	t.done = true
+	return nil
 }
 
 func (s *sharedMemberState) attachEntry(entry *monitor.EntryHandle) {
@@ -158,9 +281,10 @@ func (s *sharedMemberState) addTraffic(upload, download int64) {
 	}
 }
 
-// releaseSharedMember clears blacklist state for a tag (called from release functions).
-func releaseSharedMember(tag string) {
-	if state, ok := lookupSharedState(tag); ok {
-		state.forceRelease()
+func releaseSharedState(state *sharedMemberState) func() {
+	return func() {
+		if state != nil {
+			state.forceRelease()
+		}
 	}
 }

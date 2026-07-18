@@ -153,7 +153,7 @@ func newPool(ctx context.Context, _ adapter.Router, logger log.ContextLogger, ta
 				state.attachEntry(entry)
 				logger.Info("registered node: ", memberTag)
 				// Set probe and release functions immediately
-				entry.SetRelease(p.makeReleaseByTagFunc(memberTag))
+				entry.SetRelease(releaseSharedState(state))
 				if probeFn := p.makeProbeByTagFunc(memberTag); probeFn != nil {
 					entry.SetProbe(probeFn)
 				}
@@ -205,10 +205,6 @@ func (p *poolOutbound) Start(stage adapter.StartStage) error {
 	p.mu.Unlock()
 	if err != nil {
 		return err
-	}
-	// 在初始化完成后，立即在后台触发健康检查
-	if p.monitor != nil {
-		go p.probeAllMembersOnStartup()
 	}
 	return nil
 }
@@ -271,61 +267,6 @@ func (p *poolOutbound) initializeMembersLocked() error {
 	p.logger.Info("pool initialized with ", len(members), " members")
 
 	return nil
-}
-
-// probeAllMembersOnStartup performs initial health checks on all members
-func (p *poolOutbound) probeAllMembersOnStartup() {
-	targets, ok := p.monitor.ProbeTargets()
-	if !ok {
-		p.logger.Warn("probe target not configured, skipping initial health check")
-		// 没有配置探测目标时，标记所有节点为可用
-		p.mu.Lock()
-		for _, member := range p.members {
-			if member.entry != nil {
-				member.entry.MarkInitialCheckDone(true)
-			}
-		}
-		p.mu.Unlock()
-		return
-	}
-
-	p.logger.Info("starting initial health check for all nodes")
-
-	p.mu.Lock()
-	members := make([]*memberState, len(p.members))
-	copy(members, p.members)
-	p.mu.Unlock()
-
-	availableCount := 0
-	failedCount := 0
-
-	for _, member := range members {
-		// Create a timeout context for each probe
-		ctx, cancel := context.WithTimeout(p.ctx, 15*time.Second)
-
-		latency, err := p.runProbeTargetsForMember(ctx, member, targets)
-		if err != nil {
-			p.logger.Warn("initial probe failed for ", member.tag, ": ", err)
-			failedCount++
-			if member.entry != nil {
-				member.entry.RecordFailure(err, strings.Join(probeTargetLabels(targets), ","))
-				member.entry.MarkInitialCheckDone(false) // 标记为不可用
-			}
-			cancel()
-			continue
-		}
-		latencyMs := latency.Milliseconds()
-		p.logger.Info("initial probe success for ", member.tag, ", latency: ", latencyMs, "ms")
-		availableCount++
-		if member.entry != nil {
-			member.entry.RecordSuccessWithLatency(latency)
-			member.entry.MarkInitialCheckDone(true)
-		}
-
-		cancel()
-	}
-
-	p.logger.Info("initial health check completed: ", availableCount, " available, ", failedCount, " failed")
 }
 
 func (p *poolOutbound) memberName(member *memberState) string {
@@ -484,6 +425,23 @@ func (p *poolOutbound) selectMemberWithDirective(
 		return p.selectMember(candidates, sourceStates, secondaryStates)
 	}
 
+	selectionCandidates := candidates
+	var preferredCandidates []*memberState
+	if directive.Strategy == StrategyStable && directive.Filter.LongLived == nil {
+		preferredCandidates = p.getCandidateBuffer()
+		for _, member := range candidates {
+			if member.entry != nil && member.entry.Snapshot().LongLived {
+				preferredCandidates = append(preferredCandidates, member)
+			}
+		}
+		if len(preferredCandidates) > 0 {
+			selectionCandidates = preferredCandidates
+		}
+	}
+	if preferredCandidates != nil {
+		defer p.putCandidateBuffer(preferredCandidates)
+	}
+
 	// A manually pinned tag wins whenever it is still a healthy candidate.
 	// Otherwise we fall through to sticky promotion, which auto-fails-over to
 	// the next best node in the same bucket/session.
@@ -495,15 +453,18 @@ func (p *poolOutbound) selectMemberWithDirective(
 
 	// fallback is the best candidate per the pool's configured Mode; sticky
 	// selection reuses it only when no healthy pinned member already exists.
-	fallback := p.selectMember(candidates, sourceStates, secondaryStates)
+	fallback := p.selectMember(selectionCandidates, sourceStates, secondaryStates)
 
 	switch directive.Strategy {
 	case StrategyStable:
+		// Existing stable bindings remain valid while their node is still in the
+		// full healthy/filtered set. The long-lived preference only influences a
+		// new binding or promotion after the previous node disappears.
 		return p.sticky.pickStable(directive.Filter.bucketKey(), candidates, fallback)
 	case StrategySession:
 		// pickSession treats an empty key as "no stickiness" and just returns
 		// the fallback, so keyless callers never collapse onto one node.
-		return p.sticky.pickSession(directive.SessionKey, candidates, fallback)
+		return p.sticky.pickSession(directive.SessionKey, selectionCandidates, fallback)
 	default:
 		return fallback
 	}
@@ -994,17 +955,7 @@ func (p *poolOutbound) makeProbeFunc(member *memberState) func(ctx context.Conte
 		}
 
 		duration, err := p.runProbeTargetsForMember(ctx, member, targets)
-		if err != nil {
-			if member.entry != nil {
-				member.entry.RecordFailure(err, strings.Join(probeTargetLabels(targets), ","))
-			}
-			return 0, err
-		}
-
-		if member.entry != nil {
-			member.entry.RecordSuccessWithLatency(duration)
-		}
-		return duration, nil
+		return duration, err
 	}
 }
 
@@ -1048,17 +999,7 @@ func (p *poolOutbound) makeProbeByTagFunc(tag string) func(ctx context.Context) 
 		}
 
 		duration, err := p.runProbeTargetsForMember(ctx, member, targets)
-		if err != nil {
-			if member.entry != nil {
-				member.entry.RecordFailure(err, strings.Join(probeTargetLabels(targets), ","))
-			}
-			return 0, err
-		}
-
-		if member.entry != nil {
-			member.entry.RecordSuccessWithLatency(duration)
-		}
-		return duration, nil
+		return duration, err
 	}
 }
 
@@ -1225,13 +1166,6 @@ func (p *poolOutbound) runProbeTargets(ctx context.Context, outbound adapter.Out
 		return time.Since(start), nil
 	}
 	return 0, E.New("all probe targets failed: ", strings.Join(errs, " | "))
-}
-
-// makeReleaseByTagFunc creates a release function that works before member initialization
-func (p *poolOutbound) makeReleaseByTagFunc(tag string) func() {
-	return func() {
-		releaseSharedMember(tag)
-	}
 }
 
 type trackedConn struct {
