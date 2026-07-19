@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -27,9 +29,20 @@ func cloneTestConfig() *Config {
 	managementEnabled := true
 	useDefaultRules := true
 	connectorRuntimeEnabled := true
+	longLivedOnly := true
 
 	cfg := &Config{
 		ExtraListeners: []ExtraListenerConfig{{Address: "original-listener"}},
+		LocalServer: LocalServerConfig{
+			Enabled: true,
+			Listen:  "127.0.0.1:22324",
+			Auth: LocalServerAuthConfig{
+				Username: "original-user",
+				Password: "original-password",
+			},
+			SharedRevision:       3,
+			CredentialGeneration: 4,
+		},
 		Management: ManagementConfig{
 			Enabled:      &managementEnabled,
 			ProbeTargets: []string{"original-probe"},
@@ -37,6 +50,11 @@ func cloneTestConfig() *Config {
 		Routing: RoutingConfig{
 			UseDefaultRules: &useDefaultRules,
 			Rules:           []string{"DOMAIN,original.example,DIRECT"},
+			NodeFilter: RoutingNodeFilterConfig{
+				Countries: []string{"US"},
+				Regions:   []string{"americas"},
+				LongLived: &longLivedOnly,
+			},
 			RuleProviders: []RuleProvider{{
 				URL:    "https://original.example/rules.txt",
 				Policy: "DIRECT",
@@ -102,6 +120,18 @@ func TestBuildPortMapWaitsForConfigWriter(t *testing.T) {
 }
 
 func TestConfigCloneDeepCopiesReferenceFields(t *testing.T) {
+	t.Run("local server", func(t *testing.T) {
+		original := cloneTestConfig()
+		cloned := original.Clone()
+		if !reflect.DeepEqual(cloned.LocalServer, original.LocalServer) {
+			t.Fatalf("cloned local server = %#v, want %#v", cloned.LocalServer, original.LocalServer)
+		}
+		cloned.LocalServer.Auth.Password = "changed"
+		if got := original.LocalServer.Auth.Password; got != "original-password" {
+			t.Fatalf("original local server password changed through clone: %q", got)
+		}
+	})
+
 	t.Run("extra listeners", func(t *testing.T) {
 		original := cloneTestConfig()
 		cloned := original.Clone()
@@ -153,6 +183,33 @@ func TestConfigCloneDeepCopiesReferenceFields(t *testing.T) {
 		cloned.Routing.RuleProviders[0].URL = "changed"
 		if got := original.Routing.RuleProviders[0].URL; got != "https://original.example/rules.txt" {
 			t.Fatalf("original routing rule provider changed through clone: %q", got)
+		}
+	})
+
+	t.Run("routing node filter countries", func(t *testing.T) {
+		original := cloneTestConfig()
+		cloned := original.Clone()
+		cloned.Routing.NodeFilter.Countries[0] = "changed"
+		if got := original.Routing.NodeFilter.Countries[0]; got != "US" {
+			t.Fatalf("original routing node filter country changed through clone: %q", got)
+		}
+	})
+
+	t.Run("routing node filter regions", func(t *testing.T) {
+		original := cloneTestConfig()
+		cloned := original.Clone()
+		cloned.Routing.NodeFilter.Regions[0] = "changed"
+		if got := original.Routing.NodeFilter.Regions[0]; got != "americas" {
+			t.Fatalf("original routing node filter region changed through clone: %q", got)
+		}
+	})
+
+	t.Run("routing node filter long lived pointer", func(t *testing.T) {
+		original := cloneTestConfig()
+		cloned := original.Clone()
+		*cloned.Routing.NodeFilter.LongLived = false
+		if !*original.Routing.NodeFilter.LongLived {
+			t.Fatal("original routing node filter long_lived changed through clone")
 		}
 	})
 
@@ -776,5 +833,396 @@ func TestRoutingTakesOverPoolInbound(t *testing.T) {
 		if got := tt.cfg.RoutingTakesOverPoolInbound(); got != tt.want {
 			t.Fatalf("%s: RoutingTakesOverPoolInbound() = %v, want %v", tt.name, got, tt.want)
 		}
+	}
+}
+
+func localServerNormalizeConfig() *Config {
+	return &Config{
+		Mode: "pool",
+		Listener: ListenerConfig{
+			Address:  "127.0.0.1",
+			Port:     22323,
+			Protocol: InboundProtocolMixed,
+			Username: "legacy_user",
+			Password: "shared-secret",
+		},
+		Management: ManagementConfig{
+			Password: "shared-secret",
+		},
+		LocalServer: LocalServerConfig{
+			Enabled: true,
+			Listen:  "127.0.0.1:22324",
+		},
+	}
+}
+
+func TestNormalizeLocalServerMigratesCanonicalCredential(t *testing.T) {
+	cfg := localServerNormalizeConfig()
+
+	if err := cfg.normalize(); err != nil {
+		t.Fatalf("normalize returned error: %v", err)
+	}
+
+	if got, want := cfg.LocalServer.Auth.Username, "legacy_user"; got != want {
+		t.Fatalf("canonical username = %q, want %q", got, want)
+	}
+	if got, want := cfg.LocalServer.Auth.Password, "shared-secret"; got != want {
+		t.Fatalf("canonical password = %q, want %q", got, want)
+	}
+	if got, want := cfg.Listener.Username, cfg.LocalServer.Auth.Username; got != want {
+		t.Fatalf("listener username = %q, want canonical %q", got, want)
+	}
+	if got, want := cfg.Listener.Password, cfg.LocalServer.Auth.Password; got != want {
+		t.Fatalf("listener password = %q, want canonical %q", got, want)
+	}
+	if got, want := cfg.Management.Password, cfg.LocalServer.Auth.Password; got != want {
+		t.Fatalf("management password = %q, want canonical %q", got, want)
+	}
+	if got, want := cfg.LocalServer.SharedRevision, int64(1); got != want {
+		t.Fatalf("shared revision = %d, want %d", got, want)
+	}
+	if got, want := cfg.LocalServer.CredentialGeneration, uint64(2); got != want {
+		t.Fatalf("credential generation = %d, want %d", got, want)
+	}
+}
+
+func TestNormalizeLocalServerCredentialMigrationIsIdempotent(t *testing.T) {
+	cfg := localServerNormalizeConfig()
+
+	if err := cfg.normalize(); err != nil {
+		t.Fatalf("first normalize returned error: %v", err)
+	}
+	if got := cfg.LocalServer.CredentialGeneration; got != 2 {
+		t.Fatalf("credential generation after first normalize = %d, want 2", got)
+	}
+
+	if err := cfg.normalize(); err != nil {
+		t.Fatalf("second normalize returned error: %v", err)
+	}
+	if got := cfg.LocalServer.CredentialGeneration; got != 2 {
+		t.Fatalf("credential generation after second normalize = %d, want 2", got)
+	}
+}
+
+func TestNormalizeLocalServerRejectsBypassTopology(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{
+			name: "hybrid mode",
+			mutate: func(cfg *Config) {
+				cfg.Mode = "hybrid"
+			},
+		},
+		{
+			name: "listener protocol is not mixed",
+			mutate: func(cfg *Config) {
+				cfg.Listener.Protocol = InboundProtocolHTTP
+			},
+		},
+		{
+			name: "extra listeners bypass dispatcher",
+			mutate: func(cfg *Config) {
+				cfg.ExtraListeners = []ExtraListenerConfig{{Address: "127.0.0.1", Port: 22325}}
+			},
+		},
+		{
+			name: "local and routing listen conflict",
+			mutate: func(cfg *Config) {
+				cfg.Routing.Listen = "127.0.0.1:22326"
+			},
+		},
+		{
+			name: "legacy passwords conflict during migration",
+			mutate: func(cfg *Config) {
+				cfg.Listener.Password = "listener-secret"
+				cfg.Management.Password = "management-secret"
+			},
+		},
+		{
+			name: "no password source",
+			mutate: func(cfg *Config) {
+				cfg.Listener.Password = ""
+				cfg.Management.Password = ""
+			},
+		},
+		{
+			name: "explicit canonical username is invalid",
+			mutate: func(cfg *Config) {
+				cfg.LocalServer.Auth.Username = "invalid+username"
+				cfg.LocalServer.Auth.Password = "canonical-secret"
+			},
+		},
+		{
+			name: "password contains NUL",
+			mutate: func(cfg *Config) {
+				cfg.LocalServer.Auth.Password = "canonical\x00secret"
+			},
+		},
+		{
+			name: "password exceeds 256 bytes",
+			mutate: func(cfg *Config) {
+				cfg.LocalServer.Auth.Password = strings.Repeat("x", 257)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := localServerNormalizeConfig()
+			tt.mutate(cfg)
+			if err := cfg.normalize(); err == nil {
+				t.Fatal("normalize accepted a Local Server topology that can bypass the dispatcher")
+			}
+		})
+	}
+}
+
+func TestNormalizeLocalServerUsesDefaultUsernameWhenLegacyUsernameIsInvalid(t *testing.T) {
+	cfg := localServerNormalizeConfig()
+	cfg.Listener.Username = "legacy+username"
+
+	if err := cfg.normalize(); err != nil {
+		t.Fatalf("normalize returned error: %v", err)
+	}
+	if got, want := cfg.LocalServer.Auth.Username, "easyproxy"; got != want {
+		t.Fatalf("canonical username = %q, want fallback %q", got, want)
+	}
+
+	explicit := localServerNormalizeConfig()
+	explicit.LocalServer.Auth = LocalServerAuthConfig{
+		Username: "canonical+username",
+		Password: "canonical-secret",
+	}
+	if err := explicit.normalize(); err == nil {
+		t.Fatal("normalize accepted an invalid explicit canonical username")
+	}
+}
+
+func TestNormalizeLocalServerCanonicalCredentialOverridesLegacyFields(t *testing.T) {
+	cfg := localServerNormalizeConfig()
+	cfg.LocalServer.Auth = LocalServerAuthConfig{
+		Username: "canonical-user",
+		Password: "canonical-secret",
+	}
+	cfg.Listener.Username = "legacy+invalid"
+	cfg.Listener.Password = "listener-secret"
+	cfg.Management.Password = "management-secret"
+
+	if err := cfg.normalize(); err != nil {
+		t.Fatalf("normalize returned error: %v", err)
+	}
+	if got, want := cfg.Listener.Username, "canonical-user"; got != want {
+		t.Fatalf("listener username = %q, want %q", got, want)
+	}
+	if got, want := cfg.Listener.Password, "canonical-secret"; got != want {
+		t.Fatalf("listener password = %q, want %q", got, want)
+	}
+	if got, want := cfg.Management.Password, "canonical-secret"; got != want {
+		t.Fatalf("management password = %q, want %q", got, want)
+	}
+}
+
+func TestNormalizeWithPortMapRejectsInvalidLocalServerTopology(t *testing.T) {
+	cfg := localServerNormalizeConfig()
+	cfg.Listener.Protocol = InboundProtocolHTTP
+	cfg.Nodes = []NodeConfig{{
+		Name: "valid-node",
+		URI:  "socks5://127.0.0.1:1080",
+		Port: 25001,
+	}}
+
+	if err := cfg.NormalizeWithPortMap(nil); err == nil {
+		t.Fatal("NormalizeWithPortMap accepted an invalid Local Server topology")
+	}
+}
+
+func TestSaveSettingsPersistsLocalServerAndRoutingNodeFilter(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	nodesPath := filepath.Join(dir, "preserved-nodes.txt")
+	if err := os.WriteFile(nodesPath, []byte("socks5://127.0.0.1:1081#file-node\n"), 0o644); err != nil {
+		t.Fatalf("write nodes file: %v", err)
+	}
+
+	const initialYAML = `mode: pool
+listener:
+  address: 127.0.0.1
+  port: 22323
+  protocol: mixed
+  username: legacy_user
+  password: shared-secret
+management:
+  password: shared-secret
+local_server:
+  enabled: true
+  listen: 127.0.0.1:22324
+routing:
+  enabled: false
+  node_filter:
+    countries: [US, JP]
+    regions: [americas, asia]
+    long_lived: true
+nodes_file: preserved-nodes.txt
+database_path: preserved.db
+nodes:
+  - name: preserved-node
+    uri: socks5://127.0.0.1:1080
+`
+	if err := os.WriteFile(configPath, []byte(initialYAML), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	cfg.Lock()
+	err = cfg.SaveSettings()
+	cfg.Unlock()
+	if err != nil {
+		t.Fatalf("SaveSettings returned error: %v", err)
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read saved config: %v", err)
+	}
+	var saved Config
+	if err := yaml.Unmarshal(data, &saved); err != nil {
+		t.Fatalf("decode saved config: %v", err)
+	}
+
+	if !saved.LocalServer.Enabled {
+		t.Fatal("saved local_server.enabled = false, want true")
+	}
+	if got, want := saved.LocalServer.Listen, "127.0.0.1:22324"; got != want {
+		t.Fatalf("saved local_server.listen = %q, want %q", got, want)
+	}
+	if got, want := saved.LocalServer.Auth.Username, "legacy_user"; got != want {
+		t.Fatalf("saved canonical username = %q, want %q", got, want)
+	}
+	if got, want := saved.LocalServer.Auth.Password, "shared-secret"; got != want {
+		t.Fatalf("saved canonical password = %q, want %q", got, want)
+	}
+	if got, want := saved.LocalServer.SharedRevision, int64(1); got != want {
+		t.Fatalf("saved shared revision = %d, want %d", got, want)
+	}
+	if got, want := saved.LocalServer.CredentialGeneration, uint64(2); got != want {
+		t.Fatalf("saved credential generation = %d, want %d", got, want)
+	}
+	if got, want := saved.Listener.Username, saved.LocalServer.Auth.Username; got != want {
+		t.Fatalf("saved listener username = %q, want canonical %q", got, want)
+	}
+	if got, want := saved.Listener.Password, saved.LocalServer.Auth.Password; got != want {
+		t.Fatalf("saved listener password = %q, want canonical %q", got, want)
+	}
+	if got, want := saved.Management.Password, saved.LocalServer.Auth.Password; got != want {
+		t.Fatalf("saved management password = %q, want canonical %q", got, want)
+	}
+	if got, want := saved.Routing.NodeFilter.Countries, []string{"US", "JP"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("saved node filter countries = %#v, want %#v", got, want)
+	}
+	if got, want := saved.Routing.NodeFilter.Regions, []string{"americas", "asia"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("saved node filter regions = %#v, want %#v", got, want)
+	}
+	if saved.Routing.NodeFilter.LongLived == nil || !*saved.Routing.NodeFilter.LongLived {
+		t.Fatalf("saved node filter long_lived = %v, want true", saved.Routing.NodeFilter.LongLived)
+	}
+
+	if got, want := saved.NodesFile, "preserved-nodes.txt"; got != want {
+		t.Fatalf("saved nodes_file = %q, want preserved value %q", got, want)
+	}
+	if got, want := saved.DatabasePath, "preserved.db"; got != want {
+		t.Fatalf("saved database_path = %q, want preserved value %q", got, want)
+	}
+	if len(saved.Nodes) != 1 || saved.Nodes[0].Name != "preserved-node" {
+		t.Fatalf("saved nodes = %#v, want original non-settings node", saved.Nodes)
+	}
+}
+
+func TestDispatchOwnsPrimaryInboundInLocalServerMode(t *testing.T) {
+	cfg := &Config{
+		Listener: ListenerConfig{
+			Address: "127.0.0.1",
+			Port:    22323,
+		},
+		LocalServer: LocalServerConfig{
+			Enabled: true,
+			Listen:  "127.0.0.1:22324",
+		},
+	}
+
+	if !cfg.DispatchOwnsPrimaryInbound() {
+		t.Fatal("Local Server did not claim the primary pool inbound")
+	}
+	if got, want := cfg.DispatchListen(), "127.0.0.1:22324"; got != want {
+		t.Fatalf("DispatchListen() = %q, want Local Server listen %q", got, want)
+	}
+	if !cfg.DispatchEnabled() {
+		t.Fatal("DispatchEnabled() = false with Local Server enabled")
+	}
+}
+
+func TestDisabledLocalServerPreservesLegacyDispatchTopology(t *testing.T) {
+	tests := []struct {
+		name           string
+		cfg            *Config
+		wantListen     string
+		wantOwnership  bool
+		wantDispatcher bool
+	}{
+		{
+			name: "routing disabled uses listener",
+			cfg: &Config{
+				Listener:    ListenerConfig{Address: "127.0.0.1", Port: 22323},
+				LocalServer: LocalServerConfig{Listen: "127.0.0.1:30000"},
+			},
+			wantListen: "127.0.0.1:22323",
+		},
+		{
+			name: "zero listener uses legacy defaults",
+			cfg: &Config{
+				LocalServer: LocalServerConfig{Listen: "127.0.0.1:30000"},
+			},
+			wantListen: "0.0.0.0:22323",
+		},
+		{
+			name: "route A owns listener",
+			cfg: &Config{
+				Listener: ListenerConfig{Address: "127.0.0.1", Port: 22323},
+				Routing:  RoutingConfig{Enabled: true},
+			},
+			wantListen:     "127.0.0.1:22323",
+			wantOwnership:  true,
+			wantDispatcher: true,
+		},
+		{
+			name: "route B coexists on separate listen",
+			cfg: &Config{
+				Listener: ListenerConfig{Address: "127.0.0.1", Port: 22323},
+				Routing: RoutingConfig{
+					Enabled: true,
+					Listen:  "127.0.0.1:22324",
+				},
+			},
+			wantListen:     "127.0.0.1:22324",
+			wantDispatcher: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.cfg.DispatchListen(); got != tt.wantListen {
+				t.Fatalf("DispatchListen() = %q, want %q", got, tt.wantListen)
+			}
+			if got := tt.cfg.DispatchOwnsPrimaryInbound(); got != tt.wantOwnership {
+				t.Fatalf("DispatchOwnsPrimaryInbound() = %v, want %v", got, tt.wantOwnership)
+			}
+			if got := tt.cfg.DispatchEnabled(); got != tt.wantDispatcher {
+				t.Fatalf("DispatchEnabled() = %v, want %v", got, tt.wantDispatcher)
+			}
+		})
 	}
 }

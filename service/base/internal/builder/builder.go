@@ -184,21 +184,21 @@ func Build(cfg *config.Config) (option.Options, error) {
 	// directly with the per-request selection directive — so health checks,
 	// blacklisting, and stats are unchanged.
 	if enablePoolInbound {
-		if !cfg.RoutingTakesOverPoolInbound() {
+		if !cfg.DispatchOwnsPrimaryInbound() {
 			inbound, err := buildPoolInbound(cfg)
 			if err != nil {
 				return option.Options{}, err
 			}
 			inbounds = append(inbounds, inbound)
 		} else {
-			log.Printf("🧭 routing entry takes over %s; plain pool inbound omitted", cfg.DispatchListen())
+			log.Printf("🧭 dispatch entry takes over %s; plain pool inbound omitted", cfg.DispatchListen())
 		}
 	}
 
 	// Smart routing dials the global pool outbound directly. Pure multi-port
 	// mode therefore still needs proxy-pool even though it has no plain pool
 	// inbound and keeps its per-node pools below.
-	if enablePoolInbound || cfg.Routing.Enabled {
+	if enablePoolInbound || cfg.DispatchEnabled() {
 		poolOptions := poolout.Options{
 			Mode:              cfg.Pool.Mode,
 			Members:           memberTags,

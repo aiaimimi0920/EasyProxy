@@ -49,6 +49,7 @@ type Config struct {
 	SkipCertVerify      bool                      `yaml:"skip_cert_verify"` // 全局跳过 SSL 证书验证
 	DatabasePath        string                    `yaml:"database_path"`    // SQLite 数据库路径，默认 data/data.db
 	ExtraListeners      []ExtraListenerConfig     `yaml:"extra_listeners"`  // 额外监听端口（不同选择策略）
+	LocalServer         LocalServerConfig         `yaml:"local_server"`     // 局域网本地服务器统一入口
 	Routing             RoutingConfig             `yaml:"routing"`          // 智能分流 + 多策略选节点入口
 
 	filePath string `yaml:"-"` // 配置文件路径，用于保存
@@ -59,15 +60,35 @@ type Config struct {
 // attribute filters). When disabled the runtime behaves exactly as before: the
 // plain pool inbound serves all traffic with no splitting.
 type RoutingConfig struct {
-	Enabled         bool            `yaml:"enabled"`           // 是否启用智能分流入口（默认关闭，保持旧行为）
-	Listen          string          `yaml:"listen"`            // 智能入口监听地址，默认接管 listener 的 host:port
-	DefaultStrategy string          `yaml:"default_strategy"`  // 默认入口策略：stable / session / auto（默认 stable）
-	UseDefaultRules *bool           `yaml:"use_default_rules"` // 是否附加内置“中国直连”默认规则集（默认 true）
-	FinalPolicy     string          `yaml:"final_policy"`      // 兜底策略：DIRECT / PROXY（默认 PROXY）
-	Rules           []string        `yaml:"rules"`             // 自定义分流规则，按顺序优先于默认集
-	RuleProviders   []RuleProvider  `yaml:"rule_providers"`    // 远程规则集
-	LongLived       LongLivedConfig `yaml:"long_lived"`        // 长效节点判定阈值
-	Session         SessionConfig   `yaml:"session"`           // 会话粘性参数
+	Enabled         bool                    `yaml:"enabled"`           // 是否启用智能分流入口（默认关闭，保持旧行为）
+	Listen          string                  `yaml:"listen"`            // 智能入口监听地址，默认接管 listener 的 host:port
+	DefaultStrategy string                  `yaml:"default_strategy"`  // 默认入口策略：stable / session / auto（默认 stable）
+	UseDefaultRules *bool                   `yaml:"use_default_rules"` // 是否附加内置“中国直连”默认规则集（默认 true）
+	FinalPolicy     string                  `yaml:"final_policy"`      // 兜底策略：DIRECT / PROXY（默认 PROXY）
+	Rules           []string                `yaml:"rules"`             // 自定义分流规则，按顺序优先于默认集
+	RuleProviders   []RuleProvider          `yaml:"rule_providers"`    // 远程规则集
+	NodeFilter      RoutingNodeFilterConfig `yaml:"node_filter"`       // 节点筛选条件
+	LongLived       LongLivedConfig         `yaml:"long_lived"`        // 长效节点判定阈值
+	Session         SessionConfig           `yaml:"session"`           // 会话粘性参数
+}
+
+type LocalServerConfig struct {
+	Enabled              bool                  `yaml:"enabled"`
+	Listen               string                `yaml:"listen"`
+	Auth                 LocalServerAuthConfig `yaml:"auth"`
+	SharedRevision       int64                 `yaml:"shared_revision"`
+	CredentialGeneration uint64                `yaml:"credential_generation"`
+}
+
+type LocalServerAuthConfig struct {
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
+}
+
+type RoutingNodeFilterConfig struct {
+	Countries []string `yaml:"countries"`
+	Regions   []string `yaml:"regions"`
+	LongLived *bool    `yaml:"long_lived"`
 }
 
 // RuleProvider describes a remote rule list applied with a single policy.
@@ -602,6 +623,9 @@ func (c *Config) normalizeInternal(skipSubscriptionFetch bool) error {
 	if err := c.applyDefaults(); err != nil {
 		return err
 	}
+	if err := c.normalizeLocalServer(); err != nil {
+		return err
+	}
 
 	// Mark inline nodes with source
 	for idx := range c.Nodes {
@@ -775,6 +799,9 @@ func (c *Config) NormalizeWithPortMap(portMap map[string]uint16) error {
 	if err := c.applyDefaults(); err != nil {
 		return err
 	}
+	if err := c.normalizeLocalServer(); err != nil {
+		return err
+	}
 
 	if len(c.Nodes) == 0 {
 		return errors.New("config.nodes cannot be empty (no inline, subscription, or manual nodes available)")
@@ -854,6 +881,86 @@ func (c *Config) NormalizeWithPortMap(portMap map[string]uint16) error {
 	return nil
 }
 
+func (c *Config) normalizeLocalServer() error {
+	if c == nil || !c.LocalServer.Enabled {
+		return nil
+	}
+	if c.Mode != "pool" {
+		return fmt.Errorf("local_server.enabled requires mode %q", "pool")
+	}
+	if c.Listener.Protocol != InboundProtocolMixed {
+		return fmt.Errorf("local_server.enabled requires listener.protocol %q", InboundProtocolMixed)
+	}
+	if len(c.ExtraListeners) > 0 {
+		return errors.New("local_server.enabled does not support extra_listeners")
+	}
+
+	localListen := strings.TrimSpace(c.LocalServer.Listen)
+	routingListen := strings.TrimSpace(c.Routing.Listen)
+	if localListen != "" && routingListen != "" && localListen != routingListen {
+		return fmt.Errorf("local_server.listen %q conflicts with routing.listen %q", localListen, routingListen)
+	}
+
+	if c.LocalServer.SharedRevision == 0 {
+		c.LocalServer.SharedRevision = 1
+	}
+	if c.LocalServer.CredentialGeneration == 0 {
+		c.LocalServer.CredentialGeneration = 1
+	}
+
+	username := strings.TrimSpace(c.LocalServer.Auth.Username)
+	if username != "" && !validIdentityToken(username) {
+		return fmt.Errorf("local_server.auth.username %q is invalid", c.LocalServer.Auth.Username)
+	}
+
+	password := c.LocalServer.Auth.Password
+	migratedPassword := false
+	if password == "" {
+		listenerPassword := c.Listener.Password
+		managementPassword := c.Management.Password
+		switch {
+		case listenerPassword != "" && managementPassword != "" && listenerPassword != managementPassword:
+			return errors.New("local_server.auth.password is missing and legacy listener/management passwords conflict")
+		case listenerPassword != "":
+			password = listenerPassword
+		case managementPassword != "":
+			password = managementPassword
+		default:
+			return errors.New("local_server.auth.password is required when local_server.enabled=true")
+		}
+		migratedPassword = true
+	}
+	if len(password) == 0 {
+		return errors.New("local_server.auth.password is required when local_server.enabled=true")
+	}
+	if strings.IndexByte(password, 0) >= 0 {
+		return errors.New("local_server.auth.password must not contain NUL")
+	}
+	if len(password) > 256 {
+		return errors.New("local_server.auth.password must be at most 256 bytes")
+	}
+
+	if username == "" {
+		listenerUsername := strings.TrimSpace(c.Listener.Username)
+		if validIdentityToken(listenerUsername) {
+			username = listenerUsername
+		} else {
+			username = "easyproxy"
+		}
+	}
+
+	c.LocalServer.Auth.Username = username
+	c.LocalServer.Auth.Password = password
+	if migratedPassword && c.LocalServer.CredentialGeneration < 2 {
+		c.LocalServer.CredentialGeneration = 2
+	}
+
+	c.Listener.Username = username
+	c.Listener.Password = password
+	c.Management.Password = password
+	return nil
+}
+
 // ManagementEnabled reports whether the monitoring endpoint should run.
 func (c *Config) ManagementEnabled() bool {
 	if c.Management.Enabled == nil {
@@ -880,14 +987,12 @@ func (c *Config) DispatchListen() string {
 	if c == nil {
 		return ""
 	}
-	if listen := strings.TrimSpace(c.Routing.Listen); listen != "" {
-		return listen
+	if c != nil && c.LocalServer.Enabled {
+		if listen := strings.TrimSpace(c.LocalServer.Listen); listen != "" {
+			return listen
+		}
 	}
-	host := strings.TrimSpace(c.Listener.Address)
-	if host == "" {
-		host = "0.0.0.0"
-	}
-	return net.JoinHostPort(host, strconv.Itoa(int(c.Listener.Port)))
+	return c.legacyDispatchListen()
 }
 
 // RoutingTakesOverPoolInbound reports whether the smart dispatch entry binds the
@@ -900,11 +1005,42 @@ func (c *Config) RoutingTakesOverPoolInbound() bool {
 		return false
 	}
 	poolInbound := net.JoinHostPort(normalizeHostForCompare(c.Listener.Address), strconv.Itoa(int(c.Listener.Port)))
-	dispatch := c.DispatchListen()
+	dispatch := c.legacyDispatchListen()
 	if host, port, err := net.SplitHostPort(dispatch); err == nil {
 		dispatch = net.JoinHostPort(normalizeHostForCompare(host), port)
 	}
 	return dispatch == poolInbound
+}
+
+func (c *Config) DispatchOwnsPrimaryInbound() bool {
+	if c == nil {
+		return false
+	}
+	if c.LocalServer.Enabled {
+		return true
+	}
+	return c.RoutingTakesOverPoolInbound()
+}
+
+func (c *Config) DispatchEnabled() bool {
+	return c != nil && (c.LocalServer.Enabled || c.Routing.Enabled)
+}
+
+func (c *Config) legacyDispatchListen() string {
+	host := "0.0.0.0"
+	port := uint16(22323)
+	if c != nil {
+		if listen := strings.TrimSpace(c.Routing.Listen); listen != "" {
+			return listen
+		}
+		if addr := strings.TrimSpace(c.Listener.Address); addr != "" {
+			host = addr
+		}
+		if c.Listener.Port != 0 {
+			port = c.Listener.Port
+		}
+	}
+	return net.JoinHostPort(host, strconv.Itoa(int(port)))
 }
 
 // normalizeHostForCompare canonicalizes bind hosts so that equivalent forms
@@ -1716,6 +1852,7 @@ func (c *Config) Clone() *Config {
 		SkipCertVerify:      c.SkipCertVerify,
 		DatabasePath:        c.DatabasePath,
 		ExtraListeners:      cloneConfigSlice(c.ExtraListeners),
+		LocalServer:         c.LocalServer,
 		Routing:             c.Routing,
 		filePath:            c.filePath,
 	}
@@ -1725,6 +1862,9 @@ func (c *Config) Clone() *Config {
 	cloned.Routing.UseDefaultRules = cloneConfigBool(c.Routing.UseDefaultRules)
 	cloned.Routing.Rules = cloneConfigSlice(c.Routing.Rules)
 	cloned.Routing.RuleProviders = cloneConfigSlice(c.Routing.RuleProviders)
+	cloned.Routing.NodeFilter.Countries = cloneConfigSlice(c.Routing.NodeFilter.Countries)
+	cloned.Routing.NodeFilter.Regions = cloneConfigSlice(c.Routing.NodeFilter.Regions)
+	cloned.Routing.NodeFilter.LongLived = cloneConfigBool(c.Routing.NodeFilter.LongLived)
 	cloned.SourceSync.FallbackSubscriptions = cloneConfigSlice(c.SourceSync.FallbackSubscriptions)
 	cloned.SourceSync.ConnectorRuntime.Enabled = cloneConfigBool(c.SourceSync.ConnectorRuntime.Enabled)
 	for idx := range cloned.Connectors {
@@ -1941,6 +2081,9 @@ func (c *Config) SaveSettings() error {
 
 	// GeoIP
 	saveCfg.GeoIP = c.GeoIP
+
+	// Local Server
+	saveCfg.LocalServer = c.LocalServer
 
 	// Routing (smart dispatch entry)
 	saveCfg.Routing = c.Routing

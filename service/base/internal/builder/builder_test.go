@@ -91,6 +91,56 @@ func TestBuildMultiPortWithoutRoutingOmitsGlobalPool(t *testing.T) {
 	}
 }
 
+func TestBuildLocalServerSuppressesPlainInboundAndKeepsPoolOutbound(t *testing.T) {
+	cfg := localServerBuildConfig()
+
+	opts, err := Build(cfg)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	inboundTags := inboundTagSet(opts.Inbounds)
+	if inboundTags["http-in"] {
+		t.Fatalf("inbounds = %#v, Local Server must suppress the plain pool inbound", inboundTags)
+	}
+
+	outboundTags := outboundTagSet(opts.Outbounds)
+	if !outboundTags[poolout.Tag] {
+		t.Fatalf("outbounds = %#v, want global %q outbound for Local Server dispatcher", outboundTags, poolout.Tag)
+	}
+
+	if opts.Route == nil {
+		t.Fatal("route options are nil")
+	}
+	if got, want := opts.Route.Final, poolout.Tag; got != want {
+		t.Fatalf("route final = %q, want %q", got, want)
+	}
+}
+
+func TestBuildLegacyRoutingRouteBKeepsPlainInbound(t *testing.T) {
+	cfg := localServerBuildConfig()
+	cfg.LocalServer.Enabled = false
+	cfg.Routing = config.RoutingConfig{
+		Enabled: true,
+		Listen:  "127.0.0.1:22324",
+	}
+
+	opts, err := Build(cfg)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	inboundTags := inboundTagSet(opts.Inbounds)
+	if !inboundTags["http-in"] {
+		t.Fatalf("inbounds = %#v, legacy route-B routing must keep the plain pool inbound", inboundTags)
+	}
+
+	outboundTags := outboundTagSet(opts.Outbounds)
+	if !outboundTags[poolout.Tag] {
+		t.Fatalf("outbounds = %#v, want global %q outbound for smart routing", outboundTags, poolout.Tag)
+	}
+}
+
 func multiPortBuildConfig(routingEnabled bool) *config.Config {
 	return &config.Config{
 		Mode: "multi-port",
@@ -117,6 +167,53 @@ func multiPortBuildConfig(routingEnabled bool) *config.Config {
 			},
 		},
 	}
+}
+
+func localServerBuildConfig() *config.Config {
+	return &config.Config{
+		Mode: "pool",
+		Listener: config.ListenerConfig{
+			Address:  "127.0.0.1",
+			Port:     22323,
+			Protocol: config.InboundProtocolMixed,
+			Username: "easyproxy",
+			Password: "shared-secret",
+		},
+		Pool: config.PoolConfig{
+			Mode: "auto",
+		},
+		LocalServer: config.LocalServerConfig{
+			Enabled: true,
+			Listen:  "127.0.0.1:32323",
+			Auth: config.LocalServerAuthConfig{
+				Username: "easyproxy",
+				Password: "shared-secret",
+			},
+		},
+		Nodes: []config.NodeConfig{
+			{
+				Name: "node-one",
+				URI:  "socks5://127.0.0.1:1080",
+				Port: 25001,
+			},
+		},
+	}
+}
+
+func inboundTagSet(inbounds []option.Inbound) map[string]bool {
+	tags := make(map[string]bool, len(inbounds))
+	for _, inbound := range inbounds {
+		tags[inbound.Tag] = true
+	}
+	return tags
+}
+
+func outboundTagSet(outbounds []option.Outbound) map[string]bool {
+	tags := make(map[string]bool, len(outbounds))
+	for _, outbound := range outbounds {
+		tags[outbound.Tag] = true
+	}
+	return tags
 }
 
 func TestBuildNodeOutboundSupportsSOCKS5(t *testing.T) {
