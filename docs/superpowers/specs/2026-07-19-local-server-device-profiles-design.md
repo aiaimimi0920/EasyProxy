@@ -248,6 +248,7 @@ easyproxy+dev=laptop-work+stable+us
 - password 必须常量时间比较匹配 canonical shared password；
 - `dev=` 最多一次；
 - `device_id` 必须匹配 `[A-Za-z0-9._-]{1,64}`；
+- `device_id` 在进入持久化、Registry、显式身份或 IP 映射比较前统一 trim 并规范化为小写，因此 `Laptop` 与 `laptop` 表示同一设备；
 - routing token 继续使用现有语法；
 - 未携带 `dev=` 时进入 IP/CIDR 回退。
 
@@ -427,7 +428,7 @@ authenticate shared credential
 - session/bucket key；
 - request-level routing overrides。
 
-sticky 和 session key 必须自动加入 `profile_id` 命名空间。节点健康、失败和黑名单状态继续共享；绑定和策略状态不能跨 Profile 共享。
+sticky 和 session key 必须自动加入 `profile_id + profile_revision` 命名空间。节点健康、失败和黑名单状态继续共享；绑定和策略状态不能跨 Profile 共享，且 Profile 更新后不能复用旧 revision 的 affinity 状态。
 
 profile-specific long-lived thresholds在选择阶段根据共享 monitor 的原始 uptime/success 数据评估，不能依赖一个全局预计算的 long-lived 布尔值。
 
