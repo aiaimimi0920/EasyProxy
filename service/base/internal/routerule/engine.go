@@ -11,6 +11,7 @@
 package routerule
 
 import (
+	"fmt"
 	"net/netip"
 	"strings"
 	"sync"
@@ -57,19 +58,19 @@ const (
 )
 
 type rule struct {
-	kind    ruleKind
-	value   string     // domain / keyword / ISO code (upper for geoip)
-	prefix  netip.Prefix // for kindIPCIDR
-	policy  Policy
+	kind   ruleKind
+	value  string       // domain / keyword / ISO code (upper for geoip)
+	prefix netip.Prefix // for kindIPCIDR
+	policy Policy
 }
 
 // Engine evaluates an ordered rule list against destinations.
 type Engine struct {
-	mu        sync.RWMutex
-	rules     []rule
-	final     Policy
-	geo       CountryLookup
-	geoUsed   bool // whether any GEOIP rule exists (skip lookup work otherwise)
+	mu      sync.RWMutex
+	rules   []rule
+	final   Policy
+	geo     CountryLookup
+	geoUsed bool // whether any GEOIP rule exists (skip lookup work otherwise)
 }
 
 // New builds an engine from rule strings plus a fallback FINAL policy. Unknown
@@ -124,6 +125,22 @@ func parseRules(ruleLines []string) ([]rule, bool, Policy) {
 		parsed = append(parsed, r)
 	}
 	return parsed, geoUsed, finalOverride
+}
+
+// ValidateRules performs strict validation of rule lines while preserving the
+// legacy lenient behavior of New/SetRules. Blank lines and comments are
+// ignored; any other line must parse successfully.
+func ValidateRules(lines []string) error {
+	for index, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "//") {
+			continue
+		}
+		if _, ok := parseRule(trimmed); !ok {
+			return fmt.Errorf("invalid routing rule at index %d: %q", index, line)
+		}
+	}
+	return nil
 }
 
 // SetGeoLookup swaps the country lookup (e.g. after the GeoIP DB is loaded).

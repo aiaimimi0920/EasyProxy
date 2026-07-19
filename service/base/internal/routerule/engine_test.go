@@ -87,9 +87,9 @@ func TestMatch_IPCIDR(t *testing.T) {
 
 func TestMatch_GeoIP(t *testing.T) {
 	geo := fakeGeo{
-		"1.2.3.4":  "CN",
-		"8.8.8.8":  "US",
-		"9.9.9.9":  "US",
+		"1.2.3.4": "CN",
+		"8.8.8.8": "US",
+		"9.9.9.9": "US",
 	}
 	e := New([]string{
 		"GEOIP,CN,DIRECT",
@@ -177,8 +177,8 @@ func TestParseRule_Malformed(t *testing.T) {
 		"# comment",
 		"// comment",
 		"GARBAGE",
-		"DOMAIN-SUFFIX",        // missing value+policy
-		"DOMAIN-SUFFIX,cn",     // missing policy
+		"DOMAIN-SUFFIX",    // missing value+policy
+		"DOMAIN-SUFFIX,cn", // missing policy
 		"IP-CIDR,not-a-cidr,DIRECT",
 	}
 	for _, line := range bad {
@@ -222,5 +222,22 @@ func TestSetRulesAndFinal_Authoritative(t *testing.T) {
 	}
 	if got := e.Final(); got != PolicyDirect {
 		t.Fatalf("Final() should expose the authoritative policy: got %s, want %s", got, PolicyDirect)
+	}
+}
+
+func TestValidateRulesRejectsMalformedRuleButKeepsLegacyNewLenient(t *testing.T) {
+	if err := ValidateRules([]string{
+		"DOMAIN-SUFFIX,ok.example,PROXY",
+		"NOT-A-RULE",
+	}); err == nil {
+		t.Fatal("ValidateRules unexpectedly accepted malformed input")
+	}
+
+	engine := New([]string{
+		"NOT-A-RULE",
+		"DOMAIN-SUFFIX,ok.example,PROXY",
+	}, PolicyDirect, nil)
+	if got, want := engine.RuleCount(), 1; got != want {
+		t.Fatalf("legacy New() should still skip malformed lines: got %d want %d", got, want)
 	}
 }
