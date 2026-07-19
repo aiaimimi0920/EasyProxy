@@ -5,6 +5,8 @@ package store
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 )
 
@@ -97,6 +99,26 @@ type Store interface {
 
 	// CleanupExpiredSessions removes all expired sessions.
 	CleanupExpiredSessions(ctx context.Context) error
+
+	// DeleteSessionsBeforeGeneration removes all sessions created before the
+	// given credential generation.
+	DeleteSessionsBeforeGeneration(ctx context.Context, generation uint64) error
+
+	// --- Local Server devices / profiles / mappings ---
+
+	ListDevices(ctx context.Context) ([]Device, error)
+	GetDevice(ctx context.Context, deviceID string) (*Device, error)
+	PutDevice(ctx context.Context, device Device, expectedRevision int64) (Device, error)
+
+	ListDeviceProfiles(ctx context.Context) ([]DeviceProfile, error)
+	GetDeviceProfile(ctx context.Context, deviceID string) (*DeviceProfile, error)
+	PutDeviceProfile(ctx context.Context, profile DeviceProfile, expectedRevision int64) (DeviceProfile, error)
+	DeleteDeviceProfile(ctx context.Context, deviceID string, expectedRevision int64) (bool, error)
+
+	ListDeviceIPMappings(ctx context.Context) ([]DeviceIPMapping, error)
+	GetDeviceIPMapping(ctx context.Context, mappingID string) (*DeviceIPMapping, error)
+	PutDeviceIPMapping(ctx context.Context, mapping DeviceIPMapping, expectedRevision int64) (DeviceIPMapping, error)
+	DeleteDeviceIPMapping(ctx context.Context, mappingID string, expectedRevision int64) (bool, error)
 
 	// --- Subscription status ---
 
@@ -198,9 +220,48 @@ type TimelineEvent struct {
 
 // Session represents a user authentication session.
 type Session struct {
-	Token     string    `json:"token"`
+	Token                string    `json:"token"`
+	CreatedAt            time.Time `json:"created_at"`
+	ExpiresAt            time.Time `json:"expires_at"`
+	CredentialGeneration uint64    `json:"credential_generation"`
+}
+
+type Device struct {
+	DeviceID    string    `json:"device_id"`
+	DisplayName string    `json:"display_name"`
+	Revision    int64     `json:"revision"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+type DeviceProfile struct {
+	DeviceID      string    `json:"device_id"`
+	ProfileJSON   []byte    `json:"profile_json"`
+	SchemaVersion int       `json:"schema_version"`
+	Revision      int64     `json:"revision"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+type DeviceIPMapping struct {
+	MappingID string    `json:"mapping_id"`
+	CIDR      string    `json:"cidr"`
+	DeviceID  string    `json:"device_id"`
+	Priority  int       `json:"priority"`
+	Enabled   bool      `json:"enabled"`
+	Revision  int64     `json:"revision"`
 	CreatedAt time.Time `json:"created_at"`
-	ExpiresAt time.Time `json:"expires_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type RevisionConflictError struct {
+	CurrentRevision int64
+}
+
+var ErrDeviceNotFound = errors.New("device not found")
+
+func (e *RevisionConflictError) Error() string {
+	return fmt.Sprintf("revision conflict: current revision is %d", e.CurrentRevision)
 }
 
 // SubscriptionStatus represents subscription refresh status.

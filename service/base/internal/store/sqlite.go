@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -639,22 +640,27 @@ func (s *sqliteStore) CleanupTimeline(ctx context.Context, keepPerNode int) erro
 // ===================== Sessions =====================
 
 func (s *sqliteStore) CreateSession(ctx context.Context, session *Session) error {
+	generation := session.CredentialGeneration
+	if generation == 0 {
+		generation = 1
+	}
 	_, err := s.conn().ExecContext(ctx,
-		`INSERT INTO sessions (token, created_at, expires_at) VALUES (?, ?, ?)`,
+		`INSERT INTO sessions (token, created_at, expires_at, credential_generation) VALUES (?, ?, ?, ?)`,
 		session.Token,
 		session.CreatedAt.UTC().Format(time.RFC3339),
 		session.ExpiresAt.UTC().Format(time.RFC3339),
+		generation,
 	)
 	return err
 }
 
 func (s *sqliteStore) GetSession(ctx context.Context, token string) (*Session, error) {
 	row := s.conn().QueryRowContext(ctx,
-		"SELECT token, created_at, expires_at FROM sessions WHERE token = ?", token)
+		"SELECT token, created_at, expires_at, credential_generation FROM sessions WHERE token = ?", token)
 
 	var sess Session
 	var createdAtStr, expiresAtStr string
-	err := row.Scan(&sess.Token, &createdAtStr, &expiresAtStr)
+	err := row.Scan(&sess.Token, &createdAtStr, &expiresAtStr, &sess.CredentialGeneration)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -676,6 +682,361 @@ func (s *sqliteStore) CleanupExpiredSessions(ctx context.Context) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := s.conn().ExecContext(ctx, "DELETE FROM sessions WHERE expires_at < ?", now)
 	return err
+}
+
+func (s *sqliteStore) DeleteSessionsBeforeGeneration(ctx context.Context, generation uint64) error {
+	_, err := s.conn().ExecContext(ctx, "DELETE FROM sessions WHERE credential_generation < ?", generation)
+	return err
+}
+
+// ===================== Local Server devices / profiles / mappings =====================
+
+func (s *sqliteStore) ListDevices(ctx context.Context) ([]Device, error) {
+	rows, err := s.conn().QueryContext(ctx,
+		`SELECT device_id, display_name, revision, created_at, updated_at
+		 FROM devices
+		 ORDER BY device_id ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("list devices: %w", err)
+	}
+	defer rows.Close()
+	return scanDevices(rows)
+}
+
+func (s *sqliteStore) GetDevice(ctx context.Context, deviceID string) (*Device, error) {
+	row := s.conn().QueryRowContext(ctx,
+		`SELECT device_id, display_name, revision, created_at, updated_at
+		 FROM devices
+		 WHERE device_id = ?`,
+		normalizeDeviceID(deviceID),
+	)
+	return scanDevice(row)
+}
+
+func (s *sqliteStore) PutDevice(ctx context.Context, device Device, expectedRevision int64) (Device, error) {
+	deviceID := normalizeDeviceID(device.DeviceID)
+	if deviceID == "" {
+		return Device{}, errors.New("device id is required")
+	}
+	displayName := normalizeDisplayName(deviceID, device.DisplayName)
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	if expectedRevision == 0 {
+		if _, err := s.conn().ExecContext(ctx,
+			`INSERT INTO devices (device_id, display_name, revision, created_at, updated_at)
+			 VALUES (?, ?, 1, ?, ?)`,
+			deviceID, displayName, now, now,
+		); err != nil {
+			current, lookupErr := s.GetDevice(ctx, deviceID)
+			if lookupErr == nil && current != nil {
+				return Device{}, &RevisionConflictError{CurrentRevision: current.Revision}
+			}
+			return Device{}, fmt.Errorf("insert device %q: %w", deviceID, err)
+		}
+	} else {
+		result, err := s.conn().ExecContext(ctx,
+			`UPDATE devices
+			    SET display_name = ?, revision = revision + 1, updated_at = ?
+			  WHERE device_id = ? AND revision = ?`,
+			displayName, now, deviceID, expectedRevision,
+		)
+		if err != nil {
+			return Device{}, fmt.Errorf("update device %q: %w", deviceID, err)
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return Device{}, fmt.Errorf("rows affected for device %q: %w", deviceID, err)
+		}
+		if affected == 0 {
+			current, lookupErr := s.GetDevice(ctx, deviceID)
+			if lookupErr != nil {
+				return Device{}, lookupErr
+			}
+			currentRevision := int64(0)
+			if current != nil {
+				currentRevision = current.Revision
+			}
+			return Device{}, &RevisionConflictError{CurrentRevision: currentRevision}
+		}
+	}
+
+	saved, err := s.GetDevice(ctx, deviceID)
+	if err != nil {
+		return Device{}, err
+	}
+	if saved == nil {
+		return Device{}, errors.New("device disappeared after CAS write")
+	}
+	return *saved, nil
+}
+
+func (s *sqliteStore) ListDeviceProfiles(ctx context.Context) ([]DeviceProfile, error) {
+	rows, err := s.conn().QueryContext(ctx,
+		`SELECT device_id, profile_json, schema_version, revision, created_at, updated_at
+		 FROM device_profiles
+		 ORDER BY device_id ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("list device profiles: %w", err)
+	}
+	defer rows.Close()
+	return scanDeviceProfiles(rows)
+}
+
+func (s *sqliteStore) GetDeviceProfile(ctx context.Context, deviceID string) (*DeviceProfile, error) {
+	row := s.conn().QueryRowContext(ctx,
+		`SELECT device_id, profile_json, schema_version, revision, created_at, updated_at
+		 FROM device_profiles
+		 WHERE device_id = ?`,
+		normalizeDeviceID(deviceID),
+	)
+	return scanDeviceProfile(row)
+}
+
+func (s *sqliteStore) PutDeviceProfile(ctx context.Context, profile DeviceProfile, expectedRevision int64) (DeviceProfile, error) {
+	deviceID := normalizeDeviceID(profile.DeviceID)
+	if deviceID == "" {
+		return DeviceProfile{}, errors.New("device id is required")
+	}
+
+	var saved DeviceProfile
+	err := s.WithTx(ctx, func(tx Store) error {
+		txStore, ok := tx.(*sqliteStore)
+		if !ok {
+			return errors.New("unexpected transaction store implementation")
+		}
+
+		device, err := txStore.GetDevice(ctx, deviceID)
+		if err != nil {
+			return err
+		}
+		if device == nil {
+			if _, err := txStore.PutDevice(ctx, Device{DeviceID: deviceID, DisplayName: deviceID}, 0); err != nil {
+				return err
+			}
+		}
+
+		now := time.Now().UTC().Format(time.RFC3339)
+		if expectedRevision == 0 {
+			if _, err := txStore.conn().ExecContext(ctx,
+				`INSERT INTO device_profiles (device_id, profile_json, schema_version, revision, created_at, updated_at)
+				 VALUES (?, ?, ?, 1, ?, ?)`,
+				deviceID, string(profile.ProfileJSON), profile.SchemaVersion, now, now,
+			); err != nil {
+				current, lookupErr := txStore.GetDeviceProfile(ctx, deviceID)
+				if lookupErr == nil && current != nil {
+					return &RevisionConflictError{CurrentRevision: current.Revision}
+				}
+				return fmt.Errorf("insert device profile %q: %w", deviceID, err)
+			}
+		} else {
+			result, err := txStore.conn().ExecContext(ctx,
+				`UPDATE device_profiles
+				    SET profile_json = ?, schema_version = ?, revision = revision + 1, updated_at = ?
+				  WHERE device_id = ? AND revision = ?`,
+				string(profile.ProfileJSON), profile.SchemaVersion, now, deviceID, expectedRevision,
+			)
+			if err != nil {
+				return fmt.Errorf("update device profile %q: %w", deviceID, err)
+			}
+			affected, err := result.RowsAffected()
+			if err != nil {
+				return fmt.Errorf("rows affected for device profile %q: %w", deviceID, err)
+			}
+			if affected == 0 {
+				current, lookupErr := txStore.GetDeviceProfile(ctx, deviceID)
+				if lookupErr != nil {
+					return lookupErr
+				}
+				currentRevision := int64(0)
+				if current != nil {
+					currentRevision = current.Revision
+				}
+				return &RevisionConflictError{CurrentRevision: currentRevision}
+			}
+		}
+
+		current, err := txStore.GetDeviceProfile(ctx, deviceID)
+		if err != nil {
+			return err
+		}
+		if current == nil {
+			return errors.New("device profile disappeared after CAS write")
+		}
+		saved = *current
+		return nil
+	})
+	if err != nil {
+		return DeviceProfile{}, err
+	}
+	return saved, nil
+}
+
+func (s *sqliteStore) DeleteDeviceProfile(ctx context.Context, deviceID string, expectedRevision int64) (bool, error) {
+	deviceID = normalizeDeviceID(deviceID)
+	current, err := s.GetDeviceProfile(ctx, deviceID)
+	if err != nil {
+		return false, err
+	}
+	if current == nil {
+		return false, nil
+	}
+	if current.Revision != expectedRevision {
+		return false, &RevisionConflictError{CurrentRevision: current.Revision}
+	}
+
+	result, err := s.conn().ExecContext(ctx,
+		`DELETE FROM device_profiles WHERE device_id = ? AND revision = ?`,
+		deviceID, expectedRevision,
+	)
+	if err != nil {
+		return false, fmt.Errorf("delete device profile %q: %w", deviceID, err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("rows affected for deleting device profile %q: %w", deviceID, err)
+	}
+	if affected == 0 {
+		current, lookupErr := s.GetDeviceProfile(ctx, deviceID)
+		if lookupErr != nil {
+			return false, lookupErr
+		}
+		if current == nil {
+			return false, nil
+		}
+		return false, &RevisionConflictError{CurrentRevision: current.Revision}
+	}
+	return true, nil
+}
+
+func (s *sqliteStore) ListDeviceIPMappings(ctx context.Context) ([]DeviceIPMapping, error) {
+	rows, err := s.conn().QueryContext(ctx,
+		`SELECT mapping_id, cidr, device_id, priority, enabled, revision, created_at, updated_at
+		 FROM device_ip_mappings
+		 ORDER BY mapping_id ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("list device ip mappings: %w", err)
+	}
+	defer rows.Close()
+	return scanDeviceIPMappings(rows)
+}
+
+func (s *sqliteStore) GetDeviceIPMapping(ctx context.Context, mappingID string) (*DeviceIPMapping, error) {
+	row := s.conn().QueryRowContext(ctx,
+		`SELECT mapping_id, cidr, device_id, priority, enabled, revision, created_at, updated_at
+		 FROM device_ip_mappings
+		 WHERE mapping_id = ?`,
+		normalizeMappingID(mappingID),
+	)
+	return scanDeviceIPMapping(row)
+}
+
+func (s *sqliteStore) PutDeviceIPMapping(ctx context.Context, mapping DeviceIPMapping, expectedRevision int64) (DeviceIPMapping, error) {
+	mappingID := normalizeMappingID(mapping.MappingID)
+	if mappingID == "" {
+		return DeviceIPMapping{}, errors.New("mapping id is required")
+	}
+	cidr := strings.TrimSpace(mapping.CIDR)
+	if cidr == "" {
+		return DeviceIPMapping{}, errors.New("cidr is required")
+	}
+	deviceID := normalizeDeviceID(mapping.DeviceID)
+	if deviceID == "" {
+		return DeviceIPMapping{}, errors.New("device id is required")
+	}
+
+	device, err := s.GetDevice(ctx, deviceID)
+	if err != nil {
+		return DeviceIPMapping{}, err
+	}
+	if device == nil {
+		return DeviceIPMapping{}, ErrDeviceNotFound
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	if expectedRevision == 0 {
+		if _, err := s.conn().ExecContext(ctx,
+			`INSERT INTO device_ip_mappings (mapping_id, cidr, device_id, priority, enabled, revision, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
+			mappingID, cidr, deviceID, mapping.Priority, boolToInt(mapping.Enabled), now, now,
+		); err != nil {
+			current, lookupErr := s.GetDeviceIPMapping(ctx, mappingID)
+			if lookupErr == nil && current != nil {
+				return DeviceIPMapping{}, &RevisionConflictError{CurrentRevision: current.Revision}
+			}
+			return DeviceIPMapping{}, fmt.Errorf("insert device ip mapping %q: %w", mappingID, err)
+		}
+	} else {
+		result, err := s.conn().ExecContext(ctx,
+			`UPDATE device_ip_mappings
+			    SET cidr = ?, device_id = ?, priority = ?, enabled = ?, revision = revision + 1, updated_at = ?
+			  WHERE mapping_id = ? AND revision = ?`,
+			cidr, deviceID, mapping.Priority, boolToInt(mapping.Enabled), now, mappingID, expectedRevision,
+		)
+		if err != nil {
+			return DeviceIPMapping{}, fmt.Errorf("update device ip mapping %q: %w", mappingID, err)
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return DeviceIPMapping{}, fmt.Errorf("rows affected for device ip mapping %q: %w", mappingID, err)
+		}
+		if affected == 0 {
+			current, lookupErr := s.GetDeviceIPMapping(ctx, mappingID)
+			if lookupErr != nil {
+				return DeviceIPMapping{}, lookupErr
+			}
+			currentRevision := int64(0)
+			if current != nil {
+				currentRevision = current.Revision
+			}
+			return DeviceIPMapping{}, &RevisionConflictError{CurrentRevision: currentRevision}
+		}
+	}
+
+	saved, err := s.GetDeviceIPMapping(ctx, mappingID)
+	if err != nil {
+		return DeviceIPMapping{}, err
+	}
+	if saved == nil {
+		return DeviceIPMapping{}, errors.New("device ip mapping disappeared after CAS write")
+	}
+	return *saved, nil
+}
+
+func (s *sqliteStore) DeleteDeviceIPMapping(ctx context.Context, mappingID string, expectedRevision int64) (bool, error) {
+	mappingID = normalizeMappingID(mappingID)
+	current, err := s.GetDeviceIPMapping(ctx, mappingID)
+	if err != nil {
+		return false, err
+	}
+	if current == nil {
+		return false, nil
+	}
+	if current.Revision != expectedRevision {
+		return false, &RevisionConflictError{CurrentRevision: current.Revision}
+	}
+
+	result, err := s.conn().ExecContext(ctx,
+		`DELETE FROM device_ip_mappings WHERE mapping_id = ? AND revision = ?`,
+		mappingID, expectedRevision,
+	)
+	if err != nil {
+		return false, fmt.Errorf("delete device ip mapping %q: %w", mappingID, err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("rows affected for deleting device ip mapping %q: %w", mappingID, err)
+	}
+	if affected == 0 {
+		current, lookupErr := s.GetDeviceIPMapping(ctx, mappingID)
+		if lookupErr != nil {
+			return false, lookupErr
+		}
+		if current == nil {
+			return false, nil
+		}
+		return false, &RevisionConflictError{CurrentRevision: current.Revision}
+	}
+	return true, nil
 }
 
 // ===================== Subscription status =====================
@@ -810,6 +1171,148 @@ func scanNodes(rows *sql.Rows) ([]Node, error) {
 	return nodes, rows.Err()
 }
 
+func scanDevice(row *sql.Row) (*Device, error) {
+	var device Device
+	var createdAtStr, updatedAtStr string
+	err := row.Scan(
+		&device.DeviceID,
+		&device.DisplayName,
+		&device.Revision,
+		&createdAtStr,
+		&updatedAtStr,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	device.CreatedAt = parseTime(createdAtStr)
+	device.UpdatedAt = parseTime(updatedAtStr)
+	return &device, nil
+}
+
+func scanDevices(rows *sql.Rows) ([]Device, error) {
+	var devices []Device
+	for rows.Next() {
+		var device Device
+		var createdAtStr, updatedAtStr string
+		if err := rows.Scan(
+			&device.DeviceID,
+			&device.DisplayName,
+			&device.Revision,
+			&createdAtStr,
+			&updatedAtStr,
+		); err != nil {
+			return nil, err
+		}
+		device.CreatedAt = parseTime(createdAtStr)
+		device.UpdatedAt = parseTime(updatedAtStr)
+		devices = append(devices, device)
+	}
+	return devices, rows.Err()
+}
+
+func scanDeviceProfile(row *sql.Row) (*DeviceProfile, error) {
+	var profile DeviceProfile
+	var profileJSON string
+	var createdAtStr, updatedAtStr string
+	err := row.Scan(
+		&profile.DeviceID,
+		&profileJSON,
+		&profile.SchemaVersion,
+		&profile.Revision,
+		&createdAtStr,
+		&updatedAtStr,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	profile.ProfileJSON = []byte(profileJSON)
+	profile.CreatedAt = parseTime(createdAtStr)
+	profile.UpdatedAt = parseTime(updatedAtStr)
+	return &profile, nil
+}
+
+func scanDeviceProfiles(rows *sql.Rows) ([]DeviceProfile, error) {
+	var profiles []DeviceProfile
+	for rows.Next() {
+		var profile DeviceProfile
+		var profileJSON string
+		var createdAtStr, updatedAtStr string
+		if err := rows.Scan(
+			&profile.DeviceID,
+			&profileJSON,
+			&profile.SchemaVersion,
+			&profile.Revision,
+			&createdAtStr,
+			&updatedAtStr,
+		); err != nil {
+			return nil, err
+		}
+		profile.ProfileJSON = []byte(profileJSON)
+		profile.CreatedAt = parseTime(createdAtStr)
+		profile.UpdatedAt = parseTime(updatedAtStr)
+		profiles = append(profiles, profile)
+	}
+	return profiles, rows.Err()
+}
+
+func scanDeviceIPMapping(row *sql.Row) (*DeviceIPMapping, error) {
+	var mapping DeviceIPMapping
+	var enabled int
+	var createdAtStr, updatedAtStr string
+	err := row.Scan(
+		&mapping.MappingID,
+		&mapping.CIDR,
+		&mapping.DeviceID,
+		&mapping.Priority,
+		&enabled,
+		&mapping.Revision,
+		&createdAtStr,
+		&updatedAtStr,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	mapping.Enabled = enabled != 0
+	mapping.CreatedAt = parseTime(createdAtStr)
+	mapping.UpdatedAt = parseTime(updatedAtStr)
+	return &mapping, nil
+}
+
+func scanDeviceIPMappings(rows *sql.Rows) ([]DeviceIPMapping, error) {
+	var mappings []DeviceIPMapping
+	for rows.Next() {
+		var mapping DeviceIPMapping
+		var enabled int
+		var createdAtStr, updatedAtStr string
+		if err := rows.Scan(
+			&mapping.MappingID,
+			&mapping.CIDR,
+			&mapping.DeviceID,
+			&mapping.Priority,
+			&enabled,
+			&mapping.Revision,
+			&createdAtStr,
+			&updatedAtStr,
+		); err != nil {
+			return nil, err
+		}
+		mapping.Enabled = enabled != 0
+		mapping.CreatedAt = parseTime(createdAtStr)
+		mapping.UpdatedAt = parseTime(updatedAtStr)
+		mappings = append(mappings, mapping)
+	}
+	return mappings, rows.Err()
+}
+
 func parseTime(s string) time.Time {
 	if s == "" {
 		return time.Time{}
@@ -837,4 +1340,20 @@ func boolToInt(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+func normalizeDeviceID(deviceID string) string {
+	return strings.ToLower(strings.TrimSpace(deviceID))
+}
+
+func normalizeDisplayName(deviceID, displayName string) string {
+	normalized := strings.TrimSpace(displayName)
+	if normalized == "" {
+		return deviceID
+	}
+	return normalized
+}
+
+func normalizeMappingID(mappingID string) string {
+	return strings.TrimSpace(mappingID)
 }
