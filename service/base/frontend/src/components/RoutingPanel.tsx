@@ -294,10 +294,10 @@ export default function RoutingPanel() {
       {/* Advanced thresholds */}
       <div className="card bg-base-100 border border-base-300/50 shadow-sm">
         <div className="card-body p-5">
-          <div className="font-bold mb-3">高级阈值<span className="text-xs font-normal text-base-content/40 ml-2">（变更需重载）</span></div>
+          <div className="font-bold mb-3">高级阈值</div>
           <div className="grid sm:grid-cols-3 gap-4">
             <div>
-              <label className="text-xs text-base-content/60">长效判定最短在线时长</label>
+              <label className="text-xs text-base-content/60">长效判定最短在线时长<span className="ml-1 text-success">实时</span></label>
               <input
                 className="input input-bordered input-sm w-full mt-1 font-mono"
                 placeholder="2h"
@@ -306,7 +306,7 @@ export default function RoutingPanel() {
               />
             </div>
             <div>
-              <label className="text-xs text-base-content/60">长效判定最低成功率</label>
+              <label className="text-xs text-base-content/60">长效判定最低成功率<span className="ml-1 text-success">实时</span></label>
               <input
                 type="number" step="0.01" min="0" max="1"
                 className="input input-bordered input-sm w-full mt-1 font-mono"
@@ -316,7 +316,7 @@ export default function RoutingPanel() {
               />
             </div>
             <div>
-              <label className="text-xs text-base-content/60">会话粘性 TTL</label>
+              <label className="text-xs text-base-content/60">会话粘性 TTL<span className="ml-1 text-warning">需重载</span></label>
               <input
                 className="input input-bordered input-sm w-full mt-1 font-mono"
                 placeholder="10m"

@@ -13,6 +13,7 @@ import (
 // This enables hybrid mode where pool and multi-port modes share the same node state.
 type sharedMemberState struct {
 	mu               sync.Mutex
+	entryMu          sync.Mutex
 	failures         int
 	blacklisted      bool
 	blacklistedUntil time.Time
@@ -54,7 +55,7 @@ func (r *sharedStateRegistry) detachEntries() {
 		return
 	}
 	r.states.Range(func(_, value any) bool {
-		value.(*sharedMemberState).entry.Store(nil)
+		value.(*sharedMemberState).detachEntry()
 		return true
 	})
 }
@@ -177,16 +178,42 @@ func (s *sharedMemberState) attachEntry(entry *monitor.EntryHandle) {
 	if entry == nil {
 		return
 	}
+	s.entryMu.Lock()
+	defer s.entryMu.Unlock()
+
+	s.mu.Lock()
+	blacklisted := s.blacklisted
+	blacklistedUntil := s.blacklistedUntil
+	s.mu.Unlock()
+
 	s.entry.Store(entry)
+	entry.SetActiveConnections(s.active.Load())
+	entry.SetTraffic(s.totalUpload.Load(), s.totalDownload.Load())
+	if blacklisted {
+		entry.Blacklist(blacklistedUntil)
+	} else {
+		entry.ClearBlacklist()
+	}
+}
+
+func (s *sharedMemberState) detachEntry() {
+	s.entryMu.Lock()
+	s.entry.Store(nil)
+	s.entryMu.Unlock()
 }
 
 func (s *sharedMemberState) entryHandle() *monitor.EntryHandle {
+	s.entryMu.Lock()
+	defer s.entryMu.Unlock()
 	return s.entry.Load()
 }
 
 // recordFailure increments failure count and triggers blacklist if threshold reached.
 // Returns: (current failures, blacklisted, blacklist until time)
 func (s *sharedMemberState) recordFailure(cause error, threshold int, duration time.Duration, destination string) (int, bool, time.Time) {
+	s.entryMu.Lock()
+	defer s.entryMu.Unlock()
+
 	s.mu.Lock()
 	s.failures++
 	count := s.failures
@@ -211,6 +238,9 @@ func (s *sharedMemberState) recordFailure(cause error, threshold int, duration t
 }
 
 func (s *sharedMemberState) recordSuccess(destination string) {
+	s.entryMu.Lock()
+	defer s.entryMu.Unlock()
+
 	s.mu.Lock()
 	s.failures = 0
 	s.mu.Unlock()
@@ -222,6 +252,9 @@ func (s *sharedMemberState) recordSuccess(destination string) {
 
 // isBlacklisted checks if the node is currently blacklisted, auto-clearing if expired.
 func (s *sharedMemberState) isBlacklisted(now time.Time) bool {
+	s.entryMu.Lock()
+	defer s.entryMu.Unlock()
+
 	s.mu.Lock()
 	expired := s.blacklisted && now.After(s.blacklistedUntil)
 	if expired {
@@ -240,6 +273,9 @@ func (s *sharedMemberState) isBlacklisted(now time.Time) bool {
 }
 
 func (s *sharedMemberState) forceRelease() {
+	s.entryMu.Lock()
+	defer s.entryMu.Unlock()
+
 	s.mu.Lock()
 	s.failures = 0
 	s.blacklisted = false
@@ -252,16 +288,22 @@ func (s *sharedMemberState) forceRelease() {
 }
 
 func (s *sharedMemberState) incActive() {
-	s.active.Add(1)
+	s.entryMu.Lock()
+	defer s.entryMu.Unlock()
+
+	active := s.active.Add(1)
 	if entry := s.entry.Load(); entry != nil {
-		entry.IncActive()
+		entry.SetActiveConnections(active)
 	}
 }
 
 func (s *sharedMemberState) decActive() {
-	s.active.Add(-1)
+	s.entryMu.Lock()
+	defer s.entryMu.Unlock()
+
+	active := s.active.Add(-1)
 	if entry := s.entry.Load(); entry != nil {
-		entry.DecActive()
+		entry.SetActiveConnections(active)
 	}
 }
 
@@ -270,6 +312,9 @@ func (s *sharedMemberState) activeCount() int32 {
 }
 
 func (s *sharedMemberState) addTraffic(upload, download int64) {
+	s.entryMu.Lock()
+	defer s.entryMu.Unlock()
+
 	if upload > 0 {
 		s.totalUpload.Add(upload)
 	}

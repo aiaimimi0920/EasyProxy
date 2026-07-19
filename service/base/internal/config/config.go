@@ -63,11 +63,11 @@ type RoutingConfig struct {
 	Listen          string          `yaml:"listen"`            // 智能入口监听地址，默认接管 listener 的 host:port
 	DefaultStrategy string          `yaml:"default_strategy"`  // 默认入口策略：stable / session / auto（默认 stable）
 	UseDefaultRules *bool           `yaml:"use_default_rules"` // 是否附加内置“中国直连”默认规则集（默认 true）
-	FinalPolicy     string          `yaml:"final_policy"`     // 兜底策略：DIRECT / PROXY（默认 PROXY）
-	Rules           []string        `yaml:"rules"`            // 自定义分流规则，按顺序优先于默认集
-	RuleProviders   []RuleProvider  `yaml:"rule_providers"`   // 远程规则集
-	LongLived       LongLivedConfig `yaml:"long_lived"`       // 长效节点判定阈值
-	Session         SessionConfig   `yaml:"session"`          // 会话粘性参数
+	FinalPolicy     string          `yaml:"final_policy"`      // 兜底策略：DIRECT / PROXY（默认 PROXY）
+	Rules           []string        `yaml:"rules"`             // 自定义分流规则，按顺序优先于默认集
+	RuleProviders   []RuleProvider  `yaml:"rule_providers"`    // 远程规则集
+	LongLived       LongLivedConfig `yaml:"long_lived"`        // 长效节点判定阈值
+	Session         SessionConfig   `yaml:"session"`           // 会话粘性参数
 }
 
 // RuleProvider describes a remote rule list applied with a single policy.
@@ -755,6 +755,11 @@ func (c *Config) normalizeInternal(skipSubscriptionFetch bool) error {
 // BuildPortMap creates a mapping from node URI to port for existing nodes.
 // This is used to preserve port assignments when reloading configuration.
 func (c *Config) BuildPortMap() map[string]uint16 {
+	if c == nil {
+		return nil
+	}
+	c.RLock()
+	defer c.RUnlock()
 	portMap := make(map[string]uint16)
 	for _, node := range c.Nodes {
 		if node.Port > 0 {

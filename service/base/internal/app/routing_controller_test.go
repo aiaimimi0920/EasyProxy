@@ -38,6 +38,33 @@ type blockingRoutingBoxManager struct {
 	current thresholdUpdate
 }
 
+type recordingAppliedConfigBoxManager struct {
+	mu       sync.Mutex
+	recorded *config.Config
+}
+
+func (m *recordingAppliedConfigBoxManager) PoolOutbound() (adapter.Outbound, bool) {
+	return nil, false
+}
+
+func (m *recordingAppliedConfigBoxManager) StickySnapshot() (pool.StickySnapshot, bool) {
+	return pool.StickySnapshot{}, false
+}
+
+func (m *recordingAppliedConfigBoxManager) SetLongLivedThresholds(time.Duration, float64) {}
+
+func (m *recordingAppliedConfigBoxManager) RecordAppliedConfig(cfg *config.Config) {
+	m.mu.Lock()
+	m.recorded = cfg
+	m.mu.Unlock()
+}
+
+func (m *recordingAppliedConfigBoxManager) recordedConfig() *config.Config {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.recorded
+}
+
 func newBlockingRoutingBoxManager() *blockingRoutingBoxManager {
 	return &blockingRoutingBoxManager{
 		calls:        make(chan thresholdUpdate, 2),
@@ -63,6 +90,8 @@ func (m *blockingRoutingBoxManager) SetLongLivedThresholds(uptime time.Duration,
 	m.current = update
 	m.mu.Unlock()
 }
+
+func (m *blockingRoutingBoxManager) RecordAppliedConfig(*config.Config) {}
 
 func (m *blockingRoutingBoxManager) currentThresholds() thresholdUpdate {
 	m.mu.Lock()
@@ -228,6 +257,263 @@ func TestApplyHotUpdatesLongLivedThresholdsWithoutReload(t *testing.T) {
 	time.Sleep(time.Millisecond)
 	if snap := handle.Snapshot(); !snap.LongLived {
 		t.Fatalf("expected controller hot apply to update monitor thresholds: %+v", snap)
+	}
+}
+
+func TestApplyHotRecordsRollbackSnapshotAfterSuccess(t *testing.T) {
+	boxManager := &recordingAppliedConfigBoxManager{}
+	engine := routerule.New(nil, routerule.PolicyProxy, nil)
+	rc := &RoutingController{
+		ctx:     context.Background(),
+		boxMgr:  boxManager,
+		engine:  engine,
+		server:  dispatch.NewServer(dispatch.Config{}, boxManager, engine, dispatchLogger{}),
+		running: true,
+	}
+
+	useDefaults := false
+	cfg := &config.Config{
+		Mode:      "hybrid",
+		MultiPort: config.MultiPortConfig{BasePort: 32100},
+		Routing: config.RoutingConfig{
+			Enabled:         true,
+			UseDefaultRules: &useDefaults,
+			FinalPolicy:     string(routerule.PolicyDirect),
+			Rules:           []string{"DOMAIN-SUFFIX,hot.example,DIRECT"},
+		},
+	}
+	if !rc.ApplyHot(cfg) {
+		t.Fatal("expected hot apply to succeed")
+	}
+
+	recorded := boxManager.recordedConfig()
+	if recorded == nil {
+		t.Fatal("successful hot apply did not refresh the box-manager rollback snapshot")
+	}
+	if recorded == cfg {
+		t.Fatal("controller passed the caller's mutable config as the rollback snapshot")
+	}
+	if recorded.Mode != cfg.Mode || recorded.MultiPort.BasePort != cfg.MultiPort.BasePort {
+		t.Fatalf("recorded topology = %s/%d, want %s/%d", recorded.Mode, recorded.MultiPort.BasePort, cfg.Mode, cfg.MultiPort.BasePort)
+	}
+	if recorded.Routing.FinalPolicy != string(routerule.PolicyDirect) || len(recorded.Routing.Rules) != 1 {
+		t.Fatalf("recorded routing config does not match the hot-applied state: %+v", recorded.Routing)
+	}
+
+	cfg.Mode = "mutated"
+	cfg.Routing.Rules[0] = "MATCH,PROXY"
+	if recorded.Mode != "hybrid" || recorded.Routing.Rules[0] != "DOMAIN-SUFFIX,hot.example,DIRECT" {
+		t.Fatalf("recorded config changed with caller mutation: %+v", recorded)
+	}
+}
+
+func TestApplyHotDefersWhileReloadIsPending(t *testing.T) {
+	boxManager := &recordingAppliedConfigBoxManager{}
+	engine := routerule.New(nil, routerule.PolicyProxy, nil)
+	rc := &RoutingController{
+		ctx:     context.Background(),
+		boxMgr:  boxManager,
+		engine:  engine,
+		server:  dispatch.NewServer(dispatch.Config{}, boxManager, engine, dispatchLogger{}),
+		running: true,
+	}
+
+	from := &config.Config{}
+	from.Routing.Enabled = true
+	from.Routing.FinalPolicy = string(routerule.PolicyProxy)
+	rc.mu.Lock()
+	rc.pendingFrom = boxmgr.ReloadState{Config: from}
+	rc.hasPending = true
+	rc.mu.Unlock()
+
+	hot := &config.Config{}
+	hot.Routing.Enabled = true
+	hot.Routing.FinalPolicy = string(routerule.PolicyDirect)
+	if rc.ApplyHot(hot) {
+		t.Fatal("hot apply should be deferred while a reload transaction is pending")
+	}
+	if got := engine.Final(); got != routerule.PolicyProxy {
+		t.Fatalf("deferred hot apply changed the live engine: got %s", got)
+	}
+}
+
+func TestApplyHotDefersWhileReloadIntentIsActive(t *testing.T) {
+	boxManager := &recordingAppliedConfigBoxManager{}
+	engine := routerule.New(nil, routerule.PolicyProxy, nil)
+	rc := &RoutingController{
+		ctx:     context.Background(),
+		boxMgr:  boxManager,
+		engine:  engine,
+		server:  dispatch.NewServer(dispatch.Config{}, boxManager, engine, dispatchLogger{}),
+		running: true,
+	}
+
+	if err := rc.BeginReloadIntent(context.Background()); err != nil {
+		t.Fatalf("BeginReloadIntent() error = %v", err)
+	}
+	if err := rc.BeginReloadIntent(context.Background()); err != nil {
+		t.Fatalf("nested BeginReloadIntent() error = %v", err)
+	}
+	hot := &config.Config{}
+	hot.Routing.Enabled = true
+	hot.Routing.FinalPolicy = string(routerule.PolicyDirect)
+	if rc.ApplyHot(hot) {
+		t.Fatal("hot apply should be deferred before a reload captures its target")
+	}
+	if got := engine.Final(); got != routerule.PolicyProxy {
+		t.Fatalf("reload-intent hot apply changed the live engine: got %s", got)
+	}
+	if recorded := boxManager.recordedConfig(); recorded != nil {
+		t.Fatalf("deferred hot apply advanced rollback state: %+v", recorded)
+	}
+
+	rc.EndReloadIntent(context.Background())
+	if rc.ApplyHot(hot) {
+		t.Fatal("hot apply resumed while a nested reload intent remained active")
+	}
+	rc.EndReloadIntent(context.Background())
+	if !rc.ApplyHot(hot) {
+		t.Fatal("hot apply should resume after the reload intent ends")
+	}
+}
+
+func TestStopPreservesReloadIntentAndRejectsLateCompletion(t *testing.T) {
+	boxManager := &recordingAppliedConfigBoxManager{}
+	listen := freeRoutingListen(t)
+	toCfg := routingLifecycleConfig(t, true, listen, "", "")
+	rc := &RoutingController{
+		ctx:    context.Background(),
+		boxMgr: boxManager,
+	}
+
+	if err := rc.BeginReloadIntent(context.Background()); err != nil {
+		t.Fatalf("BeginReloadIntent() error = %v", err)
+	}
+	rc.Stop()
+
+	rc.mu.Lock()
+	intents := rc.reloadIntents
+	rc.mu.Unlock()
+	if intents != 1 {
+		t.Fatalf("Stop() cleared an active reload intent: got %d, want 1", intents)
+	}
+	if err := rc.BeginReloadIntent(context.Background()); !errors.Is(err, errRoutingControllerStopped) {
+		t.Fatalf("BeginReloadIntent() after Stop error = %v, want %v", err, errRoutingControllerStopped)
+	}
+	rc.mu.Lock()
+	intents = rc.reloadIntents
+	rc.mu.Unlock()
+	if intents != 1 {
+		t.Fatalf("rejected post-Stop intent changed the active count: got %d, want 1", intents)
+	}
+
+	from := boxmgr.ReloadState{Config: &config.Config{}}
+	to := boxmgr.ReloadState{Config: toCfg}
+	if err := rc.CompleteReload(context.Background(), from, to); err != nil {
+		t.Fatalf("late CompleteReload() error = %v", err)
+	}
+	if status := rc.RoutingStatus(); status.Enabled {
+		t.Fatalf("late CompleteReload restarted the stopped dispatcher: %+v", status)
+	}
+	rc.mu.Lock()
+	intents = rc.reloadIntents
+	rc.mu.Unlock()
+	if intents != 1 {
+		t.Fatalf("late CompleteReload changed the active intent count: got %d, want 1", intents)
+	}
+
+	rc.EndReloadIntent(context.Background())
+	rc.mu.Lock()
+	intents = rc.reloadIntents
+	rc.mu.Unlock()
+	if intents != 0 {
+		t.Fatalf("EndReloadIntent() left an intent active: got %d", intents)
+	}
+}
+
+func TestApplyHotRejectsSessionTTLChange(t *testing.T) {
+	boxManager := &recordingAppliedConfigBoxManager{}
+	engine := routerule.New(nil, routerule.PolicyProxy, nil)
+	from := &config.Config{}
+	from.Routing.Enabled = true
+	from.Routing.FinalPolicy = string(routerule.PolicyProxy)
+	from.Routing.Session.TTL = 10 * time.Minute
+	rc := &RoutingController{
+		ctx:     context.Background(),
+		boxMgr:  boxManager,
+		engine:  engine,
+		server:  dispatch.NewServer(dispatch.Config{}, boxManager, engine, dispatchLogger{}),
+		running: true,
+	}
+	rc.mu.Lock()
+	rc.setAppliedStateLocked(boxmgr.ReloadState{Config: from})
+	rc.mu.Unlock()
+
+	hot := cloneConfigSnapshot(from)
+	hot.Routing.FinalPolicy = string(routerule.PolicyDirect)
+	hot.Routing.Session.TTL = 20 * time.Minute
+	if rc.ApplyHot(hot) {
+		t.Fatal("session TTL changes require a pool reload")
+	}
+	if got := engine.Final(); got != routerule.PolicyProxy {
+		t.Fatalf("rejected session TTL change mutated the engine: got %s", got)
+	}
+	if recorded := boxManager.recordedConfig(); recorded != nil {
+		t.Fatalf("rejected session TTL change advanced rollback state: %+v", recorded)
+	}
+
+	topologyEdit := cloneConfigSnapshot(from)
+	topologyEdit.Mode = "hybrid"
+	topologyEdit.MultiPort.BasePort++
+	if rc.ApplyHot(topologyEdit) {
+		t.Fatal("mode/base-port changes require a box reload")
+	}
+}
+
+func TestCompleteReloadDefersHotApplyUntilConfigCommit(t *testing.T) {
+	boxManager := &recordingAppliedConfigBoxManager{}
+	engine := routerule.New(nil, routerule.PolicyProxy, nil)
+	rc := &RoutingController{
+		ctx:     context.Background(),
+		boxMgr:  boxManager,
+		engine:  engine,
+		server:  dispatch.NewServer(dispatch.Config{}, boxManager, engine, dispatchLogger{}),
+		running: true,
+	}
+
+	from := &config.Config{}
+	from.Routing.Enabled = true
+	from.Routing.FinalPolicy = string(routerule.PolicyProxy)
+	to := &config.Config{}
+	to.Routing.Enabled = true
+	to.Routing.FinalPolicy = string(routerule.PolicyDirect)
+	rc.mu.Lock()
+	rc.pendingFrom = boxmgr.ReloadState{Config: from}
+	rc.hasPending = true
+	rc.mu.Unlock()
+
+	if err := rc.CompleteReload(context.Background(), boxmgr.ReloadState{Config: from}, boxmgr.ReloadState{Config: to}); err != nil {
+		t.Fatalf("CompleteReload() error = %v", err)
+	}
+	rc.mu.Lock()
+	pending := rc.hasPending
+	rc.mu.Unlock()
+	if !pending {
+		t.Fatal("CompleteReload cleared pending before the box-manager commit")
+	}
+
+	hot := cloneConfigSnapshot(to)
+	hot.Routing.FinalPolicy = string(routerule.PolicyProxy)
+	if rc.ApplyHot(hot) {
+		t.Fatal("hot apply should remain deferred until the config commit notification")
+	}
+
+	rc.OnConfigUpdate(to)
+	rc.mu.Lock()
+	pending = rc.hasPending
+	rc.mu.Unlock()
+	if pending {
+		t.Fatal("config commit notification did not clear the pending transaction")
 	}
 }
 

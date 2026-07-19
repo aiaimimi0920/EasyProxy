@@ -116,6 +116,21 @@ func (s *Server) ensureConnectorManager(w http.ResponseWriter) (ConnectorManager
 	return connectorMgr, true
 }
 
+func (s *Server) rejectConnectorEditDuringReload(w http.ResponseWriter) bool {
+	if s == nil {
+		return false
+	}
+	s.configUpdateMu.Lock()
+	blocked := s.reloadWindowCount > 0
+	s.configUpdateMu.Unlock()
+	if !blocked {
+		return false
+	}
+	w.WriteHeader(http.StatusConflict)
+	writeJSON(w, map[string]any{"error": "配置正在重载，请稍后重试", "need_reload": true})
+	return true
+}
+
 func (s *Server) respondConnectorError(w http.ResponseWriter, err error) {
 	status := http.StatusInternalServerError
 	switch {
@@ -143,6 +158,9 @@ func (s *Server) handleConfigConnectors(w http.ResponseWriter, r *http.Request) 
 		}
 		writeJSON(w, map[string]any{"connectors": connectors})
 	case http.MethodPost:
+		if s.rejectConnectorEditDuringReload(w) {
+			return
+		}
 		var payload connectorPayload
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
@@ -185,6 +203,9 @@ func (s *Server) handleConfigConnectorItem(w http.ResponseWriter, r *http.Reques
 
 	switch r.Method {
 	case http.MethodPut:
+		if s.rejectConnectorEditDuringReload(w) {
+			return
+		}
 		var payload connectorPayload
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
@@ -217,6 +238,9 @@ func (s *Server) handleConfigConnectorItem(w http.ResponseWriter, r *http.Reques
 		}
 		writeJSON(w, map[string]any{"connector": connector, "message": message})
 	case http.MethodPatch:
+		if s.rejectConnectorEditDuringReload(w) {
+			return
+		}
 		var body struct {
 			Enabled *bool `json:"enabled"`
 		}
@@ -245,6 +269,9 @@ func (s *Server) handleConfigConnectorItem(w http.ResponseWriter, r *http.Reques
 		}
 		writeJSON(w, map[string]any{"message": action})
 	case http.MethodDelete:
+		if s.rejectConnectorEditDuringReload(w) {
+			return
+		}
 		if err := connectorMgr.DeleteConnector(r.Context(), connectorName); err != nil {
 			s.respondConnectorError(w, err)
 			return
@@ -268,6 +295,9 @@ func (s *Server) handleConnectorPreferredIPRefresh(w http.ResponseWriter, r *htt
 	}
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if s.rejectConnectorEditDuringReload(w) {
 		return
 	}
 

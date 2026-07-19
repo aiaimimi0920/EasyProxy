@@ -2,9 +2,9 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
-	"net/url"
 	"reflect"
 	"strings"
 	"sync"
@@ -52,6 +52,8 @@ type RoutingController struct {
 	pendingFrom           boxmgr.ReloadState
 	hasPending            bool
 	pendingRuntimeMutated bool
+	reloadIntents         int
+	stopped               bool
 
 	// providerApplyMu serializes generation checks with engine updates. A
 	// ProviderManager.Stop only cancels its context; an in-flight fetch can
@@ -61,13 +63,17 @@ type RoutingController struct {
 	providerGeneration uint64
 }
 
+var errRoutingControllerStopped = errors.New("routing controller is stopped")
+
 var _ boxmgr.ReloadLifecycleListener = (*RoutingController)(nil)
+var _ boxmgr.ReloadIntentListener = (*RoutingController)(nil)
 var _ boxmgr.ConfigUpdateListener = (*RoutingController)(nil)
 
 type routingBoxManager interface {
 	dispatch.PoolProvider
 	StickySnapshot() (pool.StickySnapshot, bool)
 	SetLongLivedThresholds(minUptime time.Duration, minRate float64)
+	RecordAppliedConfig(cfg *config.Config)
 }
 
 // NewRoutingController creates a controller bound to a context and box manager.
@@ -89,6 +95,10 @@ func (rc *RoutingController) Start(cfg *config.Config) error {
 // operationMu; threshold propagation intentionally happens outside rc.mu.
 func (rc *RoutingController) startStateOperationLocked(state boxmgr.ReloadState) error {
 	rc.mu.Lock()
+	if rc.stopped {
+		rc.mu.Unlock()
+		return errRoutingControllerStopped
+	}
 	rc.stopRuntimeLocked()
 	if routingEnabled(state) {
 		if err := rc.startLocked(state.Config); err != nil {
@@ -151,11 +161,26 @@ func (rc *RoutingController) ApplyHot(cfg *config.Config) bool {
 		rc.mu.Unlock()
 		return false
 	}
+	if rc.stopped {
+		rc.mu.Unlock()
+		return false
+	}
+	if rc.reloadIntents > 0 || rc.hasPending {
+		// A reload owns the target runtime until CompleteReload/FailedReload.
+		// Persisted edits can request a follow-up reload instead of racing the
+		// transaction and being overwritten by its previously captured target.
+		rc.mu.Unlock()
+		return false
+	}
 
 	target := boxmgr.ReloadState{Config: cfg}
 	if rc.hasLastApplied {
 		target.Idle = rc.lastApplied.Idle
 		if routingTopologyFor(rc.lastApplied) != routingTopologyFor(target) {
+			rc.mu.Unlock()
+			return false
+		}
+		if !routingHotApplyCompatible(rc.lastApplied.Config, cfg) {
 			rc.mu.Unlock()
 			return false
 		}
@@ -186,6 +211,7 @@ func (rc *RoutingController) ApplyHot(cfg *config.Config) bool {
 	rc.mu.Unlock()
 
 	rc.applyThresholds(cfg)
+	rc.recordAppliedConfig(cfg)
 
 	if routingEnabled(target) {
 		log.Printf("🧭 routing config hot-reloaded (%d active rules, final=%s, strategy=%s)",
@@ -205,6 +231,37 @@ func (rc *RoutingController) Stop() {
 	rc.stopRuntimeLocked()
 	rc.hasPending = false
 	rc.pendingRuntimeMutated = false
+	// Keep pre-stop intents balanced with their eventual End calls. The stopped
+	// gate rejects new intents, so an old token cannot consume a newer guard.
+	rc.stopped = true
+}
+
+// BeginReloadIntent blocks hot updates before a reload caller captures its
+// target. Intents are nestable because TriggerReload/refresh callers can hold
+// an outer intent while ReloadWithPortMap owns the actual transaction.
+func (rc *RoutingController) BeginReloadIntent(_ context.Context) error {
+	rc.operationMu.Lock()
+	rc.mu.Lock()
+	if rc.stopped {
+		rc.mu.Unlock()
+		rc.operationMu.Unlock()
+		return errRoutingControllerStopped
+	}
+	rc.reloadIntents++
+	rc.mu.Unlock()
+	rc.operationMu.Unlock()
+	return nil
+}
+
+// EndReloadIntent releases one reload-intent guard.
+func (rc *RoutingController) EndReloadIntent(_ context.Context) {
+	rc.operationMu.Lock()
+	rc.mu.Lock()
+	if rc.reloadIntents > 0 {
+		rc.reloadIntents--
+	}
+	rc.mu.Unlock()
+	rc.operationMu.Unlock()
 }
 
 // PrepareReload stops the dispatcher before the old box releases ports when
@@ -218,6 +275,12 @@ func (rc *RoutingController) PrepareReload(_ context.Context, from, to boxmgr.Re
 
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
+	if rc.stopped {
+		rc.pendingFrom = boxmgr.ReloadState{}
+		rc.hasPending = false
+		rc.pendingRuntimeMutated = false
+		return nil
+	}
 	if rc.hasLastApplied {
 		from = cloneRoutingState(rc.lastApplied)
 	}
@@ -240,6 +303,13 @@ func (rc *RoutingController) CompleteReload(_ context.Context, from, to boxmgr.R
 	defer rc.operationMu.Unlock()
 
 	rc.mu.Lock()
+	if rc.stopped {
+		rc.pendingFrom = boxmgr.ReloadState{}
+		rc.hasPending = false
+		rc.pendingRuntimeMutated = false
+		rc.mu.Unlock()
+		return nil
+	}
 	if rc.hasPending {
 		from = cloneRoutingState(rc.pendingFrom)
 	} else if rc.hasLastApplied {
@@ -282,6 +352,13 @@ func (rc *RoutingController) FailedReload(_ context.Context, from, _ boxmgr.Relo
 	defer rc.operationMu.Unlock()
 
 	rc.mu.Lock()
+	if rc.stopped {
+		rc.pendingFrom = boxmgr.ReloadState{}
+		rc.hasPending = false
+		rc.pendingRuntimeMutated = false
+		rc.mu.Unlock()
+		return nil
+	}
 	if rc.hasPending {
 		from = cloneRoutingState(rc.pendingFrom)
 	}
@@ -326,7 +403,16 @@ func (rc *RoutingController) FailedReload(_ context.Context, from, _ boxmgr.Relo
 // OnConfigUpdate reattaches the routing API when boxmgr replaces the monitor
 // server because its enablement or listen address changed during reload.
 func (rc *RoutingController) OnConfigUpdate(_ *config.Config) {
-	if rc.managerRef == nil {
+	rc.operationMu.Lock()
+	rc.mu.Lock()
+	stopped := rc.stopped
+	rc.pendingFrom = boxmgr.ReloadState{}
+	rc.hasPending = false
+	rc.pendingRuntimeMutated = false
+	rc.mu.Unlock()
+	rc.operationMu.Unlock()
+
+	if stopped || rc.managerRef == nil {
 		return
 	}
 	if server := rc.managerRef.MonitorServer(); server != nil {
@@ -379,6 +465,33 @@ func routingRuntimeChanged(from, to *config.Config) bool {
 	return !reflect.DeepEqual(from.Routing, to.Routing) || routingGeoChanged(from, to)
 }
 
+func routingHotApplyCompatible(from, to *config.Config) bool {
+	if from == nil || to == nil {
+		return from == to
+	}
+	fromComparable := cloneConfigSnapshot(from)
+	toComparable := cloneConfigSnapshot(to)
+	clearHotRoutingFields(fromComparable)
+	clearHotRoutingFields(toComparable)
+	return reflect.DeepEqual(fromComparable, toComparable)
+}
+
+func clearHotRoutingFields(cfg *config.Config) {
+	if cfg == nil {
+		return
+	}
+	cfg.Routing.DefaultStrategy = ""
+	cfg.Routing.UseDefaultRules = nil
+	cfg.Routing.FinalPolicy = ""
+	cfg.Routing.Rules = nil
+	cfg.Routing.RuleProviders = nil
+	cfg.Routing.LongLived = config.LongLivedConfig{}
+	if cfg.Routing.Enabled {
+		cfg.GeoIP.Enabled = false
+		cfg.GeoIP.DatabasePath = ""
+	}
+}
+
 func routingGeoChanged(from, to *config.Config) bool {
 	if from == nil || to == nil {
 		return from != to
@@ -406,23 +519,7 @@ func routingEngineInputsChanged(from, to *config.Config) bool {
 }
 
 func validateRuleProviders(providers []config.RuleProvider) error {
-	for idx, provider := range providers {
-		rawURL := strings.TrimSpace(provider.URL)
-		parsed, err := url.Parse(rawURL)
-		scheme := ""
-		host := ""
-		if parsed != nil {
-			scheme = strings.ToLower(parsed.Scheme)
-			host = parsed.Host
-		}
-		if err != nil || host == "" || (scheme != "http" && scheme != "https") {
-			if err != nil {
-				return fmt.Errorf("routing rule provider %d has invalid URL %q: %w", idx+1, provider.URL, err)
-			}
-			return fmt.Errorf("routing rule provider %d has invalid URL %q", idx+1, provider.URL)
-		}
-	}
-	return nil
+	return config.ValidateRuleProviders(providers)
 }
 
 func (rc *RoutingController) setAppliedStateLocked(state boxmgr.ReloadState) {
@@ -451,6 +548,12 @@ func (rc *RoutingController) applyThresholds(cfg *config.Config) {
 		cfg.Routing.LongLived.MinUptime,
 		cfg.Routing.LongLived.MinSuccessRate,
 	)
+}
+
+func (rc *RoutingController) recordAppliedConfig(cfg *config.Config) {
+	if cfg != nil && rc.boxMgr != nil {
+		rc.boxMgr.RecordAppliedConfig(cfg)
+	}
 }
 
 // applyRuntimeConfigLocked updates a live dispatcher without replacing its

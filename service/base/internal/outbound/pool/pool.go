@@ -232,7 +232,17 @@ func (p *poolOutbound) initializeMembersLocked() error {
 			entry:    state.entryHandle(),
 		}
 
-		// Connect to existing monitor entry if available
+		// The constructor registers and binds the monitor entry before sing-box
+		// starts the outbound. Reuse that entry during lazy initialization so the
+		// first probe does not replace its callback/revision while it is running.
+		if member.entry != nil {
+			member.entry.SetRelease(p.makeReleaseFunc(member))
+			members = append(members, member)
+			continue
+		}
+
+		// Register a monitor entry when this pool belongs to a fresh reload
+		// generation and no constructor-time entry is available.
 		if p.monitor != nil {
 			meta := p.options.Metadata[tag]
 			info := monitor.NodeInfo{
@@ -943,10 +953,6 @@ func (p *poolOutbound) makeProbeFunc(member *memberState) func(ctx context.Conte
 	if p.monitor == nil {
 		return nil
 	}
-	// 仅在创建时检查是否有探测目标，实际目标在执行时动态获取
-	if _, ok := p.monitor.ProbeTargets(); !ok {
-		return nil
-	}
 	return func(ctx context.Context) (time.Duration, error) {
 		// 每次执行时动态获取最新的探测目标
 		targets, ok := p.monitor.ProbeTargets()
@@ -962,10 +968,6 @@ func (p *poolOutbound) makeProbeFunc(member *memberState) func(ctx context.Conte
 // makeProbeByTagFunc creates a probe function that works before member initialization
 func (p *poolOutbound) makeProbeByTagFunc(tag string) func(ctx context.Context) (time.Duration, error) {
 	if p.monitor == nil {
-		return nil
-	}
-	// 仅在创建时检查是否有探测目标，实际目标在执行时动态获取
-	if _, ok := p.monitor.ProbeTargets(); !ok {
 		return nil
 	}
 	return func(ctx context.Context) (time.Duration, error) {

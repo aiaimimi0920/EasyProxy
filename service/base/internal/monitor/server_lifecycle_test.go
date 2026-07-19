@@ -2,15 +2,80 @@ package monitor
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"easy_proxies/internal/config"
 )
+
+func TestReloadWindowRejectsPersistedEdits(t *testing.T) {
+	mgr, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	defer mgr.Stop()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	managementEnabled := false
+	cfg := &config.Config{
+		Mode:       "pool",
+		Management: config.ManagementConfig{Enabled: &managementEnabled},
+	}
+	cfg.SetFilePath(configPath)
+	server := NewServer(Config{}, mgr, log.New(io.Discard, "", 0))
+	server.SetConfig(cfg)
+	server.BeginReloadWindow()
+	defer server.EndReloadWindow()
+
+	if _, err := server.updateAllSettingsWithReload(allSettingsRequest{
+		Mode:                          "hybrid",
+		LogLevel:                      "info",
+		ListenerAddress:               "0.0.0.0",
+		ListenerPort:                  8080,
+		ListenerProtocol:              "http",
+		MultiPortAddress:              "0.0.0.0",
+		MultiPortBasePort:             10000,
+		MultiPortProtocol:             "http",
+		PoolMode:                      "auto",
+		PoolBlacklistDuration:         "1m",
+		SubRefreshInterval:            "1m",
+		SubRefreshTimeout:             "30s",
+		SubRefreshHealthCheckTimeout:  "30s",
+		SubRefreshDrainTimeout:        "10s",
+		SourceSyncRefreshInterval:     "1m",
+		SourceSyncRequestTimeout:      "30s",
+		GeoIPAutoUpdateInterval:       "1h",
+		ManagementHealthCheckInterval: "1m",
+	}); !errors.Is(err, errReloadInProgress) {
+		t.Fatalf("settings update error = %v, want reload-in-progress", err)
+	}
+	if _, err := server.updateRoutingConfig(routingConfigPayload{
+		Enabled:            true,
+		DefaultStrategy:    "stable",
+		UseDefaultRules:    true,
+		FinalPolicy:        "DIRECT",
+		LongLivedMinUptime: "1h",
+		SessionTTL:         "10m",
+	}); !errors.Is(err, errReloadInProgress) {
+		t.Fatalf("routing update error = %v, want reload-in-progress", err)
+	}
+
+	cfg.RLock()
+	defer cfg.RUnlock()
+	if cfg.Mode != "pool" || cfg.Routing.Enabled {
+		t.Fatalf("reload-window edits mutated config: mode=%q routing=%v", cfg.Mode, cfg.Routing.Enabled)
+	}
+}
 
 func TestServerStartReturnsBindError(t *testing.T) {
 	mgr, err := NewManager(Config{})
@@ -62,6 +127,157 @@ func TestListenerTransitionRollbackKeepsOldAndClosesCandidate(t *testing.T) {
 	}
 	waitLifecycleListen(t, oldListen, true)
 	waitLifecycleListen(t, newListen, false)
+}
+
+func TestListenerTransitionSerializesPersistedConfigUpdates(t *testing.T) {
+	mgr, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	defer mgr.Stop()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	enabled := true
+	oldCfg := &config.Config{Management: config.ManagementConfig{Enabled: &enabled}}
+	oldCfg.SetFilePath(configPath)
+	targetCfg := oldCfg.Clone()
+	targetCfg.SetFilePath(configPath)
+	server := NewServer(Config{}, mgr, log.New(io.Discard, "", 0))
+	server.SetConfig(oldCfg)
+
+	transition, err := server.PrepareListener(false, "", targetCfg)
+	if err != nil {
+		t.Fatalf("PrepareListener() error = %v", err)
+	}
+	if server.configUpdateMu.TryLock() {
+		server.configUpdateMu.Unlock()
+		t.Fatal("listener transition did not hold the config update lock")
+	}
+
+	updateDone := make(chan error, 1)
+	go func() {
+		_, updateErr := server.updateRoutingConfig(routingConfigPayload{
+			Enabled:            true,
+			DefaultStrategy:    "stable",
+			UseDefaultRules:    true,
+			FinalPolicy:        "DIRECT",
+			LongLivedMinUptime: "2h",
+			LongLivedMinRate:   0.9,
+			SessionTTL:         "10m",
+		})
+		updateDone <- updateErr
+	}()
+
+	select {
+	case err := <-updateDone:
+		t.Fatalf("config update completed before transition commit: %v", err)
+	case <-time.After(40 * time.Millisecond):
+	}
+
+	if err := transition.Activate(context.Background()); err != nil {
+		t.Fatalf("Activate() error = %v", err)
+	}
+	transition.Finalize()
+	select {
+	case err := <-updateDone:
+		if err != nil {
+			t.Fatalf("config update after transition commit failed: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("config update did not resume after transition commit")
+	}
+
+	targetCfg.RLock()
+	finalPolicy := targetCfg.Routing.FinalPolicy
+	targetCfg.RUnlock()
+	if finalPolicy != "DIRECT" {
+		t.Fatalf("config update wrote the retired source instead of target: final policy %q", finalPolicy)
+	}
+}
+
+func TestUpdateAllSettingsWithReloadUsesCommittedConfigSource(t *testing.T) {
+	mgr, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	defer mgr.Stop()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	managementEnabled := false
+	oldCfg := &config.Config{
+		Mode:       "pool",
+		Management: config.ManagementConfig{Enabled: &managementEnabled},
+	}
+	oldCfg.SetFilePath(configPath)
+	targetCfg := oldCfg.Clone()
+	targetCfg.Mode = "hybrid"
+	targetCfg.SetFilePath(configPath)
+	server := NewServer(Config{}, mgr, log.New(io.Discard, "", 0))
+	server.SetConfig(oldCfg)
+
+	transition, err := server.PrepareListener(false, "", targetCfg)
+	if err != nil {
+		t.Fatalf("PrepareListener() error = %v", err)
+	}
+	if err := transition.Activate(context.Background()); err != nil {
+		t.Fatalf("Activate() error = %v", err)
+	}
+
+	result := make(chan struct {
+		needReload bool
+		err        error
+	}, 1)
+	go func() {
+		needReload, updateErr := server.updateAllSettingsWithReload(allSettingsRequest{
+			Mode:                          "pool",
+			LogLevel:                      "info",
+			ListenerAddress:               "0.0.0.0",
+			ListenerPort:                  8080,
+			ListenerProtocol:              "http",
+			MultiPortAddress:              "0.0.0.0",
+			MultiPortBasePort:             10000,
+			MultiPortProtocol:             "http",
+			PoolMode:                      "auto",
+			PoolBlacklistDuration:         "1m",
+			SubRefreshInterval:            "1m",
+			SubRefreshTimeout:             "30s",
+			SubRefreshHealthCheckTimeout:  "30s",
+			SubRefreshDrainTimeout:        "10s",
+			SourceSyncRefreshInterval:     "1m",
+			SourceSyncRequestTimeout:      "30s",
+			GeoIPAutoUpdateInterval:       "1h",
+			ManagementHealthCheckInterval: "1m",
+		})
+		result <- struct {
+			needReload bool
+			err        error
+		}{needReload: needReload, err: updateErr}
+	}()
+
+	select {
+	case got := <-result:
+		t.Fatalf("settings update completed before transition commit: need_reload=%v err=%v", got.needReload, got.err)
+	case <-time.After(40 * time.Millisecond):
+	}
+	transition.Finalize()
+
+	select {
+	case got := <-result:
+		if got.err != nil {
+			t.Fatalf("updateAllSettingsWithReload() error = %v", got.err)
+		}
+		if !got.needReload {
+			t.Fatal("settings update computed need_reload from the retired config source")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("settings update did not resume after transition commit")
+	}
 }
 
 func TestListenerTransitionFinalizeReusesServerRuntimeState(t *testing.T) {

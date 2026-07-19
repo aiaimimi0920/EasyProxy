@@ -73,6 +73,43 @@ type ReloadLifecycleListener interface {
 	FailedReload(ctx context.Context, from, to ReloadState, cause error, restored bool) error
 }
 
+// ReloadIntentListener is notified before a reload caller starts capturing its
+// target configuration. It lets hot-update components reject edits that would
+// otherwise race a stale target assembled from disk or remote subscriptions.
+type ReloadIntentListener interface {
+	BeginReloadIntent(ctx context.Context) error
+	EndReloadIntent(ctx context.Context)
+}
+
+// ReloadIntent holds one nestable reload-intent notification. End must be
+// called exactly once; it is safe to defer immediately after construction.
+type ReloadIntent struct {
+	once             sync.Once
+	ctx              context.Context
+	listeners        []ReloadIntentListener
+	endMutationGuard func()
+	endWindow        func()
+}
+
+// End releases this reload intent and re-enables hot updates when no other
+// intent remains active in the listener.
+func (i *ReloadIntent) End() {
+	if i == nil {
+		return
+	}
+	i.once.Do(func() {
+		for idx := len(i.listeners) - 1; idx >= 0; idx-- {
+			i.listeners[idx].EndReloadIntent(i.ctx)
+		}
+		if i.endMutationGuard != nil {
+			i.endMutationGuard()
+		}
+		if i.endWindow != nil {
+			i.endWindow()
+		}
+	})
+}
+
 type managedBox interface {
 	Start() error
 	Close() error
@@ -85,6 +122,10 @@ type boxFactory func(ctx context.Context, cfg *config.Config) (managedBox, error
 type Manager struct {
 	mu       sync.RWMutex
 	reloadMu sync.Mutex
+
+	reloadIntentMu    sync.Mutex
+	reloadIntentCond  *sync.Cond
+	reloadIntentCount int
 
 	currentBox    managedBox
 	monitorMgr    *monitor.Manager
@@ -242,8 +283,31 @@ func (m *Manager) Reload(newCfg *config.Config) error {
 	if newCfg == nil {
 		return errors.New("new config is nil")
 	}
+	intent, err := m.BeginReloadIntent(context.Background())
+	if err != nil {
+		return err
+	}
+	defer intent.End()
 	m.reloadMu.Lock()
 	defer m.reloadMu.Unlock()
+	return m.reloadLocked(newCfg)
+}
+
+// reloadLocked performs one reload while the caller holds reloadMu. Keeping
+// target capture under the same mutex as node CRUD prevents edits from racing
+// the candidate snapshot.
+func (m *Manager) reloadLocked(newCfg *config.Config) error {
+	return m.reloadLockedWithEphemeralNodes(newCfg, nil, false)
+}
+
+func (m *Manager) reloadLockedWithEphemeralNodes(
+	newCfg *config.Config,
+	ephemeralNodes []config.NodeConfig,
+	publishEphemeral bool,
+) error {
+	if newCfg == nil {
+		return errors.New("new config is nil")
+	}
 
 	targetCfg := snapshotConfig(newCfg)
 	if targetCfg == nil {
@@ -277,6 +341,8 @@ func (m *Manager) Reload(newCfg *config.Config) error {
 	for _, listener := range reloadListeners {
 		if err := listener.PrepareReload(ctx, cloneReloadState(from), cloneReloadState(to)); err != nil {
 			cause := fmt.Errorf("prepare reload: %w", err)
+			oldCfg, oldIdle = m.latestAppliedRollbackState(oldCfg, oldIdle)
+			from = ReloadState{Config: snapshotConfig(oldCfg), Idle: oldIdle}
 			m.restoreAppliedState(ctx, oldCfg, oldIdle, oldBox)
 			restored, restoreErr := m.notifyReloadFailed(ctx, reloadListeners, from, to, cause, true)
 			if restored {
@@ -285,6 +351,11 @@ func (m *Manager) Reload(newCfg *config.Config) error {
 			return errors.Join(cause, restoreErr)
 		}
 	}
+	// A hot apply can finish while a lifecycle listener is waiting in
+	// PrepareReload. Refresh the rollback baseline after all prepare hooks so a
+	// later candidate failure cannot restore an obsolete snapshot.
+	oldCfg, oldIdle = m.latestAppliedRollbackState(oldCfg, oldIdle)
+	from = ReloadState{Config: snapshotConfig(oldCfg), Idle: oldIdle}
 
 	m.logger.Infof("reloading with %d nodes", len(targetCfg.Nodes))
 
@@ -435,22 +506,33 @@ func (m *Manager) Reload(newCfg *config.Config) error {
 		cause := fmt.Errorf("commit candidate shared state: %w", err)
 		return m.failReload(ctx, reloadListeners, from, to, cause, instance, oldCfg, oldIdle, sharedStateTxn)
 	}
-	if monitorTransition != nil {
-		monitorTransition.Finalize()
-	}
-
 	m.mu.Lock()
 	m.applyConfigSettings(targetCfg)
 	m.lastAppliedCfg = snapshotConfig(targetCfg)
 	m.lastAppliedIdle = false
 	m.lastAppliedMode = targetCfg.Mode
 	m.lastAppliedBasePort = targetCfg.MultiPort.BasePort
+	if publishEphemeral {
+		m.ephemeralNodes = cloneNodes(ephemeralNodes)
+	}
 	monitorServer := m.monitorServer
 	listeners := append([]ConfigUpdateListener(nil), m.configListeners...)
 	m.mu.Unlock()
 
-	if monitorServer != nil {
+	// Activate has already published targetCfg into the monitor server while
+	// holding its config update barrier. The rollback bookkeeping above is
+	// completed before the barrier is released, so a queued edit cannot mutate
+	// the candidate before lastAppliedCfg is recorded.
+	if monitorTransition == nil && monitorServer != nil {
 		monitorServer.SetConfig(targetCfg)
+	}
+	// Release the monitor config-update barrier before invoking extension
+	// listeners. A listener may synchronously call Server.SetConfig; keeping the
+	// transition lock across that callback would self-deadlock. Bookkeeping above
+	// is complete before the barrier is released, so a re-entrant edit cannot
+	// race lastAppliedCfg or rollback state.
+	if monitorTransition != nil {
+		monitorTransition.Finalize()
 	}
 	for _, listener := range listeners {
 		listener.OnConfigUpdate(targetCfg)
@@ -474,6 +556,112 @@ func (m *Manager) AddReloadLifecycleListener(l ReloadLifecycleListener) {
 	m.reloadListeners = append(m.reloadListeners, l)
 }
 
+// beginReloadMutationGuard blocks new node/config mutations before a reload
+// target is captured, and waits for an already-running mutation to finish.
+// Holding intentMu while taking reloadMu closes the hand-off race between the
+// mutation gate and the reload transaction.
+func (m *Manager) beginReloadMutationGuard() func() {
+	m.reloadIntentMu.Lock()
+	if m.reloadIntentCond == nil {
+		m.reloadIntentCond = sync.NewCond(&m.reloadIntentMu)
+	}
+	m.reloadIntentCount++
+	m.reloadIntentMu.Unlock()
+
+	m.reloadMu.Lock()
+	m.reloadMu.Unlock()
+
+	return func() {
+		m.reloadIntentMu.Lock()
+		if m.reloadIntentCount > 0 {
+			m.reloadIntentCount--
+		}
+		if m.reloadIntentCount == 0 && m.reloadIntentCond != nil {
+			m.reloadIntentCond.Broadcast()
+		}
+		m.reloadIntentMu.Unlock()
+	}
+}
+
+func (m *Manager) lockConfigMutation(ctx context.Context) error {
+	m.reloadIntentMu.Lock()
+	if m.reloadIntentCond == nil {
+		m.reloadIntentCond = sync.NewCond(&m.reloadIntentMu)
+	}
+	for m.reloadIntentCount > 0 {
+		if ctx != nil {
+			if err := ctx.Err(); err != nil {
+				m.reloadIntentMu.Unlock()
+				return err
+			}
+		}
+		m.reloadIntentCond.Wait()
+	}
+	// Keep intentMu held while acquiring reloadMu so a new intent cannot begin
+	// target capture between the gate check and the mutation lock.
+	m.reloadMu.Lock()
+	m.reloadIntentMu.Unlock()
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			m.reloadMu.Unlock()
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *Manager) unlockConfigMutation() {
+	m.reloadMu.Unlock()
+}
+
+// BeginConfigMutation serializes a persisted configuration edit with reload
+// target capture and commit. The returned release function must be called once.
+func (m *Manager) BeginConfigMutation(ctx context.Context) (func(), error) {
+	if err := m.lockConfigMutation(ctx); err != nil {
+		return nil, err
+	}
+	var once sync.Once
+	return func() {
+		once.Do(m.unlockConfigMutation)
+	}, nil
+}
+
+// BeginReloadIntent announces a reload before its target configuration is
+// captured. Callers that perform disk I/O or network refreshes before Reload
+// should hold the returned token across that work.
+func (m *Manager) BeginReloadIntent(ctx context.Context) (*ReloadIntent, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	m.mu.RLock()
+	reloadListeners := append([]ReloadLifecycleListener(nil), m.reloadListeners...)
+	monitorServer := m.monitorServer
+	m.mu.RUnlock()
+
+	intent := &ReloadIntent{ctx: ctx}
+	intent.endMutationGuard = m.beginReloadMutationGuard()
+	if monitorServer != nil {
+		monitorServer.BeginReloadWindow()
+		intent.endWindow = monitorServer.EndReloadWindow
+	}
+	for _, listener := range reloadListeners {
+		intentListener, ok := listener.(ReloadIntentListener)
+		if !ok {
+			continue
+		}
+		if err := intentListener.BeginReloadIntent(ctx); err != nil {
+			intent.End()
+			return nil, fmt.Errorf("begin reload intent: %w", err)
+		}
+		intent.listeners = append(intent.listeners, intentListener)
+	}
+	return intent, nil
+}
+
 // failReload closes a rejected candidate and restores the last applied state.
 func (m *Manager) failReload(
 	ctx context.Context,
@@ -486,6 +674,9 @@ func (m *Manager) failReload(
 	oldIdle bool,
 	sharedStateTxn *pool.SharedStateTransaction,
 ) error {
+	oldCfg, oldIdle = m.latestAppliedRollbackState(oldCfg, oldIdle)
+	from = ReloadState{Config: snapshotConfig(oldCfg), Idle: oldIdle}
+
 	m.mu.Lock()
 	if candidate != nil && m.currentBox == candidate {
 		m.currentBox = nil
@@ -547,6 +738,21 @@ func (m *Manager) activeConfig() *config.Config {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.cfg
+}
+
+// latestAppliedRollbackState returns the newest independent snapshot that a
+// successful hot apply has published. Reload transactions call this at their
+// lifecycle boundaries because RecordAppliedConfig intentionally does not take
+// reloadMu (the controller may already hold its operation mutex).
+func (m *Manager) latestAppliedRollbackState(fallbackCfg *config.Config, fallbackIdle bool) (*config.Config, bool) {
+	m.mu.RLock()
+	lastAppliedCfg := m.lastAppliedCfg
+	lastAppliedIdle := m.lastAppliedIdle
+	m.mu.RUnlock()
+	if cfg := snapshotConfig(lastAppliedCfg); cfg != nil {
+		return cfg, lastAppliedIdle
+	}
+	return snapshotConfig(fallbackCfg), fallbackIdle
 }
 
 func (m *Manager) restoreAppliedState(_ context.Context, cfg *config.Config, idle bool, instance managedBox) {
@@ -695,6 +901,58 @@ func (m *Manager) SetLongLivedThresholds(minUptime time.Duration, minRate float6
 	if monitorMgr != nil {
 		monitorMgr.SetLongLivedThresholds(minUptime, minRate)
 	}
+}
+
+// RecordAppliedConfig advances the rollback snapshot after a successful
+// non-structural hot apply. The active config pointer and idle state are
+// intentionally preserved.
+func (m *Manager) RecordAppliedConfig(cfg *config.Config) {
+	applied := snapshotConfig(cfg)
+	if applied == nil {
+		return
+	}
+
+	m.mu.Lock()
+	base := m.lastAppliedCfg
+	if base == nil {
+		base = m.cfg
+	}
+	m.lastAppliedCfg = mergeHotAppliedConfig(base, applied)
+	m.lastAppliedMode = m.lastAppliedCfg.Mode
+	m.lastAppliedBasePort = m.lastAppliedCfg.MultiPort.BasePort
+	m.mu.Unlock()
+}
+
+// mergeHotAppliedConfig publishes only the fields that the routing controller
+// can apply without rebuilding sing-box. Structural fields (mode, listeners,
+// nodes, pool settings, session TTL, and GeoIP listener settings) remain from
+// the last applied snapshot so a later rollback cannot restore a config that
+// was merely edited in memory but never reloaded.
+func mergeHotAppliedConfig(base, applied *config.Config) *config.Config {
+	if applied == nil {
+		return nil
+	}
+	merged := snapshotConfig(base)
+	if merged == nil {
+		return applied
+	}
+
+	merged.Routing.DefaultStrategy = applied.Routing.DefaultStrategy
+	merged.Routing.FinalPolicy = applied.Routing.FinalPolicy
+	merged.Routing.Rules = append([]string(nil), applied.Routing.Rules...)
+	merged.Routing.RuleProviders = append([]config.RuleProvider(nil), applied.Routing.RuleProviders...)
+	merged.Routing.LongLived = applied.Routing.LongLived
+	if applied.Routing.UseDefaultRules == nil {
+		merged.Routing.UseDefaultRules = nil
+	} else {
+		useDefaults := *applied.Routing.UseDefaultRules
+		merged.Routing.UseDefaultRules = &useDefaults
+	}
+	if merged.Routing.Enabled && applied.Routing.Enabled {
+		merged.GeoIP.Enabled = applied.GeoIP.Enabled
+		merged.GeoIP.DatabasePath = applied.GeoIP.DatabasePath
+	}
+	return merged
 }
 
 // MonitorServer returns the monitor HTTP server.
@@ -1143,6 +1401,8 @@ func (m *Manager) ListConfigNodes(ctx context.Context) ([]config.NodeConfig, err
 	if m.cfg == nil {
 		return nil, errConfigUnavailable
 	}
+	m.cfg.RLock()
+	defer m.cfg.RUnlock()
 
 	// If no store, just return active nodes
 	if m.store == nil {
@@ -1201,6 +1461,10 @@ func (m *Manager) CreateNode(ctx context.Context, node config.NodeConfig) (confi
 			return config.NodeConfig{}, err
 		}
 	}
+	if err := m.lockConfigMutation(ctx); err != nil {
+		return config.NodeConfig{}, err
+	}
+	defer m.unlockConfigMutation()
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1208,6 +1472,8 @@ func (m *Manager) CreateNode(ctx context.Context, node config.NodeConfig) (confi
 	if m.cfg == nil {
 		return config.NodeConfig{}, errConfigUnavailable
 	}
+	m.cfg.Lock()
+	defer m.cfg.Unlock()
 
 	normalized, err := m.prepareNodeLocked(node, "")
 	if err != nil {
@@ -1243,6 +1509,10 @@ func (m *Manager) UpdateNode(ctx context.Context, ref string, node config.NodeCo
 			return config.NodeConfig{}, err
 		}
 	}
+	if err := m.lockConfigMutation(ctx); err != nil {
+		return config.NodeConfig{}, err
+	}
+	defer m.unlockConfigMutation()
 
 	ref = strings.TrimSpace(ref)
 	m.mu.Lock()
@@ -1251,6 +1521,8 @@ func (m *Manager) UpdateNode(ctx context.Context, ref string, node config.NodeCo
 	if m.cfg == nil {
 		return config.NodeConfig{}, errConfigUnavailable
 	}
+	m.cfg.Lock()
+	defer m.cfg.Unlock()
 
 	idx := m.nodeIndexByRefLocked(ref)
 	var existingStore *store.Node
@@ -1307,6 +1579,10 @@ func (m *Manager) SetNodeEnabled(ctx context.Context, ref string, enabled bool) 
 			return err
 		}
 	}
+	if err := m.lockConfigMutation(ctx); err != nil {
+		return err
+	}
+	defer m.unlockConfigMutation()
 
 	ref = strings.TrimSpace(ref)
 	m.mu.Lock()
@@ -1315,6 +1591,8 @@ func (m *Manager) SetNodeEnabled(ctx context.Context, ref string, enabled bool) 
 	if m.cfg == nil {
 		return errConfigUnavailable
 	}
+	m.cfg.Lock()
+	defer m.cfg.Unlock()
 
 	// Update in Store
 	idx := m.nodeIndexByRefLocked(ref)
@@ -1354,6 +1632,10 @@ func (m *Manager) DeleteNode(ctx context.Context, ref string) error {
 			return err
 		}
 	}
+	if err := m.lockConfigMutation(ctx); err != nil {
+		return err
+	}
+	defer m.unlockConfigMutation()
 
 	ref = strings.TrimSpace(ref)
 	m.mu.Lock()
@@ -1362,6 +1644,8 @@ func (m *Manager) DeleteNode(ctx context.Context, ref string) error {
 	if m.cfg == nil {
 		return errConfigUnavailable
 	}
+	m.cfg.Lock()
+	defer m.cfg.Unlock()
 
 	idx := m.nodeIndexByRefLocked(ref)
 
@@ -1422,6 +1706,37 @@ func (m *Manager) lookupStoreNodeLocked(ctx context.Context, ref string, activeI
 // TriggerReload reloads the sing-box instance by re-reading config from disk
 // and loading nodes from the SQLite Store.
 func (m *Manager) TriggerReload(ctx context.Context) error {
+	return m.triggerReload(ctx, nil, false)
+}
+
+// TriggerReloadWithEphemeralNodes reloads from the persistent configuration
+// using an explicit runtime-node candidate. The candidate is published only
+// if the reload or idle transition commits successfully.
+func (m *Manager) TriggerReloadWithEphemeralNodes(ctx context.Context, ephemeralNodes []config.NodeConfig) error {
+	return m.triggerReload(ctx, ephemeralNodes, true)
+}
+
+func (m *Manager) triggerReload(
+	ctx context.Context,
+	candidateEphemeralNodes []config.NodeConfig,
+	publishEphemeral bool,
+) error {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+	intentCtx := ctx
+	if intentCtx == nil {
+		intentCtx = context.Background()
+	}
+	intent, err := m.BeginReloadIntent(intentCtx)
+	if err != nil {
+		return err
+	}
+	defer intent.End()
+	m.reloadMu.Lock()
+	defer m.reloadMu.Unlock()
 	if ctx != nil {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -1441,10 +1756,10 @@ func (m *Manager) TriggerReload(ctx context.Context) error {
 	// Re-read config from disk using LoadForReload (only gets inline nodes + settings)
 	var newCfg *config.Config
 	if cfgPath != "" {
-		var err error
-		newCfg, err = config.LoadForReload(cfgPath)
-		if err != nil {
-			m.logger.Warnf("failed to reload config from disk: %v, falling back to in-memory copy", err)
+		var loadErr error
+		newCfg, loadErr = config.LoadForReload(cfgPath)
+		if loadErr != nil {
+			m.logger.Warnf("failed to reload config from disk: %v, falling back to in-memory copy", loadErr)
 			m.mu.RLock()
 			newCfg = m.copyConfigLocked()
 			m.mu.RUnlock()
@@ -1498,9 +1813,12 @@ func (m *Manager) TriggerReload(ctx context.Context) error {
 		}
 	}
 
-	m.mu.RLock()
-	ephemeralNodes := cloneNodes(m.ephemeralNodes)
-	m.mu.RUnlock()
+	ephemeralNodes := cloneNodes(candidateEphemeralNodes)
+	if !publishEphemeral {
+		m.mu.RLock()
+		ephemeralNodes = cloneNodes(m.ephemeralNodes)
+		m.mu.RUnlock()
+	}
 	if len(ephemeralNodes) > 0 && hasRuntimeSourceRefs(newCfg) {
 		existing := make(map[string]struct{}, len(newCfg.Nodes))
 		for _, node := range newCfg.Nodes {
@@ -1517,7 +1835,7 @@ func (m *Manager) TriggerReload(ctx context.Context) error {
 	// If no enabled nodes available after merging, enter idle state:
 	// stop the running box gracefully so disabled nodes are no longer served.
 	if len(newCfg.Nodes) == 0 {
-		return m.enterIdle(newCfg)
+		return m.enterIdleLockedWithEphemeralNodes(newCfg, ephemeralNodes, publishEphemeral)
 	}
 
 	// Detect mode or base port changes — if either changed, discard old port
@@ -1533,11 +1851,58 @@ func (m *Manager) TriggerReload(ctx context.Context) error {
 		}
 	}
 
-	return m.ReloadWithPortMap(newCfg, portMap)
+	return m.reloadWithPortMapAndEphemeralNodesLocked(newCfg, portMap, ephemeralNodes, publishEphemeral)
 }
 
 // ReloadWithPortMap gracefully switches to a new configuration, preserving port assignments.
 func (m *Manager) ReloadWithPortMap(newCfg *config.Config, portMap map[string]uint16) error {
+	if newCfg == nil {
+		return errors.New("new config is nil")
+	}
+	intent, err := m.BeginReloadIntent(context.Background())
+	if err != nil {
+		return err
+	}
+	defer intent.End()
+	m.reloadMu.Lock()
+	defer m.reloadMu.Unlock()
+	return m.reloadWithPortMapLocked(newCfg, portMap)
+}
+
+// ReloadWithPortMapAndEphemeralNodes reloads one runtime-generated candidate
+// and publishes its ephemeral nodes only after the reload commits. A rejected
+// candidate leaves the previously published ephemeral set unchanged.
+func (m *Manager) ReloadWithPortMapAndEphemeralNodes(
+	newCfg *config.Config,
+	portMap map[string]uint16,
+	ephemeralNodes []config.NodeConfig,
+) error {
+	if newCfg == nil {
+		return errors.New("new config is nil")
+	}
+	intent, err := m.BeginReloadIntent(context.Background())
+	if err != nil {
+		return err
+	}
+	defer intent.End()
+	m.reloadMu.Lock()
+	defer m.reloadMu.Unlock()
+	if err := m.reloadWithPortMapAndEphemeralNodesLocked(newCfg, portMap, ephemeralNodes, true); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *Manager) reloadWithPortMapLocked(newCfg *config.Config, portMap map[string]uint16) error {
+	return m.reloadWithPortMapAndEphemeralNodesLocked(newCfg, portMap, nil, false)
+}
+
+func (m *Manager) reloadWithPortMapAndEphemeralNodesLocked(
+	newCfg *config.Config,
+	portMap map[string]uint16,
+	ephemeralNodes []config.NodeConfig,
+	publishEphemeral bool,
+) error {
 	if newCfg == nil {
 		return errors.New("new config is nil")
 	}
@@ -1551,18 +1916,30 @@ func (m *Manager) ReloadWithPortMap(newCfg *config.Config, portMap map[string]ui
 		return fmt.Errorf("normalize config with port map: %w", err)
 	}
 
-	return m.Reload(newCfg)
+	return m.reloadLockedWithEphemeralNodes(newCfg, ephemeralNodes, publishEphemeral)
 }
 
 // enterIdle stops the running sing-box instance when there are 0 enabled nodes.
 // The manager enters an idle state and can be resumed by TriggerReload when
 // nodes are re-enabled.
 func (m *Manager) enterIdle(newCfg *config.Config) error {
+	m.reloadMu.Lock()
+	defer m.reloadMu.Unlock()
+	return m.enterIdleLocked(newCfg)
+}
+
+func (m *Manager) enterIdleLocked(newCfg *config.Config) error {
+	return m.enterIdleLockedWithEphemeralNodes(newCfg, nil, false)
+}
+
+func (m *Manager) enterIdleLockedWithEphemeralNodes(
+	newCfg *config.Config,
+	ephemeralNodes []config.NodeConfig,
+	publishEphemeral bool,
+) error {
 	if newCfg == nil {
 		return errors.New("new config is nil")
 	}
-	m.reloadMu.Lock()
-	defer m.reloadMu.Unlock()
 
 	targetCfg := snapshotConfig(newCfg)
 	m.mu.Lock()
@@ -1592,6 +1969,8 @@ func (m *Manager) enterIdle(newCfg *config.Config) error {
 	for _, listener := range reloadListeners {
 		if err := listener.PrepareReload(ctx, cloneReloadState(from), cloneReloadState(to)); err != nil {
 			cause := fmt.Errorf("prepare idle reload: %w", err)
+			oldCfg, oldIdle = m.latestAppliedRollbackState(oldCfg, oldIdle)
+			from = ReloadState{Config: snapshotConfig(oldCfg), Idle: oldIdle}
 			m.restoreAppliedState(ctx, oldCfg, oldIdle, oldBox)
 			restored, restoreErr := m.notifyReloadFailed(ctx, reloadListeners, from, to, cause, true)
 			if restored {
@@ -1600,6 +1979,8 @@ func (m *Manager) enterIdle(newCfg *config.Config) error {
 			return errors.Join(cause, restoreErr)
 		}
 	}
+	oldCfg, oldIdle = m.latestAppliedRollbackState(oldCfg, oldIdle)
+	from = ReloadState{Config: snapshotConfig(oldCfg), Idle: oldIdle}
 
 	if oldBox != nil {
 		m.logger.Infof("stopping instance (all nodes disabled)...")
@@ -1653,22 +2034,24 @@ func (m *Manager) enterIdle(newCfg *config.Config) error {
 		cause := fmt.Errorf("commit idle shared state: %w", err)
 		return m.failReload(ctx, reloadListeners, from, to, cause, nil, oldCfg, oldIdle, sharedStateTxn)
 	}
-	if monitorTransition != nil {
-		monitorTransition.Finalize()
-	}
-
 	m.mu.Lock()
 	m.applyConfigSettings(targetCfg)
 	m.lastAppliedCfg = snapshotConfig(targetCfg)
 	m.lastAppliedIdle = true
 	m.lastAppliedMode = targetCfg.Mode
 	m.lastAppliedBasePort = targetCfg.MultiPort.BasePort
+	if publishEphemeral {
+		m.ephemeralNodes = cloneNodes(ephemeralNodes)
+	}
 	monitorServer := m.monitorServer
 	listeners := append([]ConfigUpdateListener(nil), m.configListeners...)
 	m.mu.Unlock()
 
-	if monitorServer != nil {
+	if monitorTransition == nil && monitorServer != nil {
 		monitorServer.SetConfig(targetCfg)
+	}
+	if monitorTransition != nil {
+		monitorTransition.Finalize()
 	}
 	for _, listener := range listeners {
 		listener.OnConfigUpdate(targetCfg)
@@ -1795,6 +2178,10 @@ func filterPersistentConfigNodes(nodes []config.NodeConfig) []config.NodeConfig 
 // SetEphemeralNodes stores runtime-generated nodes that should survive reloads
 // but must not be written into the persistent local store.
 func (m *Manager) SetEphemeralNodes(nodes []config.NodeConfig) {
+	if err := m.lockConfigMutation(context.Background()); err != nil {
+		return
+	}
+	defer m.unlockConfigMutation()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.ephemeralNodes = cloneNodes(nodes)

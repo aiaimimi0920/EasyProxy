@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -63,6 +64,108 @@ type recordingReloadListener struct {
 	failed      []reloadFailureRecord
 }
 
+type blockingPrepareReloadListener struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+type blockingCompleteReloadListener struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+type signalingReloadIntentListener struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+type recordingReloadIntentListener struct {
+	mu            sync.Mutex
+	active        int
+	begins        int
+	ends          int
+	prepareActive int
+}
+
+func (l *recordingReloadIntentListener) PrepareReload(context.Context, ReloadState, ReloadState) error {
+	l.mu.Lock()
+	if l.active > 0 {
+		l.prepareActive++
+	}
+	l.mu.Unlock()
+	return nil
+}
+
+func (l *recordingReloadIntentListener) CompleteReload(context.Context, ReloadState, ReloadState) error {
+	return nil
+}
+
+func (l *recordingReloadIntentListener) FailedReload(context.Context, ReloadState, ReloadState, error, bool) error {
+	return nil
+}
+
+func (l *recordingReloadIntentListener) BeginReloadIntent(context.Context) error {
+	l.mu.Lock()
+	l.active++
+	l.begins++
+	l.mu.Unlock()
+	return nil
+}
+
+func (l *recordingReloadIntentListener) EndReloadIntent(context.Context) {
+	l.mu.Lock()
+	if l.active > 0 {
+		l.active--
+	}
+	l.ends++
+	l.mu.Unlock()
+}
+
+func (l *blockingPrepareReloadListener) PrepareReload(context.Context, ReloadState, ReloadState) error {
+	close(l.entered)
+	<-l.release
+	return nil
+}
+
+func (l *blockingPrepareReloadListener) CompleteReload(context.Context, ReloadState, ReloadState) error {
+	return nil
+}
+
+func (l *blockingPrepareReloadListener) FailedReload(context.Context, ReloadState, ReloadState, error, bool) error {
+	return nil
+}
+
+func (l *blockingCompleteReloadListener) PrepareReload(context.Context, ReloadState, ReloadState) error {
+	return nil
+}
+
+func (l *blockingCompleteReloadListener) CompleteReload(context.Context, ReloadState, ReloadState) error {
+	close(l.entered)
+	<-l.release
+	return nil
+}
+
+func (l *blockingCompleteReloadListener) FailedReload(context.Context, ReloadState, ReloadState, error, bool) error {
+	return nil
+}
+
+func (l *signalingReloadIntentListener) BeginReloadIntent(context.Context) error {
+	close(l.started)
+	<-l.release
+	return nil
+}
+
+func (l *signalingReloadIntentListener) EndReloadIntent(context.Context) {}
+func (l *signalingReloadIntentListener) PrepareReload(context.Context, ReloadState, ReloadState) error {
+	return nil
+}
+func (l *signalingReloadIntentListener) CompleteReload(context.Context, ReloadState, ReloadState) error {
+	return nil
+}
+func (l *signalingReloadIntentListener) FailedReload(context.Context, ReloadState, ReloadState, error, bool) error {
+	return nil
+}
+
 type reloadFailureRecord struct {
 	cause    error
 	restored bool
@@ -87,6 +190,114 @@ func (l *recordingReloadListener) FailedReload(_ context.Context, from, to Reloa
 	*l.events = append(*l.events, "failed")
 	l.failed = append(l.failed, reloadFailureRecord{cause: cause, restored: restored})
 	return l.failedErr
+}
+
+func TestReloadIntentTokensAreNestableAndIdempotent(t *testing.T) {
+	manager := &Manager{}
+	listener := &recordingReloadIntentListener{}
+	manager.AddReloadLifecycleListener(listener)
+
+	first, err := manager.BeginReloadIntent(context.Background())
+	if err != nil {
+		t.Fatalf("first BeginReloadIntent() error = %v", err)
+	}
+	second, err := manager.BeginReloadIntent(context.Background())
+	if err != nil {
+		t.Fatalf("second BeginReloadIntent() error = %v", err)
+	}
+	listener.mu.Lock()
+	if listener.active != 2 || listener.begins != 2 {
+		t.Fatalf("nested intent state = active:%d begins:%d, want 2/2", listener.active, listener.begins)
+	}
+	listener.mu.Unlock()
+
+	first.End()
+	first.End()
+	listener.mu.Lock()
+	if listener.active != 1 || listener.ends != 1 {
+		t.Fatalf("first intent end state = active:%d ends:%d, want 1/1", listener.active, listener.ends)
+	}
+	listener.mu.Unlock()
+
+	second.End()
+	listener.mu.Lock()
+	defer listener.mu.Unlock()
+	if listener.active != 0 || listener.ends != 2 {
+		t.Fatalf("final intent end state = active:%d ends:%d, want 0/2", listener.active, listener.ends)
+	}
+}
+
+func TestReloadIntentBlocksNodeMutationBeforeReloadLock(t *testing.T) {
+	manager := &Manager{
+		cfg:    &config.Config{Mode: "pool"},
+		logger: defaultLogger{},
+	}
+	intent, err := manager.BeginReloadIntent(context.Background())
+	if err != nil {
+		t.Fatalf("BeginReloadIntent() error = %v", err)
+	}
+
+	createDone := make(chan error, 1)
+	go func() {
+		_, createErr := manager.CreateNode(context.Background(), config.NodeConfig{
+			Name: "intent-blocked",
+			URI:  "http://intent-blocked.example:80",
+		})
+		createDone <- createErr
+	}()
+	select {
+	case err := <-createDone:
+		intent.End()
+		t.Fatalf("CreateNode completed while reload intent was active: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	intent.End()
+	select {
+	case err := <-createDone:
+		if err != nil {
+			t.Fatalf("CreateNode() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("CreateNode did not resume after reload intent ended")
+	}
+}
+
+func TestNodeMutationRechecksCanceledContextAfterReloadIntent(t *testing.T) {
+	manager := &Manager{
+		cfg:    &config.Config{Mode: "pool"},
+		logger: defaultLogger{},
+	}
+	intent, err := manager.BeginReloadIntent(context.Background())
+	if err != nil {
+		t.Fatalf("BeginReloadIntent() error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	createDone := make(chan error, 1)
+	go func() {
+		_, createErr := manager.CreateNode(ctx, config.NodeConfig{
+			Name: "canceled",
+			URI:  "http://canceled.example:80",
+		})
+		createDone <- createErr
+	}()
+	time.Sleep(40 * time.Millisecond)
+	cancel()
+	intent.End()
+
+	select {
+	case err := <-createDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("CreateNode() error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("CreateNode did not return after reload intent ended")
+	}
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	if len(manager.cfg.Nodes) != 0 {
+		t.Fatalf("canceled node mutation changed config: %+v", manager.cfg.Nodes)
+	}
 }
 
 type blockingStartBox struct {
@@ -125,6 +336,140 @@ type recordingConfigListener struct {
 	lastRaw *config.Config
 }
 
+type configCommitLockProbe struct {
+	server  *monitor.Server
+	manager *Manager
+	result  chan error
+}
+
+type ephemeralCommitProbe struct {
+	manager *Manager
+	seen    chan []config.NodeConfig
+}
+
+func (p *ephemeralCommitProbe) OnConfigUpdate(*config.Config) {
+	p.manager.mu.RLock()
+	ephemeralNodes := cloneNodes(p.manager.ephemeralNodes)
+	p.manager.mu.RUnlock()
+	p.seen <- ephemeralNodes
+}
+
+func (p *configCommitLockProbe) OnConfigUpdate(cfg *config.Config) {
+	p.server.SetConfig(cfg)
+	// The reload bookkeeping must be visible before listeners are called.
+	p.manager.mu.RLock()
+	applied := p.manager.lastAppliedCfg
+	p.manager.mu.RUnlock()
+	if applied == nil || applied.Mode != cfg.Mode {
+		p.result <- fmt.Errorf("last-applied config not committed before listener: %#v", applied)
+		return
+	}
+	p.result <- nil
+}
+
+func TestReloadReleasesMonitorConfigLockBeforeConfigNotification(t *testing.T) {
+	monitorMgr, err := monitor.NewManager(monitor.Config{})
+	if err != nil {
+		t.Fatalf("monitor.NewManager() error = %v", err)
+	}
+	defer monitorMgr.Stop()
+
+	managementEnabled := false
+	oldCfg := &config.Config{
+		Mode:       "pool",
+		Management: config.ManagementConfig{Enabled: &managementEnabled},
+	}
+	newCfg := oldCfg.Clone()
+	newCfg.Mode = "hybrid"
+	server := monitor.NewServer(monitor.Config{}, monitorMgr, log.New(io.Discard, "", 0))
+	server.SetConfig(oldCfg)
+
+	oldBox := &fakeManagedBox{name: "old"}
+	candidate := &fakeManagedBox{name: "candidate"}
+	manager := &Manager{
+		baseCtx:        context.Background(),
+		cfg:            oldCfg,
+		currentBox:     oldBox,
+		monitorMgr:     monitorMgr,
+		monitorServer:  server,
+		lastAppliedCfg: snapshotConfig(oldCfg),
+		logger:         defaultLogger{},
+		boxFactory: func(context.Context, *config.Config) (managedBox, error) {
+			return candidate, nil
+		},
+	}
+	probe := &configCommitLockProbe{
+		server:  server,
+		manager: manager,
+		result:  make(chan error, 1),
+	}
+	manager.AddConfigListener(probe)
+
+	reloadDone := make(chan error, 1)
+	go func() { reloadDone <- manager.Reload(newCfg) }()
+	select {
+	case err := <-reloadDone:
+		if err != nil {
+			t.Fatalf("Reload() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Reload deadlocked while config listener synchronously called SetConfig")
+	}
+	if err := <-probe.result; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEnterIdleReleasesMonitorConfigLockBeforeConfigNotification(t *testing.T) {
+	monitorMgr, err := monitor.NewManager(monitor.Config{})
+	if err != nil {
+		t.Fatalf("monitor.NewManager() error = %v", err)
+	}
+	defer monitorMgr.Stop()
+
+	managementEnabled := false
+	oldCfg := &config.Config{
+		Mode:       "pool",
+		Nodes:      []config.NodeConfig{{Name: "old", URI: "http://127.0.0.1:1"}},
+		Management: config.ManagementConfig{Enabled: &managementEnabled},
+	}
+	idleCfg := oldCfg.Clone()
+	idleCfg.Mode = "hybrid"
+	idleCfg.Nodes = nil
+	server := monitor.NewServer(monitor.Config{}, monitorMgr, log.New(io.Discard, "", 0))
+	server.SetConfig(oldCfg)
+
+	manager := &Manager{
+		baseCtx:        context.Background(),
+		cfg:            oldCfg,
+		currentBox:     &fakeManagedBox{name: "old"},
+		monitorMgr:     monitorMgr,
+		monitorServer:  server,
+		lastAppliedCfg: snapshotConfig(oldCfg),
+		logger:         defaultLogger{},
+	}
+	probe := &configCommitLockProbe{
+		server:  server,
+		manager: manager,
+		result:  make(chan error, 1),
+	}
+	manager.AddConfigListener(probe)
+
+	idleDone := make(chan error, 1)
+	go func() { idleDone <- manager.enterIdle(idleCfg) }()
+	select {
+	case err := <-idleDone:
+		if err != nil {
+			t.Fatalf("enterIdle() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("enterIdle deadlocked while config listener synchronously called SetConfig")
+	}
+	if err := <-probe.result; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func (l *recordingConfigListener) OnConfigUpdate(cfg *config.Config) {
 	*l.events = append(*l.events, "notify")
 	l.lastRaw = cfg
@@ -152,8 +497,10 @@ func TestReloadTransactionSuccessOrdersLifecycleBeforeConfigNotification(t *test
 		},
 	}
 	lifecycle := &recordingReloadListener{manager: manager, events: &events}
+	intentListener := &recordingReloadIntentListener{}
 	configListener := &recordingConfigListener{events: &events}
 	manager.AddReloadLifecycleListener(lifecycle)
+	manager.AddReloadLifecycleListener(intentListener)
 	manager.AddConfigListener(configListener)
 
 	if err := manager.Reload(newCfg); err != nil {
@@ -171,6 +518,13 @@ func TestReloadTransactionSuccessOrdersLifecycleBeforeConfigNotification(t *test
 	if !reflect.DeepEqual(events, wantEvents) {
 		t.Fatalf("reload events = %v, want %v", events, wantEvents)
 	}
+	intentListener.mu.Lock()
+	prepareActive := intentListener.prepareActive
+	active := intentListener.active
+	intentListener.mu.Unlock()
+	if prepareActive != 1 || active != 0 {
+		t.Fatalf("reload intent lifecycle = prepare-active:%d active:%d, want 1/0", prepareActive, active)
+	}
 	if manager.currentBox != candidate {
 		t.Fatal("candidate box was not published before reload completion")
 	}
@@ -186,6 +540,355 @@ func TestReloadTransactionSuccessOrdersLifecycleBeforeConfigNotification(t *test
 	newCfg.Mode = "mutated-after-reload"
 	if manager.cfg.Mode != "hybrid" || manager.lastAppliedCfg.Mode != "hybrid" {
 		t.Fatal("committed config snapshots changed after caller mutation")
+	}
+}
+
+func TestReloadWithPortMapAndEphemeralNodesPublishesAfterSuccessfulReload(t *testing.T) {
+	monitorMgr, err := monitor.NewManager(monitor.Config{})
+	if err != nil {
+		t.Fatalf("monitor.NewManager() error = %v", err)
+	}
+	defer monitorMgr.Stop()
+	managementEnabled := false
+
+	oldCfg := &config.Config{
+		Mode:       "pool",
+		Nodes:      []config.NodeConfig{{Name: "old", URI: "http://old.example:80"}},
+		Management: config.ManagementConfig{Enabled: &managementEnabled},
+	}
+	newCfg := &config.Config{
+		Mode:       "pool",
+		Nodes:      []config.NodeConfig{{Name: "new", URI: "http://new.example:80"}},
+		Management: config.ManagementConfig{Enabled: &managementEnabled},
+	}
+	oldEphemeral := []config.NodeConfig{{Name: "ephemeral-old", URI: "http://ephemeral-old.example:80"}}
+	newEphemeral := []config.NodeConfig{{Name: "ephemeral-new", URI: "http://ephemeral-new.example:80"}}
+	manager := &Manager{
+		baseCtx:         context.Background(),
+		cfg:             oldCfg,
+		currentBox:      &fakeManagedBox{name: "old"},
+		lastAppliedCfg:  snapshotConfig(oldCfg),
+		lastAppliedMode: oldCfg.Mode,
+		monitorMgr:      monitorMgr,
+		logger:          defaultLogger{},
+		boxFactory: func(context.Context, *config.Config) (managedBox, error) {
+			handle := monitorMgr.Register(monitor.NodeInfo{Tag: "new", Name: "new"})
+			handle.SetProbe(func(context.Context) (time.Duration, error) {
+				return time.Millisecond, nil
+			})
+			return &fakeManagedBox{name: "candidate"}, nil
+		},
+		ephemeralNodes: cloneNodes(oldEphemeral),
+	}
+	lifecycle := &blockingCompleteReloadListener{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	manager.AddReloadLifecycleListener(lifecycle)
+	commitProbe := &ephemeralCommitProbe{
+		manager: manager,
+		seen:    make(chan []config.NodeConfig, 1),
+	}
+	manager.AddConfigListener(commitProbe)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- manager.ReloadWithPortMapAndEphemeralNodes(newCfg, nil, newEphemeral)
+	}()
+	select {
+	case <-lifecycle.entered:
+	case <-time.After(time.Second):
+		t.Fatal("reload did not reach CompleteReload")
+	}
+
+	manager.mu.RLock()
+	beforeCommit := cloneNodes(manager.ephemeralNodes)
+	manager.mu.RUnlock()
+	if !reflect.DeepEqual(beforeCommit, oldEphemeral) {
+		t.Fatalf("ephemeral nodes published before reload completed: got %+v, want %+v", beforeCommit, oldEphemeral)
+	}
+
+	close(lifecycle.release)
+	if err := <-done; err != nil {
+		t.Fatalf("ReloadWithPortMapAndEphemeralNodes() error = %v", err)
+	}
+	manager.mu.RLock()
+	afterCommit := cloneNodes(manager.ephemeralNodes)
+	manager.mu.RUnlock()
+	if !reflect.DeepEqual(afterCommit, newEphemeral) {
+		t.Fatalf("ephemeral nodes after successful reload = %+v, want %+v", afterCommit, newEphemeral)
+	}
+	if seen := <-commitProbe.seen; !reflect.DeepEqual(seen, newEphemeral) {
+		t.Fatalf("config listener observed ephemeral nodes %+v, want committed %+v", seen, newEphemeral)
+	}
+}
+
+func TestReloadWithPortMapAndEphemeralNodesKeepsOldOnReloadFailure(t *testing.T) {
+	oldCfg := &config.Config{
+		Mode:  "pool",
+		Nodes: []config.NodeConfig{{Name: "old", URI: "http://old.example:80"}},
+	}
+	newCfg := &config.Config{
+		Mode:  "pool",
+		Nodes: []config.NodeConfig{{Name: "new", URI: "http://new.example:80"}},
+	}
+	oldEphemeral := []config.NodeConfig{{Name: "ephemeral-old", URI: "http://ephemeral-old.example:80"}}
+	newEphemeral := []config.NodeConfig{{Name: "ephemeral-new", URI: "http://ephemeral-new.example:80"}}
+	startErr := errors.New("candidate start failed")
+	manager := &Manager{
+		baseCtx:         context.Background(),
+		cfg:             oldCfg,
+		currentBox:      &fakeManagedBox{name: "old"},
+		lastAppliedCfg:  snapshotConfig(oldCfg),
+		lastAppliedMode: oldCfg.Mode,
+		logger:          defaultLogger{},
+		boxFactory: func(context.Context, *config.Config) (managedBox, error) {
+			return &fakeManagedBox{name: "candidate", startErr: startErr}, nil
+		},
+		ephemeralNodes: cloneNodes(oldEphemeral),
+	}
+
+	err := manager.ReloadWithPortMapAndEphemeralNodes(newCfg, nil, newEphemeral)
+	if err == nil || !strings.Contains(err.Error(), startErr.Error()) {
+		t.Fatalf("ReloadWithPortMapAndEphemeralNodes() error = %v, want candidate start failure", err)
+	}
+	manager.mu.RLock()
+	got := cloneNodes(manager.ephemeralNodes)
+	manager.mu.RUnlock()
+	if !reflect.DeepEqual(got, oldEphemeral) {
+		t.Fatalf("ephemeral nodes changed after failed reload: got %+v, want %+v", got, oldEphemeral)
+	}
+}
+
+func TestNodeMutationWaitsForReloadCommit(t *testing.T) {
+	oldCfg := &config.Config{Mode: "pool", Nodes: []config.NodeConfig{{Name: "old", URI: "http://old.example:80"}}}
+	newCfg := &config.Config{Mode: "pool", Nodes: []config.NodeConfig{{Name: "new", URI: "http://new.example:80"}}}
+	oldBox := &fakeManagedBox{name: "old"}
+	candidate := &fakeManagedBox{name: "candidate"}
+	manager := &Manager{
+		baseCtx:        context.Background(),
+		cfg:            oldCfg,
+		currentBox:     oldBox,
+		lastAppliedCfg: snapshotConfig(oldCfg),
+		logger:         defaultLogger{},
+		boxFactory: func(context.Context, *config.Config) (managedBox, error) {
+			return candidate, nil
+		},
+	}
+	lifecycle := &blockingCompleteReloadListener{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	manager.AddReloadLifecycleListener(lifecycle)
+
+	reloadDone := make(chan error, 1)
+	go func() { reloadDone <- manager.Reload(newCfg) }()
+	select {
+	case <-lifecycle.entered:
+	case <-time.After(time.Second):
+		t.Fatal("reload did not reach CompleteReload")
+	}
+
+	createDone := make(chan error, 1)
+	go func() {
+		_, err := manager.CreateNode(context.Background(), config.NodeConfig{
+			Name: "late",
+			URI:  "http://late.example:80",
+		})
+		createDone <- err
+	}()
+	select {
+	case err := <-createDone:
+		t.Fatalf("CreateNode completed before reload commit: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(lifecycle.release)
+	if err := <-reloadDone; err != nil {
+		t.Fatalf("Reload() error = %v", err)
+	}
+	if err := <-createDone; err != nil {
+		t.Fatalf("CreateNode() error = %v", err)
+	}
+
+	if len(manager.lastAppliedCfg.Nodes) != 1 || manager.lastAppliedCfg.Nodes[0].Name != "new" {
+		t.Fatalf("last-applied nodes were polluted by the late mutation: %+v", manager.lastAppliedCfg.Nodes)
+	}
+}
+
+func TestTriggerReloadCapturesConfigAfterReloadSerialization(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	oldYAML := []byte("mode: pool\nskip_cert_verify: false\nmanagement:\n  enabled: false\nnodes: []\n")
+	if err := os.WriteFile(configPath, oldYAML, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	oldCfg := &config.Config{Mode: "pool"}
+	oldCfg.SetFilePath(configPath)
+	oldBox := &fakeManagedBox{name: "old"}
+	manager := &Manager{
+		baseCtx:             context.Background(),
+		cfg:                 oldCfg,
+		currentBox:          oldBox,
+		lastAppliedCfg:      snapshotConfig(oldCfg),
+		lastAppliedMode:     oldCfg.Mode,
+		lastAppliedBasePort: oldCfg.MultiPort.BasePort,
+		logger:              defaultLogger{},
+		portReleaseDelay:    0,
+	}
+	intentListener := &signalingReloadIntentListener{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	manager.AddReloadLifecycleListener(intentListener)
+
+	reloadDone := make(chan error, 1)
+	go func() { reloadDone <- manager.TriggerReload(context.Background()) }()
+	select {
+	case <-intentListener.started:
+	case <-time.After(time.Second):
+		t.Fatal("TriggerReload did not begin its reload intent")
+	}
+	manager.reloadMu.Lock()
+	close(intentListener.release)
+	// The reload mutex is deliberately held by the test. A correct TriggerReload
+	// must wait before reading disk, so this edit is the authoritative target.
+	time.Sleep(100 * time.Millisecond)
+	newYAML := []byte("mode: pool\nskip_cert_verify: true\nmanagement:\n  enabled: false\nnodes: []\n")
+	if err := os.WriteFile(configPath, newYAML, 0o644); err != nil {
+		manager.reloadMu.Unlock()
+		t.Fatalf("WriteFile() updated config error = %v", err)
+	}
+	manager.reloadMu.Unlock()
+
+	select {
+	case err := <-reloadDone:
+		if err != nil {
+			t.Fatalf("TriggerReload() error = %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("TriggerReload did not finish")
+	}
+	manager.mu.RLock()
+	capturedSkip := manager.cfg != nil && manager.cfg.SkipCertVerify
+	manager.mu.RUnlock()
+	if !capturedSkip {
+		t.Fatal("TriggerReload captured the config before acquiring reload serialization")
+	}
+}
+
+func TestTriggerReloadRechecksCanceledContextAfterSerializationWait(t *testing.T) {
+	manager := &Manager{
+		baseCtx:        context.Background(),
+		cfg:            &config.Config{Mode: "pool"},
+		currentBox:     &fakeManagedBox{name: "old"},
+		lastAppliedCfg: &config.Config{Mode: "pool"},
+		logger:         defaultLogger{},
+	}
+	manager.reloadMu.Lock()
+	ctx, cancel := context.WithCancel(context.Background())
+	reloadDone := make(chan error, 1)
+	go func() { reloadDone <- manager.TriggerReload(ctx) }()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	manager.reloadMu.Unlock()
+
+	select {
+	case err := <-reloadDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("TriggerReload() error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("TriggerReload did not return after serialization wait was released")
+	}
+}
+
+func TestTriggerReloadWithEphemeralNodesClearsOnlyAfterIdleCommit(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte("mode: pool\nmanagement:\n  enabled: false\nnodes: []\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	oldCfg := &config.Config{
+		Mode:  "pool",
+		Nodes: []config.NodeConfig{{Name: "old-runtime", URI: "http://old-runtime.example:80"}},
+	}
+	oldCfg.SetFilePath(configPath)
+	oldEphemeral := []config.NodeConfig{{Name: "old-runtime", URI: "http://old-runtime.example:80"}}
+	manager := &Manager{
+		baseCtx:        context.Background(),
+		cfg:            oldCfg,
+		currentBox:     &fakeManagedBox{name: "old"},
+		lastAppliedCfg: snapshotConfig(oldCfg),
+		ephemeralNodes: cloneNodes(oldEphemeral),
+		logger:         defaultLogger{},
+	}
+	lifecycle := &blockingCompleteReloadListener{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	manager.AddReloadLifecycleListener(lifecycle)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- manager.TriggerReloadWithEphemeralNodes(context.Background(), nil)
+	}()
+	select {
+	case <-lifecycle.entered:
+	case <-time.After(time.Second):
+		t.Fatal("idle reload did not reach CompleteReload")
+	}
+	manager.mu.RLock()
+	beforeCommit := cloneNodes(manager.ephemeralNodes)
+	manager.mu.RUnlock()
+	if !reflect.DeepEqual(beforeCommit, oldEphemeral) {
+		t.Fatalf("ephemeral nodes cleared before idle reload committed: got %+v, want %+v", beforeCommit, oldEphemeral)
+	}
+
+	close(lifecycle.release)
+	if err := <-done; err != nil {
+		t.Fatalf("TriggerReloadWithEphemeralNodes() error = %v", err)
+	}
+	manager.mu.RLock()
+	afterCommit := cloneNodes(manager.ephemeralNodes)
+	manager.mu.RUnlock()
+	if len(afterCommit) != 0 {
+		t.Fatalf("ephemeral nodes after idle commit = %+v, want empty", afterCommit)
+	}
+}
+
+func TestTriggerReloadWithEphemeralNodesKeepsOldOnIdleFailure(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte("mode: pool\nmanagement:\n  enabled: false\nnodes: []\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	oldCfg := &config.Config{
+		Mode:  "pool",
+		Nodes: []config.NodeConfig{{Name: "old-runtime", URI: "http://old-runtime.example:80"}},
+	}
+	oldCfg.SetFilePath(configPath)
+	oldEphemeral := []config.NodeConfig{{Name: "old-runtime", URI: "http://old-runtime.example:80"}}
+	prepareErr := errors.New("idle candidate rejected")
+	manager := &Manager{
+		baseCtx:        context.Background(),
+		cfg:            oldCfg,
+		currentBox:     &fakeManagedBox{name: "old"},
+		lastAppliedCfg: snapshotConfig(oldCfg),
+		ephemeralNodes: cloneNodes(oldEphemeral),
+		logger:         defaultLogger{},
+	}
+	manager.AddReloadLifecycleListener(&recordingReloadListener{
+		events:     &[]string{},
+		prepareErr: prepareErr,
+	})
+
+	err := manager.TriggerReloadWithEphemeralNodes(context.Background(), nil)
+	if !errors.Is(err, prepareErr) {
+		t.Fatalf("TriggerReloadWithEphemeralNodes() error = %v, want %v", err, prepareErr)
+	}
+	manager.mu.RLock()
+	got := cloneNodes(manager.ephemeralNodes)
+	manager.mu.RUnlock()
+	if !reflect.DeepEqual(got, oldEphemeral) {
+		t.Fatalf("ephemeral nodes changed after failed idle reload: got %+v, want %+v", got, oldEphemeral)
 	}
 }
 
@@ -309,6 +1012,74 @@ func TestReloadCandidateStartFailureClosesCandidateAndRestoresOld(t *testing.T) 
 	}
 	if failedIndex == -1 || notifyIndex == -1 || failedIndex > notifyIndex {
 		t.Fatalf("failure/config notification order = %v, want failed before notify", events)
+	}
+}
+
+func TestReloadRefreshesRollbackSnapshotAfterPrepareWait(t *testing.T) {
+	startErr := errors.New("candidate start failed")
+	oldCfg := &config.Config{
+		Mode:  "pool",
+		Nodes: []config.NodeConfig{{Name: "old"}},
+		Routing: config.RoutingConfig{
+			FinalPolicy: "PROXY",
+		},
+	}
+	hotCfg := snapshotConfig(oldCfg)
+	hotCfg.Routing.FinalPolicy = "DIRECT"
+	hotCfg.Routing.Rules = []string{"DOMAIN-SUFFIX,hot.example,DIRECT"}
+	newCfg := &config.Config{
+		Mode:  "hybrid",
+		Nodes: []config.NodeConfig{{Name: "new"}},
+		Routing: config.RoutingConfig{
+			FinalPolicy: "PROXY",
+		},
+	}
+	candidate := &fakeManagedBox{name: "candidate", startErr: startErr}
+	restored := &fakeManagedBox{name: "restored"}
+	createdPolicies := []string{}
+	boxes := []managedBox{candidate, restored}
+	manager := &Manager{
+		baseCtx:          context.Background(),
+		cfg:              oldCfg,
+		currentBox:       &fakeManagedBox{name: "old"},
+		lastAppliedCfg:   snapshotConfig(oldCfg),
+		logger:           defaultLogger{},
+		portReleaseDelay: 0,
+		boxFactory: func(_ context.Context, cfg *config.Config) (managedBox, error) {
+			createdPolicies = append(createdPolicies, cfg.Routing.FinalPolicy)
+			box := boxes[0]
+			boxes = boxes[1:]
+			return box, nil
+		},
+	}
+	prepare := &blockingPrepareReloadListener{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	manager.AddReloadLifecycleListener(prepare)
+
+	reloadDone := make(chan error, 1)
+	go func() { reloadDone <- manager.Reload(newCfg) }()
+	select {
+	case <-prepare.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("reload did not enter PrepareReload")
+	}
+
+	manager.RecordAppliedConfig(hotCfg)
+	close(prepare.release)
+
+	select {
+	case err := <-reloadDone:
+		if !errors.Is(err, startErr) {
+			t.Fatalf("Reload() error = %v, want candidate start error", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Reload() did not finish")
+	}
+
+	if !reflect.DeepEqual(createdPolicies, []string{"PROXY", "DIRECT"}) {
+		t.Fatalf("factory policies = %v, want candidate PROXY then hot-applied DIRECT rollback", createdPolicies)
 	}
 }
 
@@ -964,6 +1735,110 @@ func TestStartCapturesIndependentLastAppliedSnapshot(t *testing.T) {
 	}
 }
 
+func TestRecordAppliedConfigRefreshesIndependentRollbackSnapshot(t *testing.T) {
+	oldUseDefaults := true
+	appliedUseDefaults := false
+	oldCfg := &config.Config{
+		Mode:      "pool",
+		MultiPort: config.MultiPortConfig{BasePort: 25000},
+		Nodes:     []config.NodeConfig{{Name: "old-node", URI: "http://old.example:80"}},
+		Routing: config.RoutingConfig{
+			Enabled:         true,
+			DefaultStrategy: "stable",
+			UseDefaultRules: &oldUseDefaults,
+			FinalPolicy:     "PROXY",
+			Rules:           []string{"MATCH,PROXY"},
+			RuleProviders:   []config.RuleProvider{{URL: "https://old.example/rules.txt", Policy: "PROXY"}},
+			Session:         config.SessionConfig{TTL: 10 * time.Minute},
+		},
+		GeoIP: config.GeoIPConfig{
+			Enabled:            false,
+			DatabasePath:       "old.mmdb",
+			Listen:             "127.0.0.1",
+			Port:               24000,
+			AutoUpdateEnabled:  false,
+			AutoUpdateInterval: 24 * time.Hour,
+		},
+	}
+	appliedCfg := &config.Config{
+		Mode:      "hybrid",
+		MultiPort: config.MultiPortConfig{BasePort: 33000},
+		Nodes:     []config.NodeConfig{{Name: "new-node", URI: "http://new.example:80"}},
+		Routing: config.RoutingConfig{
+			Enabled:         true,
+			DefaultStrategy: "session",
+			UseDefaultRules: &appliedUseDefaults,
+			FinalPolicy:     "DIRECT",
+			Rules:           []string{"DOMAIN-SUFFIX,hot.example,DIRECT"},
+			RuleProviders:   []config.RuleProvider{{URL: "https://hot.example/rules.txt", Policy: "DIRECT"}},
+			Session:         config.SessionConfig{TTL: 20 * time.Minute},
+			LongLived: config.LongLivedConfig{
+				MinUptime:      3 * time.Hour,
+				MinSuccessRate: 0.8,
+			},
+		},
+		GeoIP: config.GeoIPConfig{
+			Enabled:            true,
+			DatabasePath:       "hot.mmdb",
+			Listen:             "0.0.0.0",
+			Port:               25000,
+			AutoUpdateEnabled:  true,
+			AutoUpdateInterval: time.Hour,
+		},
+	}
+	manager := &Manager{
+		lastAppliedCfg:      snapshotConfig(oldCfg),
+		lastAppliedIdle:     true,
+		lastAppliedMode:     oldCfg.Mode,
+		lastAppliedBasePort: oldCfg.MultiPort.BasePort,
+	}
+
+	manager.RecordAppliedConfig(appliedCfg)
+
+	if manager.lastAppliedCfg == nil || manager.lastAppliedCfg == appliedCfg {
+		t.Fatalf("rollback config is not an independent snapshot: source=%p recorded=%p", appliedCfg, manager.lastAppliedCfg)
+	}
+	if manager.lastAppliedCfg.Mode != oldCfg.Mode || manager.lastAppliedCfg.MultiPort.BasePort != oldCfg.MultiPort.BasePort {
+		t.Fatalf("rollback topology = %s/%d, want unapplied topology %s/%d", manager.lastAppliedCfg.Mode, manager.lastAppliedCfg.MultiPort.BasePort, oldCfg.Mode, oldCfg.MultiPort.BasePort)
+	}
+	if manager.lastAppliedMode != oldCfg.Mode || manager.lastAppliedBasePort != oldCfg.MultiPort.BasePort {
+		t.Fatalf("topology markers = %s/%d, want %s/%d", manager.lastAppliedMode, manager.lastAppliedBasePort, oldCfg.Mode, oldCfg.MultiPort.BasePort)
+	}
+	if manager.lastAppliedCfg.Nodes[0].Name != oldCfg.Nodes[0].Name {
+		t.Fatalf("rollback nodes changed before reload: %+v", manager.lastAppliedCfg.Nodes)
+	}
+	if manager.lastAppliedCfg.Routing.Session.TTL != oldCfg.Routing.Session.TTL {
+		t.Fatalf("rollback session TTL = %s, want unapplied %s", manager.lastAppliedCfg.Routing.Session.TTL, oldCfg.Routing.Session.TTL)
+	}
+	if manager.lastAppliedCfg.Routing.FinalPolicy != appliedCfg.Routing.FinalPolicy ||
+		manager.lastAppliedCfg.Routing.DefaultStrategy != appliedCfg.Routing.DefaultStrategy ||
+		manager.lastAppliedCfg.Routing.UseDefaultRules == nil || *manager.lastAppliedCfg.Routing.UseDefaultRules ||
+		manager.lastAppliedCfg.Routing.Rules[0] != appliedCfg.Routing.Rules[0] ||
+		manager.lastAppliedCfg.Routing.RuleProviders[0].URL != appliedCfg.Routing.RuleProviders[0].URL ||
+		manager.lastAppliedCfg.Routing.LongLived.MinUptime != appliedCfg.Routing.LongLived.MinUptime {
+		t.Fatalf("hot-applied routing fields were not merged: %+v", manager.lastAppliedCfg.Routing)
+	}
+	if !manager.lastAppliedCfg.GeoIP.Enabled || manager.lastAppliedCfg.GeoIP.DatabasePath != appliedCfg.GeoIP.DatabasePath {
+		t.Fatalf("hot-applied GeoIP engine fields were not merged: %+v", manager.lastAppliedCfg.GeoIP)
+	}
+	if manager.lastAppliedCfg.GeoIP.Listen != oldCfg.GeoIP.Listen ||
+		manager.lastAppliedCfg.GeoIP.Port != oldCfg.GeoIP.Port ||
+		manager.lastAppliedCfg.GeoIP.AutoUpdateEnabled != oldCfg.GeoIP.AutoUpdateEnabled ||
+		manager.lastAppliedCfg.GeoIP.AutoUpdateInterval != oldCfg.GeoIP.AutoUpdateInterval {
+		t.Fatalf("structural GeoIP fields changed before reload: %+v", manager.lastAppliedCfg.GeoIP)
+	}
+	if !manager.lastAppliedIdle {
+		t.Fatal("recording a hot-applied config changed the active idle state")
+	}
+
+	appliedCfg.Mode = "mutated"
+	appliedCfg.Routing.Rules[0] = "MATCH,PROXY"
+	appliedCfg.Routing.RuleProviders[0].URL = "https://mutated.example/rules.txt"
+	if manager.lastAppliedCfg.Mode != "pool" || manager.lastAppliedCfg.Nodes[0].Name != "old-node" || manager.lastAppliedCfg.Routing.Rules[0] != "DOMAIN-SUFFIX,hot.example,DIRECT" || manager.lastAppliedCfg.Routing.RuleProviders[0].URL != "https://hot.example/rules.txt" {
+		t.Fatalf("rollback snapshot changed with caller mutation: %+v", manager.lastAppliedCfg)
+	}
+}
+
 func TestReloadRollbackAdvancesMonitorGenerationAndSweepsCandidateNodes(t *testing.T) {
 	monitorMgr, err := monitor.NewManager(monitor.Config{})
 	if err != nil {
@@ -1270,6 +2145,40 @@ func TestListConfigNodesExcludesRuntimeStoreNodes(t *testing.T) {
 	}
 	if nodes[0].URI != manualNode.URI || nodes[0].Source != config.NodeSourceManual {
 		t.Fatalf("expected manual node only, got %+v", nodes[0])
+	}
+}
+
+func TestCreateNodeWaitsForConfigWriter(t *testing.T) {
+	cfg := &config.Config{Mode: "pool"}
+	manager := &Manager{cfg: cfg, logger: defaultLogger{}}
+	cfg.Lock()
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		close(started)
+		_, err := manager.CreateNode(context.Background(), config.NodeConfig{
+			Name: "locked-node",
+			URI:  "http://locked.example:80",
+		})
+		done <- err
+	}()
+	<-started
+
+	select {
+	case err := <-done:
+		cfg.Unlock()
+		t.Fatalf("CreateNode mutated config while the write lock was held: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	cfg.Unlock()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("CreateNode() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("CreateNode did not resume after the config write lock was released")
 	}
 }
 

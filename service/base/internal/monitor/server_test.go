@@ -118,6 +118,29 @@ func TestConnectorHandlerKeepsDependencySnapshotAcrossManagerReplacement(t *test
 	}
 }
 
+func TestConnectorMutationIsRejectedDuringReloadWindow(t *testing.T) {
+	mgr, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	defer mgr.Stop()
+	server := NewServer(Config{}, mgr, log.New(io.Discard, "", 0))
+	connectorMgr := &swappingConnectorManager{}
+	server.SetConnectorManager(connectorMgr)
+	server.BeginReloadWindow()
+	defer server.EndReloadWindow()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/connectors/config", strings.NewReader(`{"name":"connector","input":"https://example.com/sub"}`))
+	rec := httptest.NewRecorder()
+	server.handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("POST status = %d, want 409: %s", rec.Code, rec.Body.String())
+	}
+	if got := connectorMgr.createCalls.Load(); got != 0 {
+		t.Fatalf("connector manager create calls = %d, want 0", got)
+	}
+}
+
 func TestListenerTransitionAppliesTargetConfigBeforeActivationAndRestoresOnRollback(t *testing.T) {
 	mgr, err := NewManager(Config{})
 	if err != nil {
@@ -703,6 +726,64 @@ func TestUpdateAllSettingsPropagatesSkipCertVerifyToManager(t *testing.T) {
 	}
 }
 
+func TestUpdateAllSettingsSaveFailureDoesNotMutateRuntimeConfig(t *testing.T) {
+	cfg := &config.Config{
+		Mode:      "pool",
+		LogLevel:  "info",
+		Listener:  config.ListenerConfig{Address: "0.0.0.0", Port: 8080, Protocol: "http"},
+		MultiPort: config.MultiPortConfig{Address: "0.0.0.0", BasePort: 10000, Protocol: "http"},
+		Pool:      config.PoolConfig{Mode: "auto", BlacklistDuration: time.Minute},
+		SubscriptionRefresh: config.SubscriptionRefreshConfig{
+			Interval:           time.Minute,
+			Timeout:            30 * time.Second,
+			HealthCheckTimeout: 30 * time.Second,
+			DrainTimeout:       10 * time.Second,
+		},
+		SourceSync: config.SourceSyncConfig{RefreshInterval: time.Minute, RequestTimeout: 30 * time.Second},
+		GeoIP:      config.GeoIPConfig{AutoUpdateInterval: time.Hour},
+		Management: config.ManagementConfig{HealthCheckInterval: time.Minute},
+	}
+	cfg.SetFilePath(filepath.Join(t.TempDir(), "missing", "config.yaml"))
+	mgr, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	server := &Server{cfgSrc: cfg, mgr: mgr, logger: log.New(io.Discard, "", 0)}
+
+	_, err = server.updateAllSettingsWithReload(allSettingsRequest{
+		Mode:                          "hybrid",
+		LogLevel:                      "debug",
+		ListenerAddress:               "127.0.0.1",
+		ListenerPort:                  18080,
+		ListenerProtocol:              "http",
+		MultiPortAddress:              "127.0.0.1",
+		MultiPortBasePort:             20000,
+		MultiPortProtocol:             "http",
+		PoolMode:                      "random",
+		PoolBlacklistDuration:         "2m",
+		SubRefreshInterval:            "2m",
+		SubRefreshTimeout:             "40s",
+		SubRefreshHealthCheckTimeout:  "40s",
+		SubRefreshDrainTimeout:        "20s",
+		SourceSyncRefreshInterval:     "2m",
+		SourceSyncRequestTimeout:      "40s",
+		GeoIPAutoUpdateInterval:       "2h",
+		ManagementHealthCheckInterval: "2m",
+		SkipCertVerify:                true,
+	})
+	if err == nil {
+		t.Fatal("updateAllSettingsWithReload() error = nil, want persistence failure")
+	}
+	cfg.RLock()
+	defer cfg.RUnlock()
+	if cfg.Mode != "pool" || cfg.LogLevel != "info" || cfg.Listener.Port != 8080 || cfg.SkipCertVerify {
+		t.Fatalf("failed save mutated runtime config: mode=%q log=%q port=%d skip=%v", cfg.Mode, cfg.LogLevel, cfg.Listener.Port, cfg.SkipCertVerify)
+	}
+	if mgr.SkipCertVerify() {
+		t.Fatal("failed save mutated monitor manager TLS behavior")
+	}
+}
+
 func TestHandleSettingsReportsReloadRequirement(t *testing.T) {
 	makeServer := func(t *testing.T, initialMode string, initialSkip bool) (*Server, *config.Config) {
 		t.Helper()
@@ -788,7 +869,7 @@ func TestHandleSettingsReportsReloadRequirement(t *testing.T) {
 
 	cases := []testCase{
 		{
-			name:        "skip cert verify only",
+			name:        "skip cert verify requires box reload",
 			initialMode: "pool",
 			initialSkip: false,
 			req: func() allSettingsRequest {
@@ -796,7 +877,7 @@ func TestHandleSettingsReportsReloadRequirement(t *testing.T) {
 				r.SkipCertVerify = true
 				return r
 			}(),
-			wantReload: false,
+			wantReload: true,
 		},
 		{
 			name:        "mode change",
@@ -980,6 +1061,108 @@ func TestUpdateRoutingConfigReloadMatrix(t *testing.T) {
 				t.Fatalf("session ttl = %s, want %s", cfg.Routing.Session.TTL, tt.wantSession)
 			}
 		})
+	}
+}
+
+func TestUpdateRoutingConfigRejectsMalformedProviderBeforePersistence(t *testing.T) {
+	useDefaults := true
+	cfg := &config.Config{}
+	cfg.Routing.Enabled = true
+	cfg.Routing.DefaultStrategy = "stable"
+	cfg.Routing.UseDefaultRules = &useDefaults
+	cfg.Routing.FinalPolicy = "PROXY"
+	cfg.Routing.RuleProviders = []config.RuleProvider{{
+		URL:      "https://rules.example/direct.txt",
+		Policy:   "DIRECT",
+		Behavior: "domain",
+		Interval: time.Hour,
+	}}
+	cfg.Routing.LongLived.MinUptime = 2 * time.Hour
+	cfg.Routing.LongLived.MinSuccessRate = 0.9
+	cfg.Routing.Session.TTL = 10 * time.Minute
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	originalFile := []byte("{}\n")
+	if err := os.WriteFile(configPath, originalFile, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	cfg.SetFilePath(configPath)
+
+	routing := &recordingRoutingController{applyResult: true}
+	server := &Server{
+		cfgSrc:  cfg,
+		routing: routing,
+		logger:  log.New(io.Discard, "", 0),
+	}
+
+	_, err := server.updateRoutingConfig(routingConfigPayload{
+		Enabled:            true,
+		DefaultStrategy:    "stable",
+		UseDefaultRules:    true,
+		FinalPolicy:        "PROXY",
+		RuleProviders:      []routingProviderConfig{{URL: "://invalid", Policy: "DIRECT", Behavior: "domain", Interval: "1h"}},
+		LongLivedMinUptime: "2h",
+		LongLivedMinRate:   0.9,
+		SessionTTL:         "10m",
+	})
+	if err == nil {
+		t.Error("updateRoutingConfig() error = nil, want malformed provider rejection")
+	}
+	if routing.applyCalls != 0 {
+		t.Errorf("hot apply calls = %d, want 0", routing.applyCalls)
+	}
+
+	cfg.RLock()
+	providers := append([]config.RuleProvider(nil), cfg.Routing.RuleProviders...)
+	cfg.RUnlock()
+	if len(providers) != 1 || providers[0].URL != "https://rules.example/direct.txt" {
+		t.Errorf("runtime providers mutated after rejected update: %+v", providers)
+	}
+
+	persisted, readErr := os.ReadFile(configPath)
+	if readErr != nil {
+		t.Fatalf("ReadFile() error = %v", readErr)
+	}
+	if !bytes.Equal(persisted, originalFile) {
+		t.Errorf("config file changed after rejected update:\n%s", persisted)
+	}
+}
+
+func TestUpdateRoutingConfigSaveFailureDoesNotMutateRuntimeConfig(t *testing.T) {
+	useDefaults := true
+	cfg := &config.Config{Routing: config.RoutingConfig{
+		Enabled:         true,
+		DefaultStrategy: "stable",
+		UseDefaultRules: &useDefaults,
+		FinalPolicy:     "PROXY",
+		Rules:           []string{"DOMAIN,old.example,DIRECT"},
+		LongLived:       config.LongLivedConfig{MinUptime: 2 * time.Hour, MinSuccessRate: 0.9},
+		Session:         config.SessionConfig{TTL: 10 * time.Minute},
+	}}
+	cfg.SetFilePath(filepath.Join(t.TempDir(), "missing", "config.yaml"))
+	routing := &recordingRoutingController{applyResult: true}
+	server := &Server{cfgSrc: cfg, routing: routing, logger: log.New(io.Discard, "", 0)}
+
+	_, err := server.updateRoutingConfig(routingConfigPayload{
+		Enabled:            true,
+		DefaultStrategy:    "session",
+		UseDefaultRules:    false,
+		FinalPolicy:        "DIRECT",
+		Rules:              []string{"DOMAIN,new.example,PROXY"},
+		LongLivedMinUptime: "45m",
+		LongLivedMinRate:   0.8,
+		SessionTTL:         "10m",
+	})
+	if err == nil {
+		t.Fatal("updateRoutingConfig() error = nil, want persistence failure")
+	}
+	cfg.RLock()
+	defer cfg.RUnlock()
+	if cfg.Routing.DefaultStrategy != "stable" || cfg.Routing.FinalPolicy != "PROXY" || len(cfg.Routing.Rules) != 1 || cfg.Routing.Rules[0] != "DOMAIN,old.example,DIRECT" {
+		t.Fatalf("failed save mutated routing config: %+v", cfg.Routing)
+	}
+	if routing.applyCalls != 0 {
+		t.Fatalf("failed save hot-applied routing %d times", routing.applyCalls)
 	}
 }
 

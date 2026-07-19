@@ -264,6 +264,7 @@ type entry struct {
 	lastProbeAt        time.Time
 	lastProbeOK        time.Time
 	lastProbe          time.Duration
+	lastProbeSeq       uint64
 	trafficSuccess     int64
 	active             atomic.Int32
 	totalUpload        atomic.Int64
@@ -290,6 +291,8 @@ type periodicProbeRound struct {
 	id         uint64
 	generation Generation
 	probeEpoch uint64
+	probeSeq   uint64
+	gateRev    uint64
 	cancel     context.CancelFunc
 	done       chan struct{}
 }
@@ -310,6 +313,7 @@ type Manager struct {
 	initialProbeMu   sync.Mutex
 	initialProbeDone bool
 	initialProbeCh   chan struct{}
+	initialProbeRev  uint64
 
 	// periodic health check control
 	healthMu        sync.Mutex
@@ -317,8 +321,10 @@ type Manager struct {
 	healthTimeout   time.Duration
 	healthTicker    *time.Ticker
 	healthIntervalC chan time.Duration
+	healthStarted   bool
 
 	probeEpoch   atomic.Uint64
+	nextProbeSeq atomic.Uint64
 	probeRoundMu sync.Mutex
 	probeRound   *periodicProbeRound
 	exclusive    *periodicProbeRound
@@ -343,6 +349,7 @@ func NewManager(cfg Config) (*Manager, error) {
 		cancel:           cancel,
 		initialProbeCh:   make(chan struct{}),
 		initialProbeDone: false,
+		initialProbeRev:  1,
 	}
 	if specs, err := parseProbeTargets(cfg.ProbeTargets, cfg.ProbeTarget); err == nil && len(specs) > 0 {
 		m.probeSpecs = specs
@@ -447,15 +454,6 @@ func (m *Manager) SetLogger(logger Logger) {
 // interval: how often to check (e.g., 30 * time.Second)
 // timeout: timeout for each probe (e.g., 10 * time.Second)
 func (m *Manager) StartPeriodicHealthCheck(interval, timeout time.Duration) {
-	m.mu.RLock()
-	probeReady := m.probeReady
-	m.mu.RUnlock()
-	if !probeReady {
-		if m.logger != nil {
-			m.logger.Warn("probe target not configured, periodic health check disabled")
-		}
-		return
-	}
 	if interval <= 0 {
 		interval = 2 * time.Hour
 	}
@@ -467,19 +465,43 @@ func (m *Manager) StartPeriodicHealthCheck(interval, timeout time.Duration) {
 	if m.healthIntervalC == nil {
 		m.healthIntervalC = make(chan time.Duration, 1)
 	}
+	alreadyStarted := m.healthStarted
 	m.healthInterval = interval
 	m.healthTimeout = timeout
+	intervalC := m.healthIntervalC
+	if alreadyStarted {
+		m.healthMu.Unlock()
+		select {
+		case intervalC <- interval:
+		default:
+		}
+		m.mu.RLock()
+		probeReady := m.probeReady
+		m.mu.RUnlock()
+		if probeReady {
+			m.RequestProbeAllOnce(timeout)
+		}
+		return
+	}
 	if m.healthTicker != nil {
 		m.healthTicker.Stop()
 	}
 	m.healthTicker = time.NewTicker(interval)
 	ticker := m.healthTicker
-	intervalC := m.healthIntervalC
+	m.healthStarted = true
 	m.healthMu.Unlock()
+
+	m.mu.RLock()
+	probeReady := m.probeReady
+	m.mu.RUnlock()
 
 	// 启动阶段先同步完成首轮 probe，避免 compat checkout 或 available-only
 	// 视图在 effective 节点尚未建立时抢先拿到空结果。
-	m.probeAllNodes(timeout)
+	if probeReady {
+		m.probeAllNodes(timeout)
+	} else if m.logger != nil {
+		m.logger.Warn("probe target not configured, periodic health check is waiting")
+	}
 
 	go func() {
 		for {
@@ -587,6 +609,8 @@ func (m *Manager) RequestProbeAllOnce(timeout time.Duration) {
 		id:         m.nextRoundID.Add(1),
 		generation: generation,
 		probeEpoch: probeEpoch,
+		probeSeq:   m.nextProbeSeq.Add(1),
+		gateRev:    m.currentInitialProbeRev(),
 		cancel:     cancel,
 		done:       make(chan struct{}),
 	}
@@ -597,7 +621,6 @@ func (m *Manager) RequestProbeAllOnce(timeout time.Duration) {
 
 // probeAllNodes checks all registered nodes concurrently.
 func (m *Manager) probeAllNodes(timeout time.Duration) {
-	defer m.completeInitialProbeGate()
 	m.mu.RLock()
 	generation := m.reloadGen
 	m.mu.RUnlock()
@@ -625,7 +648,15 @@ func (m *Manager) runPeriodicProbeRound(
 		m.clearActiveRoundLocked(round)
 		m.probeRoundMu.Unlock()
 	}()
-	m.probeAllNodesForGeneration(ctx, round.generation, round.id, round.probeEpoch, timeout)
+	m.probeAllNodesForGeneration(
+		ctx,
+		round.generation,
+		round.id,
+		round.probeEpoch,
+		round.probeSeq,
+		round.gateRev,
+		timeout,
+	)
 }
 
 func (m *Manager) setActiveRoundLocked(round *periodicProbeRound) {
@@ -657,10 +688,12 @@ func (m *Manager) probeAllNodesForGeneration(
 	generation Generation,
 	roundID uint64,
 	probeEpoch uint64,
+	probeSeq uint64,
+	gateRev uint64,
 	timeout time.Duration,
 ) {
-	defer m.completeInitialProbeGate()
-	summary, err := m.probeGeneration(ctx, generation, roundID, probeEpoch, timeout)
+	summary, err := m.probeGeneration(ctx, generation, roundID, probeEpoch, probeSeq, timeout)
+	m.completeInitialProbeGateForRound(generation, roundID, probeEpoch, gateRev, err)
 	if err != nil && !errors.Is(err, ErrStaleGeneration) && m.logger != nil {
 		m.logger.Warn("health check failed: ", err)
 	}
@@ -711,6 +744,8 @@ func (m *Manager) ProbeGeneration(
 		id:         m.nextRoundID.Add(1),
 		generation: generation,
 		probeEpoch: m.probeEpoch.Load(),
+		probeSeq:   m.nextProbeSeq.Add(1),
+		gateRev:    m.currentInitialProbeRev(),
 		cancel:     cancel,
 		done:       make(chan struct{}),
 	}
@@ -728,7 +763,22 @@ func (m *Manager) ProbeGeneration(
 		m.clearActiveRoundLocked(round)
 		m.probeRoundMu.Unlock()
 	}()
-	return m.probeGeneration(roundCtx, generation, round.id, round.probeEpoch, timeout)
+	summary, err := m.probeGeneration(
+		roundCtx,
+		generation,
+		round.id,
+		round.probeEpoch,
+		round.probeSeq,
+		timeout,
+	)
+	m.completeInitialProbeGateForRound(
+		generation,
+		round.id,
+		round.probeEpoch,
+		round.gateRev,
+		err,
+	)
+	return summary, err
 }
 
 // cancelProbeRoundsLocked invalidates and drains any automatic probe
@@ -757,6 +807,7 @@ func (m *Manager) probeGeneration(
 	generation Generation,
 	roundID uint64,
 	probeEpoch uint64,
+	probeSeq uint64,
 	timeout time.Duration,
 ) (ProbeSummary, error) {
 	summary := ProbeSummary{Generation: generation}
@@ -816,6 +867,7 @@ func (m *Manager) probeGeneration(
 				task.entry,
 				roundID,
 				probeEpoch,
+				probeSeq,
 				task.probeRevision,
 				latency,
 				probeErr,
@@ -853,6 +905,7 @@ func (m *Manager) applyProbeResult(
 	entry *entry,
 	roundID uint64,
 	probeEpoch uint64,
+	probeSeq uint64,
 	probeRevision uint64,
 	latency time.Duration,
 	probeErr error,
@@ -867,11 +920,14 @@ func (m *Manager) applyProbeResult(
 	}
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
-	if entry.reloadGen != generation || entry.probeRevision != probeRevision {
+	// Invocation order, not network completion order, decides which probe is
+	// authoritative across manual, periodic, and exclusive generation probes.
+	if entry.reloadGen != generation || entry.probeRevision != probeRevision || probeSeq <= entry.lastProbeSeq {
 		return false
 	}
 
 	now := time.Now()
+	entry.lastProbeSeq = probeSeq
 	entry.healthGen = generation
 	entry.lastProbeAt = now
 	entry.initialCheckDone = true
@@ -957,6 +1013,13 @@ func (m *Manager) Stop() {
 	if m.cancel != nil {
 		m.cancel()
 	}
+	m.healthMu.Lock()
+	if m.healthTicker != nil {
+		m.healthTicker.Stop()
+		m.healthTicker = nil
+	}
+	m.healthStarted = false
+	m.healthMu.Unlock()
 	m.probeRoundMu.Lock()
 	m.mu.Lock()
 	m.activeRound = 0
@@ -970,21 +1033,6 @@ func (m *Manager) Stop() {
 // A zero or negative timeout falls back to the active health timeout or a
 // conservative default.
 func (m *Manager) WaitForInitialProbe(timeout time.Duration) error {
-	m.mu.RLock()
-	probeReady := m.probeReady
-	m.mu.RUnlock()
-	if !probeReady {
-		return nil
-	}
-
-	m.initialProbeMu.Lock()
-	if m.initialProbeDone {
-		m.initialProbeMu.Unlock()
-		return nil
-	}
-	ch := m.initialProbeCh
-	m.initialProbeMu.Unlock()
-
 	if timeout <= 0 {
 		m.healthMu.Lock()
 		timeout = m.healthTimeout
@@ -997,13 +1045,43 @@ func (m *Manager) WaitForInitialProbe(timeout time.Duration) error {
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 
-	select {
-	case <-ch:
-		return nil
-	case <-timer.C:
-		return fmt.Errorf("timeout waiting for initial probe completion after %s", timeout)
-	case <-m.ctx.Done():
-		return m.ctx.Err()
+	for {
+		m.mu.RLock()
+		probeReady := m.probeReady
+		m.mu.RUnlock()
+		if !probeReady {
+			return nil
+		}
+
+		m.initialProbeMu.Lock()
+		if m.initialProbeDone {
+			m.initialProbeMu.Unlock()
+			return nil
+		}
+		ch := m.initialProbeCh
+		m.initialProbeMu.Unlock()
+
+		// A target can be cleared between the first readiness check and the
+		// gate snapshot. Re-check so a disabled monitor does not wait on a
+		// newly-created gate that can never be completed.
+		m.mu.RLock()
+		probeReady = m.probeReady
+		m.mu.RUnlock()
+		if !probeReady {
+			return nil
+		}
+
+		select {
+		case <-ch:
+			// The channel may have been closed by a gate reset. Loop back to
+			// observe the current revision/done state instead of treating every
+			// close as successful completion.
+			continue
+		case <-timer.C:
+			return fmt.Errorf("timeout waiting for initial probe completion after %s", timeout)
+		case <-m.ctx.Done():
+			return m.ctx.Err()
+		}
 	}
 }
 
@@ -1053,6 +1131,7 @@ func (m *Manager) BeginReload() Generation {
 	m.reloadGen++
 	generation := m.reloadGen
 	m.activeRound = 0
+	m.resetInitialProbeGate()
 	m.mu.Unlock()
 	m.cancelProbeRoundsLocked()
 	return generation
@@ -1157,20 +1236,53 @@ func (m *Manager) SetLongLivedThresholds(minUptime time.Duration, minRate float6
 func (m *Manager) resetInitialProbeGate() {
 	m.initialProbeMu.Lock()
 	defer m.initialProbeMu.Unlock()
+	m.initialProbeRev++
+	if !m.initialProbeDone && m.initialProbeCh != nil {
+		close(m.initialProbeCh)
+	}
 	m.initialProbeDone = false
 	m.initialProbeCh = make(chan struct{})
 }
 
-func (m *Manager) completeInitialProbeGate() {
+func (m *Manager) currentInitialProbeRev() uint64 {
 	m.initialProbeMu.Lock()
 	defer m.initialProbeMu.Unlock()
-	if m.initialProbeDone {
+	return m.initialProbeRev
+}
+
+func (m *Manager) completeInitialProbeGate(revision uint64) {
+	m.initialProbeMu.Lock()
+	defer m.initialProbeMu.Unlock()
+	if m.initialProbeDone || revision != m.initialProbeRev {
 		return
 	}
 	m.initialProbeDone = true
 	if m.initialProbeCh != nil {
 		close(m.initialProbeCh)
 	}
+}
+
+func (m *Manager) completeInitialProbeGateForRound(
+	generation Generation,
+	roundID uint64,
+	probeEpoch uint64,
+	gateRev uint64,
+	err error,
+) {
+	if err != nil {
+		return
+	}
+	// A reset publishes a new gate revision before cancelling the old round.
+	// Re-check round ownership so a late completion cannot close the new gate.
+	m.mu.RLock()
+	authoritative := generation == m.reloadGen &&
+		probeEpoch == m.probeEpoch.Load() &&
+		m.activeRound == roundID
+	m.mu.RUnlock()
+	if !authoritative {
+		return
+	}
+	m.completeInitialProbeGate(gateRev)
 }
 
 // RestorePersistedState hydrates a registered node with runtime stats loaded
@@ -1249,6 +1361,7 @@ func (m *Manager) SetSkipCertVerify(skip bool) {
 	m.cfg.SkipCertVerify = skip
 	m.activeRound = 0
 	m.probeEpoch.Add(1)
+	m.resetInitialProbeGate()
 	m.mu.Unlock()
 	m.cancelProbeRoundsLocked()
 	m.probeRoundMu.Unlock()
@@ -1271,7 +1384,8 @@ func (m *Manager) UpdateProbeTargets(targets []string, single string) error {
 		m.probeRoundMu.Unlock()
 		return nil
 	}
-	if len(specs) == 0 {
+	probeReady := len(specs) > 0
+	if !probeReady {
 		m.probeSpecs = nil
 		m.probeDst = M.Socksaddr{}
 		m.probeReady = false
@@ -1284,9 +1398,19 @@ func (m *Manager) UpdateProbeTargets(targets []string, single string) error {
 	m.cfg.ProbeTarget = strings.TrimSpace(single)
 	m.activeRound = 0
 	m.probeEpoch.Add(1)
+	m.resetInitialProbeGate()
 	m.mu.Unlock()
 	m.cancelProbeRoundsLocked()
 	m.probeRoundMu.Unlock()
+	if probeReady {
+		m.healthMu.Lock()
+		healthStarted := m.healthStarted
+		healthTimeout := m.healthTimeout
+		m.healthMu.Unlock()
+		if healthStarted {
+			m.RequestProbeAllOnce(healthTimeout)
+		}
+	}
 	return nil
 }
 
@@ -1696,8 +1820,9 @@ func (m *Manager) Probe(ctx context.Context, tag string) (time.Duration, error) 
 	if entryGeneration != generation {
 		return 0, ErrStaleGeneration
 	}
+	probeSeq := m.nextProbeSeq.Add(1)
 	latency, probeErr := probe(ctx)
-	if !m.applyProbeResult(generation, tag, e, 0, probeEpoch, probeRevision, latency, probeErr) {
+	if !m.applyProbeResult(generation, tag, e, 0, probeEpoch, probeSeq, probeRevision, latency, probeErr) {
 		return 0, ErrStaleGeneration
 	}
 	return latency, probeErr
@@ -1970,6 +2095,10 @@ func (e *entry) decActive() {
 	e.active.Add(-1)
 }
 
+func (e *entry) setActiveConnections(active int32) {
+	e.active.Store(active)
+}
+
 func (e *entry) setProbe(fn probeFunc) {
 	e.mu.Lock()
 	e.probe = fn
@@ -2193,6 +2322,15 @@ func (h *EntryHandle) DecActive() {
 		return
 	}
 	h.ref.decActive()
+}
+
+// SetActiveConnections replaces the active connection counter with an exact
+// shared-state snapshot during monitor-entry reattachment.
+func (h *EntryHandle) SetActiveConnections(active int32) {
+	if h == nil || h.ref == nil {
+		return
+	}
+	h.ref.setActiveConnections(active)
 }
 
 // SetProbe assigns a probe function.

@@ -72,6 +72,35 @@ func cloneTestConfig() *Config {
 	return cfg
 }
 
+func TestBuildPortMapWaitsForConfigWriter(t *testing.T) {
+	cfg := &Config{Nodes: []NodeConfig{{URI: "http://node.example:80", Port: 25001}}}
+	cfg.Lock()
+	started := make(chan struct{})
+	done := make(chan map[string]uint16, 1)
+	go func() {
+		close(started)
+		done <- cfg.BuildPortMap()
+	}()
+	<-started
+
+	select {
+	case <-done:
+		cfg.Unlock()
+		t.Fatal("BuildPortMap read nodes while the config write lock was held")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	cfg.Unlock()
+	select {
+	case portMap := <-done:
+		if got := portMap["http://node.example:80"]; got != 25001 {
+			t.Fatalf("port map value = %d, want 25001", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("BuildPortMap did not resume after the config write lock was released")
+	}
+}
+
 func TestConfigCloneDeepCopiesReferenceFields(t *testing.T) {
 	t.Run("extra listeners", func(t *testing.T) {
 		original := cloneTestConfig()

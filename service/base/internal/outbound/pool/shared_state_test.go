@@ -163,3 +163,170 @@ func TestResetSharedStateStoreDetachesPreviousMonitorEntry(t *testing.T) {
 		t.Fatalf("reset registry remained attached to monitor entry: %+v", snap)
 	}
 }
+
+func TestSharedStateAttachEntryReconcilesActiveCount(t *testing.T) {
+	ResetSharedStateStore()
+	defer ResetSharedStateStore()
+
+	mgr, err := monitor.NewManager(monitor.Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	defer mgr.Stop()
+
+	handle := mgr.Register(monitor.NodeInfo{Tag: "node"})
+	for i := 0; i < 5; i++ {
+		handle.IncActive()
+	}
+	state := acquireSharedState("node")
+	state.active.Store(2)
+
+	state.attachEntry(handle)
+	if got := handle.Snapshot().ActiveConnections; got != 2 {
+		t.Fatalf("attached monitor active count = %d, want shared state count 2", got)
+	}
+}
+
+func TestSharedStateAttachEntryReconcilesBlacklist(t *testing.T) {
+	ResetSharedStateStore()
+	defer ResetSharedStateStore()
+
+	mgr, err := monitor.NewManager(monitor.Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	defer mgr.Stop()
+
+	state := acquireSharedState("node")
+	handle := mgr.Register(monitor.NodeInfo{Tag: "node"})
+	until := time.Now().Add(time.Hour)
+	state.mu.Lock()
+	state.blacklisted = true
+	state.blacklistedUntil = until
+	state.mu.Unlock()
+	state.attachEntry(handle)
+	if snap := handle.Snapshot(); !snap.Blacklisted || snap.BlacklistedUntil.IsZero() {
+		t.Fatalf("attached monitor blacklist = %+v, want active blacklist", snap)
+	}
+
+	state.mu.Lock()
+	state.blacklisted = false
+	state.blacklistedUntil = time.Time{}
+	state.mu.Unlock()
+	state.attachEntry(handle)
+	if snap := handle.Snapshot(); snap.Blacklisted {
+		t.Fatalf("attached monitor retained stale blacklist: %+v", snap)
+	}
+}
+
+func TestDetachedOldActiveCloseCannotDecrementReattachedCandidateEntry(t *testing.T) {
+	ResetSharedStateStore()
+	defer ResetSharedStateStore()
+
+	mgr, err := monitor.NewManager(monitor.Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	defer mgr.Stop()
+
+	handle := mgr.Register(monitor.NodeInfo{Tag: "node"})
+	oldState := acquireSharedState("node")
+	oldState.active.Store(1)
+	oldState.attachEntry(handle)
+
+	txn := BeginSharedStateTransaction()
+	candidateState := acquireSharedState("node")
+	candidateState.attachEntry(handle)
+	if got := handle.Snapshot().ActiveConnections; got != 0 {
+		t.Fatalf("candidate attach inherited retired active count = %d, want 0", got)
+	}
+
+	oldState.decActive()
+	if got := handle.Snapshot().ActiveConnections; got != 0 {
+		t.Fatalf("late old close changed candidate active count = %d, want 0", got)
+	}
+	if err := txn.Rollback(); err != nil {
+		t.Fatalf("Rollback() error = %v", err)
+	}
+}
+
+func TestSharedStateAttachEntryReconcilesTrafficTotals(t *testing.T) {
+	ResetSharedStateStore()
+	defer ResetSharedStateStore()
+
+	mgr, err := monitor.NewManager(monitor.Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	defer mgr.Stop()
+
+	handle := mgr.Register(monitor.NodeInfo{Tag: "node"})
+	handle.AddTraffic(100, 200)
+	state := acquireSharedState("node")
+
+	state.attachEntry(handle)
+	if snap := handle.Snapshot(); snap.TotalUpload != 0 || snap.TotalDownload != 0 {
+		t.Fatalf("attached monitor retained stale traffic: upload=%d download=%d, want 0/0", snap.TotalUpload, snap.TotalDownload)
+	}
+}
+
+func TestSharedStateRollbackReattachRestoresOldTrafficTotals(t *testing.T) {
+	ResetSharedStateStore()
+	defer ResetSharedStateStore()
+
+	mgr, err := monitor.NewManager(monitor.Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	defer mgr.Stop()
+
+	handle := mgr.Register(monitor.NodeInfo{Tag: "node"})
+	oldState := acquireSharedState("node")
+	oldState.totalUpload.Store(11)
+	oldState.totalDownload.Store(22)
+	oldState.attachEntry(handle)
+
+	txn := BeginSharedStateTransaction()
+	candidateState := acquireSharedState("node")
+	candidateState.attachEntry(handle)
+	if snap := handle.Snapshot(); snap.TotalUpload != 0 || snap.TotalDownload != 0 {
+		t.Fatalf("candidate attach retained old traffic: upload=%d download=%d, want 0/0", snap.TotalUpload, snap.TotalDownload)
+	}
+	if err := txn.Rollback(); err != nil {
+		t.Fatalf("Rollback() error = %v", err)
+	}
+
+	oldState.attachEntry(handle)
+	if snap := handle.Snapshot(); snap.TotalUpload != 11 || snap.TotalDownload != 22 {
+		t.Fatalf("rollback reattach traffic = upload:%d download:%d, want 11/22", snap.TotalUpload, snap.TotalDownload)
+	}
+}
+
+func TestDetachedOldTrafficCannotMutateReattachedCandidateEntry(t *testing.T) {
+	ResetSharedStateStore()
+	defer ResetSharedStateStore()
+
+	mgr, err := monitor.NewManager(monitor.Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	defer mgr.Stop()
+
+	handle := mgr.Register(monitor.NodeInfo{Tag: "node"})
+	oldState := acquireSharedState("node")
+	oldState.attachEntry(handle)
+	oldState.addTraffic(100, 200)
+
+	txn := BeginSharedStateTransaction()
+	candidateState := acquireSharedState("node")
+	candidateState.attachEntry(handle)
+	candidateState.addTraffic(1, 2)
+
+	oldState.addTraffic(7, 9)
+	if snap := handle.Snapshot(); snap.TotalUpload != 1 || snap.TotalDownload != 2 {
+		t.Fatalf("detached old traffic mutated candidate entry: upload=%d download=%d, want 1/2", snap.TotalUpload, snap.TotalDownload)
+	}
+	if err := txn.Rollback(); err != nil {
+		t.Fatalf("Rollback() error = %v", err)
+	}
+}

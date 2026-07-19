@@ -12,6 +12,8 @@ import (
 
 	"easy_proxies/internal/monitor"
 
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/log"
 	E "github.com/sagernet/sing/common/exceptions"
 	M "github.com/sagernet/sing/common/metadata"
 )
@@ -115,6 +117,123 @@ func (directProbeOutbound) DialContext(ctx context.Context, network string, dest
 }
 func (directProbeOutbound) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
 	return nil, E.New("packet probe unsupported")
+}
+
+type probeOutboundManager struct {
+	outbound adapter.Outbound
+}
+
+func (m *probeOutboundManager) Start(adapter.StartStage) error { return nil }
+func (m *probeOutboundManager) Close() error                   { return nil }
+func (m *probeOutboundManager) Outbounds() []adapter.Outbound  { return []adapter.Outbound{m.outbound} }
+func (m *probeOutboundManager) Outbound(tag string) (adapter.Outbound, bool) {
+	if tag != "probe-node" || m.outbound == nil {
+		return nil, false
+	}
+	return m.outbound, true
+}
+func (m *probeOutboundManager) Default() adapter.Outbound { return m.outbound }
+func (m *probeOutboundManager) Remove(string) error       { return nil }
+func (m *probeOutboundManager) Create(
+	context.Context,
+	adapter.Router,
+	log.ContextLogger,
+	string,
+	string,
+	any,
+) error {
+	return nil
+}
+
+func TestLazyPoolInitializationDoesNotInvalidateFirstProbe(t *testing.T) {
+	ResetSharedStateStore()
+	defer ResetSharedStateStore()
+
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer origin.Close()
+
+	monitorMgr, err := monitor.NewManager(monitor.Config{ProbeTarget: origin.URL})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	defer monitorMgr.Stop()
+
+	p := &poolOutbound{
+		ctx:     context.Background(),
+		logger:  log.NewNOPFactory().Logger(),
+		manager: &probeOutboundManager{outbound: directProbeOutbound{}},
+		monitor: monitorMgr,
+		options: Options{
+			Members: []string{"probe-node"},
+			Metadata: map[string]MemberMeta{
+				"probe-node": {Name: "probe-node"},
+			},
+		},
+	}
+
+	state := acquireSharedState("probe-node")
+	entry := monitorMgr.Register(monitor.NodeInfo{Tag: "probe-node", Name: "probe-node"})
+	state.attachEntry(entry)
+	entry.SetRelease(releaseSharedState(state))
+	entry.SetProbe(p.makeProbeByTagFunc("probe-node"))
+
+	summary, err := monitorMgr.ProbeGeneration(context.Background(), 0, time.Second)
+	if err != nil {
+		t.Fatalf("ProbeGeneration() error = %v", err)
+	}
+	if summary.Total != 1 || summary.Completed != 1 || summary.Available != 1 {
+		t.Fatalf("first lazy probe summary = %+v, want 1 completed and available", summary)
+	}
+	if snap := entry.Snapshot(); !snap.InitialCheckDone || !snap.Available {
+		t.Fatalf("first lazy probe did not publish health: %+v", snap)
+	}
+}
+
+func TestLazyProbeClosureSurvivesProbeTargetAddedLater(t *testing.T) {
+	ResetSharedStateStore()
+	defer ResetSharedStateStore()
+
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer origin.Close()
+
+	monitorMgr, err := monitor.NewManager(monitor.Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	defer monitorMgr.Stop()
+
+	p := &poolOutbound{
+		ctx:     context.Background(),
+		logger:  log.NewNOPFactory().Logger(),
+		manager: &probeOutboundManager{outbound: directProbeOutbound{}},
+		monitor: monitorMgr,
+		options: Options{
+			Members: []string{"probe-node"},
+			Metadata: map[string]MemberMeta{
+				"probe-node": {Name: "probe-node"},
+			},
+		},
+	}
+
+	state := acquireSharedState("probe-node")
+	entry := monitorMgr.Register(monitor.NodeInfo{Tag: "probe-node", Name: "probe-node"})
+	state.attachEntry(entry)
+	entry.SetProbe(p.makeProbeByTagFunc("probe-node"))
+	if err := monitorMgr.UpdateProbeTarget(origin.URL); err != nil {
+		t.Fatalf("UpdateProbeTarget() error = %v", err)
+	}
+
+	summary, err := monitorMgr.ProbeGeneration(context.Background(), 0, time.Second)
+	if err != nil {
+		t.Fatalf("ProbeGeneration() error = %v", err)
+	}
+	if summary.Total != 1 || summary.Completed != 1 || summary.Available != 1 {
+		t.Fatalf("late-target probe summary = %+v, want 1 completed and available", summary)
+	}
 }
 
 func TestPoolProbeCallbackDoesNotMutateMonitorEntryDirectly(t *testing.T) {
