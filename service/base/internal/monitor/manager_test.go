@@ -679,6 +679,22 @@ func TestSetLongLivedThresholdsNormalizesInvalidValues(t *testing.T) {
 	}
 }
 
+func TestLongLivedPolicyUsesRawSnapshot(t *testing.T) {
+	snapshot := Snapshot{
+		EffectiveAvailable:   true,
+		Uptime:               1500 * time.Millisecond,
+		UptimeSeconds:        1,
+		ReportedSuccessCount: 9,
+		ReportedFailureCount: 1,
+	}
+	if !MeetsLongLivedPolicy(snapshot, 1200*time.Millisecond, 0.8) {
+		t.Fatal("snapshot should meet relaxed policy")
+	}
+	if MeetsLongLivedPolicy(snapshot, 2*time.Second, 0.8) {
+		t.Fatal("snapshot should not meet strict uptime policy")
+	}
+}
+
 func TestRecordSuccessWithLatencyClearsLastError(t *testing.T) {
 	manager, err := NewManager(Config{})
 	if err != nil {

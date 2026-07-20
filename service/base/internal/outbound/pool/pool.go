@@ -440,7 +440,7 @@ func (p *poolOutbound) selectMemberWithDirective(
 	if directive.Strategy == StrategyStable && directive.Filter.LongLived == nil {
 		preferredCandidates = p.getCandidateBuffer()
 		for _, member := range candidates {
-			if member.entry != nil && member.entry.Snapshot().LongLived {
+			if p.memberMeetsLongLivedPolicy(member, directive) {
 				preferredCandidates = append(preferredCandidates, member)
 			}
 		}
@@ -470,11 +470,11 @@ func (p *poolOutbound) selectMemberWithDirective(
 		// Existing stable bindings remain valid while their node is still in the
 		// full healthy/filtered set. The long-lived preference only influences a
 		// new binding or promotion after the previous node disappears.
-		return p.sticky.pickStable(directive.Filter.bucketKey(), candidates, fallback)
+		return p.sticky.pickStable(directive.stableBucketKey(), candidates, fallback)
 	case StrategySession:
 		// pickSession treats an empty key as "no stickiness" and just returns
 		// the fallback, so keyless callers never collapse onto one node.
-		return p.sticky.pickSession(directive.SessionKey, selectionCandidates, fallback)
+		return p.sticky.pickSession(directive.namespacedSessionKey(), directive.SessionTTL, selectionCandidates, fallback)
 	default:
 		return fallback
 	}
@@ -503,7 +503,7 @@ func (p *poolOutbound) availableMembersLocked(
 		if network != "" && !common.Contains(member.outbound.Network(), network) {
 			continue
 		}
-		if directive != nil && !p.memberMatchesFilter(member, directive.Filter) {
+		if directive != nil && !p.memberMatchesFilter(member, directive) {
 			continue
 		}
 		if enforceSourceExclusion {
@@ -523,7 +523,11 @@ func (p *poolOutbound) availableMembersLocked(
 // attribute filter (country / region / long-lived). An empty filter matches
 // every member. Country matching accepts either the ISO code or the full
 // country name so callers can pass either form.
-func (p *poolOutbound) memberMatchesFilter(member *memberState, filter NodeFilter) bool {
+func (p *poolOutbound) memberMatchesFilter(member *memberState, directive *SelectionDirective) bool {
+	if directive == nil {
+		return true
+	}
+	filter := directive.Filter
 	if filter.IsZero() {
 		return true
 	}
@@ -559,15 +563,23 @@ func (p *poolOutbound) memberMatchesFilter(member *memberState, filter NodeFilte
 	}
 
 	if filter.LongLived != nil {
-		if member.entry == nil {
-			return !*filter.LongLived
-		}
-		if member.entry.Snapshot().LongLived != *filter.LongLived {
+		if p.memberMeetsLongLivedPolicy(member, directive) != *filter.LongLived {
 			return false
 		}
 	}
 
 	return true
+}
+
+func (p *poolOutbound) memberMeetsLongLivedPolicy(member *memberState, directive *SelectionDirective) bool {
+	if member == nil || member.entry == nil {
+		return false
+	}
+	snapshot := member.entry.Snapshot()
+	if directive != nil && (directive.LongLived.MinUptime > 0 || directive.LongLived.MinSuccessRate > 0) {
+		return monitor.MeetsLongLivedPolicy(snapshot, directive.LongLived.MinUptime, directive.LongLived.MinSuccessRate)
+	}
+	return snapshot.LongLived
 }
 
 func (p *poolOutbound) releaseIfAllBlacklistedLocked(now time.Time) bool {

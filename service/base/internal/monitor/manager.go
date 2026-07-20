@@ -131,6 +131,7 @@ type Snapshot struct {
 	EffectiveAvailable        bool            `json:"effective_available"`
 	AvailabilitySource        string          `json:"availability_source,omitempty"`
 	LongLived                 bool            `json:"long_lived"`
+	Uptime                    time.Duration   `json:"-"`
 	UptimeSeconds             int64           `json:"uptime_seconds"`
 	TotalUpload               int64           `json:"total_upload"`
 	TotalDownload             int64           `json:"total_download"`
@@ -1216,6 +1217,23 @@ func normalizeLongLivedThresholds(minUptime time.Duration, minRate float64) (tim
 	return minUptime, minRate
 }
 
+// MeetsLongLivedPolicy reports whether a raw snapshot satisfies the supplied
+// uptime / success-rate thresholds. Callers should pass the directive-specific
+// thresholds they want to enforce; zero or invalid values fall back to the
+// manager defaults.
+func MeetsLongLivedPolicy(snapshot Snapshot, minUptime time.Duration, minRate float64) bool {
+	if !snapshot.EffectiveAvailable {
+		return false
+	}
+	minUptime, minRate = normalizeLongLivedThresholds(minUptime, minRate)
+	rate := reportedSuccessRate(snapshot.ReportedSuccessCount, snapshot.ReportedFailureCount)
+	uptime := snapshot.Uptime
+	if uptime <= 0 {
+		uptime = time.Duration(snapshot.UptimeSeconds) * time.Second
+	}
+	return uptime >= minUptime && rate >= minRate
+}
+
 // SetLongLivedThresholds updates both future registrations and all currently
 // registered entries without rebuilding sing-box.
 func (m *Manager) SetLongLivedThresholds(minUptime time.Duration, minRate float64) {
@@ -1912,6 +1930,7 @@ func (e *entry) snapshot() Snapshot {
 	if !e.firstSeenAt.IsZero() {
 		uptime := now.Sub(e.firstSeenAt)
 		if uptime > 0 {
+			snap.Uptime = uptime
 			snap.UptimeSeconds = int64(uptime / time.Second)
 		}
 		minUptime := e.longLivedMinUptime
@@ -1922,9 +1941,7 @@ func (e *entry) snapshot() Snapshot {
 		if minRate <= 0 {
 			minRate = defaultLongLivedMinSuccessRate
 		}
-		snap.LongLived = effectiveAvailable &&
-			uptime >= minUptime &&
-			reportedSuccessRate(e.reportSuccess, e.reportFailure) >= minRate
+		snap.LongLived = MeetsLongLivedPolicy(snap, minUptime, minRate)
 	}
 	return snap
 }

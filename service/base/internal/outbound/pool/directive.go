@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
+	"fmt"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Strategy selects how the pool picks a member for a given request.
@@ -49,6 +51,11 @@ type NodeFilter struct {
 	Countries []string // ISO country codes, upper-cased (e.g. "US", "JP")
 	Regions   []string // region codes: jp/kr/us/hk/tw/other
 	LongLived *bool    // nil = no constraint; true = only long-lived nodes
+}
+
+type LongLivedPolicy struct {
+	MinUptime      time.Duration
+	MinSuccessRate float64
 }
 
 // IsZero reports whether the filter imposes no constraint at all.
@@ -112,10 +119,29 @@ func (f NodeFilter) bucketKey() string {
 // SelectionDirective carries per-request / per-session selection intent from
 // the dispatcher into the pool outbound through the dial context.
 type SelectionDirective struct {
-	Strategy   Strategy
-	SessionKey string // session stickiness key (StrategySession)
-	PinnedTag  string // manually requested member tag
-	Filter     NodeFilter
+	ProfileID       string
+	ProfileRevision int64
+	Strategy        Strategy
+	SessionKey      string // session stickiness key (StrategySession)
+	SessionTTL      time.Duration
+	PinnedTag       string // manually requested member tag
+	Filter          NodeFilter
+	LongLived       LongLivedPolicy
+}
+
+func (d SelectionDirective) namespaced(value string) string {
+	if d.ProfileID == "" {
+		return value
+	}
+	return fmt.Sprintf("%s@%d\x00%s", d.ProfileID, d.ProfileRevision, value)
+}
+
+func (d SelectionDirective) namespacedSessionKey() string {
+	return d.namespaced(d.SessionKey)
+}
+
+func (d SelectionDirective) stableBucketKey() string {
+	return d.namespaced(d.Filter.bucketKey())
 }
 
 type directiveCtxKey struct{}

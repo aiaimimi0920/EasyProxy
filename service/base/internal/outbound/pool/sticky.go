@@ -20,16 +20,17 @@ const defaultSessionTTL = 10 * time.Minute
 // the maps cannot grow unbounded while there is traffic, without needing a
 // dedicated cleanup goroutine (the pool can have many instances).
 type stickyState struct {
-	mu        sync.Mutex
-	buckets   map[string]string
-	sessions  map[string]*sessionBinding
-	ttl       time.Duration
-	lastSweep time.Time
+	mu       sync.Mutex
+	buckets  map[string]string
+	sessions map[string]*sessionBinding
+	ttl      time.Duration
+	now      func() time.Time
 }
 
 type sessionBinding struct {
-	tag      string
-	lastSeen time.Time
+	tag       string
+	lastSeen  time.Time
+	expiresAt time.Time
 }
 
 func newStickyState(ttl time.Duration) *stickyState {
@@ -37,10 +38,10 @@ func newStickyState(ttl time.Duration) *stickyState {
 		ttl = defaultSessionTTL
 	}
 	return &stickyState{
-		buckets:   make(map[string]string),
-		sessions:  make(map[string]*sessionBinding),
-		ttl:       ttl,
-		lastSweep: time.Now(),
+		buckets:  make(map[string]string),
+		sessions: make(map[string]*sessionBinding),
+		ttl:      ttl,
+		now:      time.Now,
 	}
 }
 
@@ -79,39 +80,51 @@ func (s *stickyState) pickStable(bucketKey string, candidates []*memberState, fa
 }
 
 // pickSession returns the member bound to the session key. If the bound member
-// is still a valid candidate it is reused (and its idle timer refreshed);
-// otherwise the session is rebound to the fallback. An empty key is treated as
-// "no stickiness" and the fallback is returned without being stored.
-func (s *stickyState) pickSession(key string, candidates []*memberState, fallback *memberState) *memberState {
+// is still a valid candidate it is reused (and its TTL refreshed); otherwise
+// the session is rebound to the fallback. An empty key is treated as "no
+// stickiness" and the fallback is returned without being stored.
+func (s *stickyState) pickSession(key string, ttl time.Duration, candidates []*memberState, fallback *memberState) *memberState {
 	if fallback == nil {
 		return nil
 	}
 	if key == "" {
 		return fallback
 	}
+	if ttl <= 0 {
+		ttl = s.ttl
+	}
+	if ttl <= 0 {
+		ttl = defaultSessionTTL
+	}
 	now := time.Now()
+	if s != nil && s.now != nil {
+		now = s.now()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.sweepLocked(now)
+	s.sweepExpiredLocked(now)
 
 	if binding, ok := s.sessions[key]; ok {
-		if member := candidateByTag(candidates, binding.tag); member != nil {
+		if !binding.expiresAt.IsZero() && !now.Before(binding.expiresAt) {
+			delete(s.sessions, key)
+		} else if member := candidateByTag(candidates, binding.tag); member != nil {
 			binding.lastSeen = now
+			binding.expiresAt = now.Add(ttl)
 			return member
 		}
 	}
-	s.sessions[key] = &sessionBinding{tag: fallback.tag, lastSeen: now}
+	s.sessions[key] = &sessionBinding{tag: fallback.tag, lastSeen: now, expiresAt: now.Add(ttl)}
 	return fallback
 }
 
-// sweepLocked removes expired session bindings. Must hold s.mu.
-func (s *stickyState) sweepLocked(now time.Time) {
-	if now.Sub(s.lastSweep) < s.ttl {
-		return
-	}
-	s.lastSweep = now
+// sweepExpiredLocked removes expired session bindings. Must hold s.mu.
+func (s *stickyState) sweepExpiredLocked(now time.Time) {
 	for key, binding := range s.sessions {
-		if now.Sub(binding.lastSeen) > s.ttl {
+		if binding == nil {
+			delete(s.sessions, key)
+			continue
+		}
+		if !binding.expiresAt.IsZero() && !now.Before(binding.expiresAt) {
 			delete(s.sessions, key)
 		}
 	}
