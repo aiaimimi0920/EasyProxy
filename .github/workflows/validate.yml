@@ -82,6 +82,12 @@ jobs:
         run: |
           npm ci
 
+      - name: Test service/base frontend
+        shell: pwsh
+        working-directory: service/base/frontend
+        run: |
+          npm run test
+
       - name: Lint service/base frontend
         shell: pwsh
         working-directory: service/base/frontend
