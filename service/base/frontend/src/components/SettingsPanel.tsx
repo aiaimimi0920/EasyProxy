@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import type { SettingsData, SourceSyncStatus, SubscriptionStatus } from '../types'
 import { fetchSettings, updateSettings, triggerReload, fetchSubscriptionStatus, fetchSourceSyncStatus, refreshSubscription } from '../api/client'
+import LocalServerSettingsCard from './local-server/LocalServerSettingsCard'
 
 const defaultSettings: SettingsData = {
   mode: 'pool',
@@ -72,6 +73,7 @@ export default function SettingsPanel() {
   // New subscription input
   const [newSubUrl, setNewSubUrl] = useState('')
   const [newFallbackUrl, setNewFallbackUrl] = useState('')
+  const localServerMode = settings.local_server_enabled === true
 
   const refreshRuntimeStatus = useCallback(async () => {
     try {
@@ -297,6 +299,10 @@ export default function SettingsPanel() {
       </div>
 
       <div className="p-4 lg:p-8 space-y-6 max-w-[1200px] mx-auto w-full pb-10 flex-1">
+        <LocalServerSettingsCard
+          onModeChange={(enabled) => setSettings((current) => ({ ...current, local_server_enabled: enabled }))}
+        />
+
         {/* Alerts */}
         {error && (
         <div role="alert" className="alert alert-error alert-soft text-sm">
@@ -449,7 +455,7 @@ export default function SettingsPanel() {
             <p className="label text-base-content/50 mt-1">mixed 表示同端口同时支持 HTTP 与 SOCKS5</p>
           </fieldset>
 
-          <div className="grid grid-cols-2 gap-4 pt-2">
+          {!localServerMode && <div className="grid grid-cols-2 gap-4 pt-2">
             <fieldset className="fieldset">
               <legend className="fieldset-legend font-semibold text-base-content/80">代理用户名</legend>
               <input
@@ -470,7 +476,7 @@ export default function SettingsPanel() {
                 onChange={(e) => updateField('listener_password', e.target.value)}
               />
             </fieldset>
-          </div>
+          </div>}
         </div>
 
         {/* ===== 多端口配置 ===== */}
@@ -524,7 +530,7 @@ export default function SettingsPanel() {
             <p className="label text-base-content/50 mt-1">应用于 multi-port / hybrid 的每个节点入口</p>
           </fieldset>
 
-          <div className="grid grid-cols-2 gap-4 pt-2">
+          {!localServerMode && <div className="grid grid-cols-2 gap-4 pt-2">
             <fieldset className="fieldset">
               <legend className="fieldset-legend font-semibold text-base-content/80">默认用户名</legend>
               <input
@@ -545,7 +551,7 @@ export default function SettingsPanel() {
                 onChange={(e) => updateField('multi_port_password', e.target.value)}
               />
             </fieldset>
-          </div>
+          </div>}
         </div>
 
         {/* ===== 代理池配置 ===== */}
@@ -660,7 +666,7 @@ export default function SettingsPanel() {
             <p className="label text-base-content/50 mt-1">Go duration 格式：如 2h、30m、1h30m（修改后立即生效，无需重载）</p>
           </fieldset>
 
-          <fieldset className="fieldset">
+          {!localServerMode && <fieldset className="fieldset">
             <legend className="fieldset-legend font-semibold text-base-content/80">WebUI 密码</legend>
             <input
               type="text"
@@ -670,7 +676,7 @@ export default function SettingsPanel() {
               onChange={(e) => updateField('management_password', e.target.value)}
             />
             <p className="label text-base-content/50 mt-1">为空则不需要登录密码</p>
-          </fieldset>
+          </fieldset>}
         </div>
 
         {/* ===== GeoIP ===== */}

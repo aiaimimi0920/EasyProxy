@@ -6,6 +6,7 @@ import DebugPanel from './components/DebugPanel'
 import SettingsPanel from './components/SettingsPanel'
 import LoginPage from './components/LoginPage'
 import { checkAuth, getToken, logout } from './api/client'
+import type { AuthResponse } from './types'
 import packageJson from '../package.json'
 
 type AuthState = 'loading' | 'need_login' | 'authenticated'
@@ -125,6 +126,7 @@ function getTabFromHash(): TabId {
 function App() {
   const [activeTab, setActiveTab] = useState<TabId>(getTabFromHash)
   const [authState, setAuthState] = useState<AuthState>('loading')
+  const [authInfo, setAuthInfo] = useState<AuthResponse | null>(null)
   const [theme, setTheme] = useState(getInitialTheme)
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
@@ -140,39 +142,46 @@ function App() {
     localStorage.setItem(THEME_STORAGE_KEY, theme)
   }, [theme])
 
-  useEffect(() => {
-    const doCheck = async () => {
-      try {
-        const res = await checkAuth()
-        if (res.no_password) {
-          setAuthState('authenticated')
-        } else if (getToken()) {
-          setAuthState('authenticated')
-        } else {
-          setAuthState('need_login')
-        }
-      } catch {
-        if (getToken()) {
-          setAuthState('authenticated')
-        } else {
-          setAuthState('need_login')
-        }
+  const discoverAuth = useCallback(async (allowStoredToken: boolean) => {
+    try {
+      const res = await checkAuth()
+      setAuthInfo(res)
+      if (res.no_password || (allowStoredToken && getToken())) {
+        setAuthState('authenticated')
+      } else {
+        setAuthState('need_login')
+      }
+    } catch {
+      setAuthInfo(null)
+      if (allowStoredToken && getToken()) {
+        setAuthState('authenticated')
+      } else {
+        setAuthState('need_login')
       }
     }
-    doCheck()
   }, [])
 
   useEffect(() => {
-    const handler = () => setAuthState('need_login')
+    void Promise.resolve().then(() => discoverAuth(true))
+  }, [discoverAuth])
+
+  const rediscoverLoginMode = useCallback(() => {
+    setAuthInfo(null)
+    setAuthState('loading')
+    void discoverAuth(false)
+  }, [discoverAuth])
+
+  useEffect(() => {
+    const handler = () => rediscoverLoginMode()
     window.addEventListener('auth:unauthorized', handler)
     return () => window.removeEventListener('auth:unauthorized', handler)
-  }, [])
+  }, [rediscoverLoginMode])
 
   const handleLogin = useCallback(() => setAuthState('authenticated'), [])
   const handleLogout = useCallback(() => {
     logout()
-    setAuthState('need_login')
-  }, [])
+    rediscoverLoginMode()
+  }, [rediscoverLoginMode])
 
   const handleTabClick = useCallback((tab: TabId) => {
     setActiveTab(tab)
@@ -201,7 +210,7 @@ function App() {
   }
 
   if (authState === 'need_login') {
-    return <LoginPage onLogin={handleLogin} />
+    return <LoginPage authMode={authInfo?.auth_mode ?? 'legacy_password'} onLogin={handleLogin} />
   }
 
   return (
