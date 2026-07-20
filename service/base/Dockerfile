@@ -7,7 +7,7 @@ RUN npm config set registry ${NPM_REGISTRY}
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ .
-RUN npx vite build --outDir /frontend-dist
+RUN npm run build -- --outDir /frontend-dist
 
 # ── Stage 2: Build Go binary ───────────────────────────────────
 FROM --platform=$BUILDPLATFORM golang:1.24 AS builder

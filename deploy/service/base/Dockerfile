@@ -7,7 +7,7 @@ RUN npm config set registry ${NPM_REGISTRY}
 COPY service/base/frontend/package.json service/base/frontend/package-lock.json ./
 RUN npm ci
 COPY service/base/frontend/ ./
-RUN npx vite build --outDir /tmp/frontend-dist
+RUN npm run build -- --outDir /tmp/frontend-dist
 
 FROM --platform=$BUILDPLATFORM golang:1.24 AS easy-builder
 ARG TARGETARCH

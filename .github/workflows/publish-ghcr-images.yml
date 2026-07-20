@@ -61,7 +61,9 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: upstreams/misub/package-lock.json
+          cache-dependency-path: |
+            upstreams/misub/package-lock.json
+            service/base/frontend/package-lock.json
 
       - name: Install Python test dependencies
         shell: pwsh
@@ -90,6 +92,35 @@ jobs:
         working-directory: upstreams/misub
         run: |
           npm run test:run
+
+      - name: Install frontend dependencies
+        shell: pwsh
+        working-directory: service/base/frontend
+        run: |
+          npm ci
+
+      - name: Run frontend tests
+        shell: pwsh
+        working-directory: service/base/frontend
+        run: |
+          npm run test
+
+      - name: Lint frontend
+        shell: pwsh
+        working-directory: service/base/frontend
+        run: |
+          npm run lint
+
+      - name: Build tracked frontend assets
+        shell: pwsh
+        working-directory: service/base/frontend
+        run: |
+          npm run build
+
+      - name: Verify tracked frontend assets are current
+        shell: pwsh
+        run: |
+          git diff --exit-code -- service/base/internal/monitor/assets
 
       - name: Run all service/base Go tests
         shell: pwsh
