@@ -29,13 +29,13 @@ func (c *fakeConn) Read(b []byte) (int, error) {
 	}
 	return c.toServer.Read(b)
 }
-func (c *fakeConn) Write(b []byte) (int, error)        { return c.fromServer.Write(b) }
-func (c *fakeConn) Close() error                       { return nil }
-func (c *fakeConn) LocalAddr() net.Addr                { return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1080} }
-func (c *fakeConn) RemoteAddr() net.Addr               { return &net.TCPAddr{IP: net.IPv4(10, 0, 0, 1), Port: 5555} }
-func (c *fakeConn) SetDeadline(time.Time) error        { return nil }
-func (c *fakeConn) SetReadDeadline(time.Time) error    { return nil }
-func (c *fakeConn) SetWriteDeadline(time.Time) error   { return nil }
+func (c *fakeConn) Write(b []byte) (int, error)      { return c.fromServer.Write(b) }
+func (c *fakeConn) Close() error                     { return nil }
+func (c *fakeConn) LocalAddr() net.Addr              { return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1080} }
+func (c *fakeConn) RemoteAddr() net.Addr             { return &net.TCPAddr{IP: net.IPv4(10, 0, 0, 1), Port: 5555} }
+func (c *fakeConn) SetDeadline(time.Time) error      { return nil }
+func (c *fakeConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *fakeConn) SetWriteDeadline(time.Time) error { return nil }
 
 func TestSocksHandshakeNoAuth(t *testing.T) {
 	// VER=5, NMETHODS=1, METHOD=0x00 (no-auth)
@@ -47,8 +47,9 @@ func TestSocksHandshakeNoAuth(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected handshake to succeed")
 	}
-	if username != "" {
-		t.Fatalf("expected empty username for no-auth, got %q", username)
+	if username.BaseUsername != "" || username.ExplicitDeviceID != "" || username.Overlay.Strategy != nil ||
+		len(username.Overlay.Countries) != 0 || len(username.Overlay.Regions) != 0 {
+		t.Fatalf("expected empty parsed username for no-auth, got %#v", username)
 	}
 	// Server should have replied: VER=5, METHOD=0x00
 	reply := conn.fromServer.Bytes()
@@ -76,8 +77,14 @@ func TestSocksHandshakeUserPassCarriesToken(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected handshake to succeed")
 	}
-	if username != token {
-		t.Fatalf("expected username %q, got %q", token, username)
+	if username.BaseUsername != "" {
+		t.Fatalf("legacy token-only auth should not retain a base username, got %#v", username)
+	}
+	if username.Overlay.Strategy == nil || *username.Overlay.Strategy != "stable" {
+		t.Fatalf("expected strategy token from %q, got %#v", token, username)
+	}
+	if username.Overlay.Regions == nil || len(username.Overlay.Regions) != 1 || username.Overlay.Regions[0] != "us" {
+		t.Fatalf("expected username token overlay for %q, got %#v", token, username)
 	}
 }
 
@@ -85,16 +92,20 @@ func TestSocksCredentialsValidation(t *testing.T) {
 	s := &Server{cfg: Config{Username: "alice", Password: "secret"}}
 
 	// Correct password, username base matches (with trailing token).
-	if !s.socksCredentialsOK("alice+stable+us", "secret") {
-		t.Errorf("expected creds to pass with matching base username and password")
+	parsed, err := s.authenticateProxy("alice+stable+us", "secret")
+	if err != nil {
+		t.Fatalf("expected creds to pass with matching base username and password: %v", err)
+	}
+	if parsed.BaseUsername != "alice" || parsed.Overlay.Strategy == nil || *parsed.Overlay.Strategy != "stable" {
+		t.Fatalf("parsed credentials = %#v", parsed)
 	}
 	// Wrong password.
-	if s.socksCredentialsOK("alice", "wrong") {
-		t.Errorf("expected creds to fail with wrong password")
+	if _, err := s.authenticateProxy("alice", "wrong"); err == nil {
+		t.Fatal("expected creds to fail with wrong password")
 	}
 	// Wrong username base.
-	if s.socksCredentialsOK("bob+stable", "secret") {
-		t.Errorf("expected creds to fail with wrong username base")
+	if _, err := s.authenticateProxy("bob+stable", "secret"); err == nil {
+		t.Fatal("expected creds to fail with wrong username base")
 	}
 }
 

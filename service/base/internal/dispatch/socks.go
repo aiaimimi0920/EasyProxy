@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"io"
 	"net"
-	"strings"
 	"time"
 
 	N "github.com/sagernet/sing/common/network"
@@ -45,7 +44,7 @@ func (s *Server) handleSOCKS5(conn net.Conn) {
 	defer conn.Close()
 	_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 
-	username, ok := s.socksHandshake(conn)
+	auth, ok := s.socksHandshake(conn)
 	if !ok {
 		return
 	}
@@ -58,8 +57,11 @@ func (s *Server) handleSOCKS5(conn net.Conn) {
 
 	// The username field carries the directive token (if any); proxy auth is
 	// validated separately during the handshake.
-	overlay, _ := parseTokens(username)
-	res, policy := s.resolveDirective(overlay, host, clientIP(conn.RemoteAddr().String()))
+	res, policy, _, resolveErr := s.resolveProfileRequest(auth, directiveOverlay{}, host, conn.RemoteAddr())
+	if resolveErr != nil {
+		_ = writeSOCKSReply(conn, repGeneralFailure)
+		return
+	}
 
 	target, err := s.dial(s.baseContext(), N.NetworkTCP, host, port, res, policy)
 	if err != nil {
@@ -74,28 +76,27 @@ func (s *Server) handleSOCKS5(conn net.Conn) {
 	relay(conn, target)
 }
 
-// socksHandshake negotiates the auth method and, when username/password auth is
-// offered or required, reads the credentials. It returns the client-supplied
-// username (used as the directive token) and whether the handshake succeeded.
-func (s *Server) socksHandshake(conn net.Conn) (string, bool) {
+// socksHandshake negotiates the auth method and retains the authenticated
+// client identity and directive overlay for request routing.
+func (s *Server) socksHandshake(conn net.Conn) (parsedProxyUsername, bool) {
 	// Method selection: VER, NMETHODS, METHODS...
 	header := make([]byte, 2)
 	if _, err := io.ReadFull(conn, header); err != nil {
-		return "", false
+		return parsedProxyUsername{}, false
 	}
 	if header[0] != socks5Version {
-		return "", false
+		return parsedProxyUsername{}, false
 	}
 	n := int(header[1])
 	if n == 0 {
-		return "", false
+		return parsedProxyUsername{}, false
 	}
 	methods := make([]byte, n)
 	if _, err := io.ReadFull(conn, methods); err != nil {
-		return "", false
+		return parsedProxyUsername{}, false
 	}
 
-	authRequired := s.cfg.Username != "" || s.cfg.Password != ""
+	_, _, authRequired := s.authCredentials()
 	offersUserPass := containsByte(methods, authUserPass)
 	offersNoAuth := containsByte(methods, authNoAuth)
 
@@ -104,81 +105,57 @@ func (s *Server) socksHandshake(conn net.Conn) (string, bool) {
 		// Always prefer username/password when offered so the directive token in
 		// the username field is delivered, even without configured auth.
 		if _, err := conn.Write([]byte{socks5Version, authUserPass}); err != nil {
-			return "", false
+			return parsedProxyUsername{}, false
 		}
 		return s.socksUserPassAuth(conn)
 	case !authRequired && offersNoAuth:
 		if _, err := conn.Write([]byte{socks5Version, authNoAuth}); err != nil {
-			return "", false
+			return parsedProxyUsername{}, false
 		}
-		return "", true
+		return parsedProxyUsername{}, true
 	default:
 		_, _ = conn.Write([]byte{socks5Version, authNone})
-		return "", false
+		return parsedProxyUsername{}, false
 	}
 }
 
-// socksUserPassAuth reads RFC 1929 credentials and validates them against the
-// configured proxy auth (when set). The username is returned as the directive
-// token regardless of whether auth is enforced.
-func (s *Server) socksUserPassAuth(conn net.Conn) (string, bool) {
+// socksUserPassAuth reads RFC 1929 credentials and validates them through the
+// shared proxy-authentication path used by HTTP and CONNECT.
+func (s *Server) socksUserPassAuth(conn net.Conn) (parsedProxyUsername, bool) {
 	// VER, ULEN, UNAME, PLEN, PASSWD
 	head := make([]byte, 2)
 	if _, err := io.ReadFull(conn, head); err != nil {
-		return "", false
+		return parsedProxyUsername{}, false
 	}
 	if head[0] != authUserPassVersion {
-		return "", false
+		return parsedProxyUsername{}, false
 	}
 	ulen := int(head[1])
 	uname := make([]byte, ulen)
 	if _, err := io.ReadFull(conn, uname); err != nil {
-		return "", false
+		return parsedProxyUsername{}, false
 	}
 	plenBuf := make([]byte, 1)
 	if _, err := io.ReadFull(conn, plenBuf); err != nil {
-		return "", false
+		return parsedProxyUsername{}, false
 	}
 	passwd := make([]byte, int(plenBuf[0]))
 	if _, err := io.ReadFull(conn, passwd); err != nil {
-		return "", false
+		return parsedProxyUsername{}, false
 	}
 
 	username := string(uname)
 	password := string(passwd)
-
-	// Validate credentials only when proxy auth is configured. The username
-	// carries the directive token, so when auth is configured we compare it
-	// against the configured username's bare value before the "+token" part.
-	if s.cfg.Username != "" || s.cfg.Password != "" {
-		if !s.socksCredentialsOK(username, password) {
-			_, _ = conn.Write([]byte{authUserPassVersion, authStatusFailure})
-			return "", false
-		}
+	parsed, err := s.authenticateProxy(username, password)
+	if err != nil {
+		_, _ = conn.Write([]byte{authUserPassVersion, authStatusFailure})
+		return parsedProxyUsername{}, false
 	}
 
 	if _, err := conn.Write([]byte{authUserPassVersion, authStatusSuccess}); err != nil {
-		return "", false
+		return parsedProxyUsername{}, false
 	}
-	return username, true
-}
-
-// socksCredentialsOK checks supplied credentials against configured proxy auth.
-// The username may carry a trailing directive token after the configured
-// username, separated by "+" (e.g. configured "alice" → "alice+stable+us"), so
-// the leading segment is compared.
-func (s *Server) socksCredentialsOK(username, password string) bool {
-	if s.cfg.Password != "" && password != s.cfg.Password {
-		return false
-	}
-	if s.cfg.Username == "" {
-		return true
-	}
-	base := username
-	if idx := strings.IndexByte(username, '+'); idx >= 0 {
-		base = username[:idx]
-	}
-	return base == s.cfg.Username
+	return parsed, true
 }
 
 // readSOCKSRequest reads the CONNECT request and returns the destination host

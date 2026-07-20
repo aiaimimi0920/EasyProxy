@@ -40,6 +40,8 @@ type Config struct {
 	Password        string        // optional proxy auth password
 	DefaultStrategy pool.Strategy // strategy when none specified (default entry)
 	DialTimeout     time.Duration // per-connection dial timeout (default 30s)
+	LocalServer     bool          // local server mode keeps one shared local client service
+	Profiles        ProfileResolver
 	// BoundTokens, when non-empty, is a "+"-separated token string (same syntax
 	// as the path-prefix entry, e.g. "stable+us+nosplit") applied as a fixed
 	// overlay to every request on this listener — the "dedicated port = fixed
@@ -271,15 +273,17 @@ func (s *Server) serveHTTP(conn net.Conn, br *bufio.Reader) {
 		if err != nil {
 			return
 		}
-		if !s.checkAuthConn(conn, req) {
+		auth, authErr := s.authenticateHTTPRequest(req)
+		if authErr != nil {
+			s.writeHTTPAuthError(conn, authErr)
 			return
 		}
 		if req.Method == http.MethodConnect {
 			// CONNECT consumes the connection for the tunnel's lifetime.
-			s.handleConnectConn(conn, req)
+			s.handleConnectConn(conn, req, auth)
 			return
 		}
-		keepAlive := s.handleHTTPConn(conn, br, req)
+		keepAlive := s.handleHTTPConn(conn, br, req, auth)
 		if !keepAlive {
 			return
 		}
@@ -407,21 +411,14 @@ func (s *Server) warnf(format string, args ...any) {
 	}
 }
 
-// checkAuthConn validates proxy auth for a connection-based request, writing a
-// 407 challenge directly to the connection on failure. Returns true when the
-// request may proceed.
-func (s *Server) checkAuthConn(conn net.Conn, req *http.Request) bool {
-	if s.cfg.Username == "" {
-		return true
+func (s *Server) writeHTTPAuthError(conn net.Conn, err error) {
+	if err == errProxyUsernameInvalid {
+		_, _ = conn.Write([]byte("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"))
+		return
 	}
-	user, pass, ok := proxyBasicAuth(req)
-	if !ok || user != s.cfg.Username || pass != s.cfg.Password {
-		_, _ = conn.Write([]byte("HTTP/1.1 407 Proxy Authentication Required\r\n" +
-			"Proxy-Authenticate: Basic realm=\"EasyProxy\"\r\n" +
-			"Content-Length: 0\r\n\r\n"))
-		return false
-	}
-	return true
+	_, _ = conn.Write([]byte("HTTP/1.1 407 Proxy Authentication Required\r\n" +
+		"Proxy-Authenticate: Basic realm=\"EasyProxy\"\r\n" +
+		"Content-Length: 0\r\n\r\n"))
 }
 
 // resolveDirective is the protocol-agnostic core shared by the HTTP and SOCKS5
@@ -439,7 +436,7 @@ func (s *Server) resolveDirective(reqOverlay directiveOverlay, host, sessionFall
 
 // handleConnectConn tunnels an HTTPS CONNECT request directly on the connection.
 // The CONNECT authority may carry a token prefix ("stable+us/example.com:443").
-func (s *Server) handleConnectConn(conn net.Conn, req *http.Request) {
+func (s *Server) handleConnectConn(conn net.Conn, req *http.Request, auth parsedProxyUsername) {
 	// Use the raw request-target (RequestURI) rather than req.Host: when a token
 	// prefix is present ("nosplit/host:port"), http.ReadRequest parses req.Host
 	// as just "nosplit" and moves the rest into the URL path, losing the target.
@@ -455,7 +452,16 @@ func (s *Server) handleConnectConn(conn net.Conn, req *http.Request) {
 		return
 	}
 
-	res, policy := s.resolveDirective(connectRequestOverlay(req, overlay), host, clientIP(conn.RemoteAddr().String()))
+	res, policy, _, resolveErr := s.resolveProfileRequest(
+		auth,
+		connectRequestOverlay(req, overlay),
+		host,
+		conn.RemoteAddr(),
+	)
+	if resolveErr != nil {
+		_, _ = conn.Write([]byte("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"))
+		return
+	}
 
 	target, err := s.dial(s.baseContext(), N.NetworkTCP, host, port, res, policy)
 	if err != nil {
@@ -485,7 +491,7 @@ func connectRequestOverlay(req *http.Request, pathOverlay directiveOverlay) dire
 // and reports whether the connection may be reused for another request
 // (keep-alive). A leading path token segment ("/stable+us/...") is recognized
 // as a directive overlay.
-func (s *Server) handleHTTPConn(conn net.Conn, br *bufio.Reader, req *http.Request) bool {
+func (s *Server) handleHTTPConn(conn net.Conn, br *bufio.Reader, req *http.Request, auth parsedProxyUsername) bool {
 	overlay := stripPathOverlay(req)
 
 	host := req.Host
@@ -498,7 +504,16 @@ func (s *Server) handleHTTPConn(conn net.Conn, br *bufio.Reader, req *http.Reque
 		return false
 	}
 
-	res, policy := s.resolveDirective(overlay.merge(parseHeaders(req.Header)), hostOnly, clientIP(conn.RemoteAddr().String()))
+	res, policy, _, resolveErr := s.resolveProfileRequest(
+		auth,
+		overlay.merge(parseHeaders(req.Header)),
+		hostOnly,
+		conn.RemoteAddr(),
+	)
+	if resolveErr != nil {
+		_, _ = conn.Write([]byte("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"))
+		return false
+	}
 
 	target, err := s.dial(s.baseContext(), N.NetworkTCP, hostOnly, port, res, policy)
 	if err != nil {
@@ -553,6 +568,9 @@ func (s *Server) dial(ctx context.Context, network, host string, port uint16, re
 		return s.trackUpstream(conn)
 	}
 
+	if s.provider == nil {
+		return nil, fmt.Errorf("proxy pool not available")
+	}
 	out, ok := s.provider.PoolOutbound()
 	if !ok || out == nil {
 		return nil, fmt.Errorf("proxy pool not available")

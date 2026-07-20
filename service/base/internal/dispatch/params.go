@@ -99,6 +99,35 @@ func (o directiveOverlay) resolve(defaultStrategy pool.Strategy, sessionFallback
 	return resolved{directive: dir, split: split}
 }
 
+func (o directiveOverlay) applyTo(base pool.SelectionDirective, sessionFallback string) resolved {
+	out := base
+	if o.Strategy != nil {
+		out.Strategy = *o.Strategy
+	}
+	if len(o.Countries) > 0 {
+		out.Filter.Countries = append([]string(nil), o.Countries...)
+	}
+	if len(o.Regions) > 0 {
+		out.Filter.Regions = append([]string(nil), o.Regions...)
+	}
+	if o.LongLived != nil {
+		out.Filter.LongLived = cloneBool(o.LongLived)
+	}
+	if o.PinnedTag != nil {
+		out.PinnedTag = strings.TrimSpace(*o.PinnedTag)
+	}
+	if o.SessionID != nil && strings.TrimSpace(*o.SessionID) != "" {
+		out.SessionKey = strings.TrimSpace(*o.SessionID)
+	} else if out.Strategy == pool.StrategySession && strings.TrimSpace(out.SessionKey) == "" {
+		out.SessionKey = sessionFallback
+	}
+	split := true
+	if o.Split != nil {
+		split = *o.Split
+	}
+	return resolved{directive: out, split: split}
+}
+
 // parseTokens parses a compact, "+"-separated token prefix used by the
 // path-prefix entry style, e.g. "stable+us+long+nosplit" or
 // "session+sid=abc123+cc=US". Recognized tokens:
@@ -184,13 +213,13 @@ func isRegionToken(s string) bool {
 // HTTP header names recognized by the dispatcher (case-insensitive per the
 // net/http canonicalization).
 const (
-	headerCountry   = "X-Proxy-Country"   // comma-separated ISO codes
-	headerRegion    = "X-Proxy-Region"    // comma-separated region codes
-	headerStrategy  = "X-Proxy-Strategy"  // auto | stable | session
+	headerCountry   = "X-Proxy-Country"    // comma-separated ISO codes
+	headerRegion    = "X-Proxy-Region"     // comma-separated region codes
+	headerStrategy  = "X-Proxy-Strategy"   // auto | stable | session
 	headerLongLived = "X-Proxy-Long-Lived" // true | false
-	headerPin       = "X-Proxy-Pin"       // node tag
-	headerSession   = "X-Proxy-Session"   // session key
-	headerSplit     = "X-Proxy-Split"     // on/off | true/false (off = all proxy)
+	headerPin       = "X-Proxy-Pin"        // node tag
+	headerSession   = "X-Proxy-Session"    // session key
+	headerSplit     = "X-Proxy-Split"      // on/off | true/false (off = all proxy)
 )
 
 // headerGetter abstracts http.Header.Get so the parser is testable without a

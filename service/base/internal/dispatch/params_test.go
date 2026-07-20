@@ -3,6 +3,7 @@ package dispatch
 import (
 	"net/http"
 	"testing"
+	"time"
 
 	"easy_proxies/internal/outbound/pool"
 	"easy_proxies/internal/routerule"
@@ -130,6 +131,55 @@ func TestResolve_DefaultStrategy(t *testing.T) {
 		t.Errorf("split should default to true")
 	}
 }
+
+func TestOverlayApplyToPreservesProfileStateAndDeepCopiesFilters(t *testing.T) {
+	longLived := true
+	baseLongLived := false
+	base := pool.SelectionDirective{
+		ProfileID:       "device:laptop",
+		ProfileRevision: 7,
+		Strategy:        pool.StrategySession,
+		SessionKey:      "",
+		SessionTTL:      15 * time.Minute,
+		Filter: pool.NodeFilter{
+			Countries: []string{"US"},
+			Regions:   []string{"americas"},
+			LongLived: &baseLongLived,
+		},
+		LongLived: pool.LongLivedPolicy{MinUptime: 2 * time.Hour, MinSuccessRate: 0.9},
+	}
+	overlay := directiveOverlay{
+		Strategy:  stratp(pool.StrategyStable),
+		Countries: []string{"JP"},
+		LongLived: &longLived,
+		SessionID: strp("crawl-1"),
+		PinnedTag: strp("node-7"),
+		Split:     boolp(false),
+	}
+	resolved := overlay.applyTo(base, "192.0.2.10")
+	if resolved.directive.ProfileID != base.ProfileID || resolved.directive.ProfileRevision != base.ProfileRevision {
+		t.Fatalf("profile identity changed: %#v", resolved.directive)
+	}
+	if resolved.directive.SessionTTL != base.SessionTTL || resolved.directive.LongLived != base.LongLived {
+		t.Fatalf("profile thresholds changed: %#v", resolved.directive)
+	}
+	if resolved.directive.Strategy != pool.StrategyStable || resolved.directive.SessionKey != "crawl-1" || resolved.directive.PinnedTag != "node-7" {
+		t.Fatalf("overlay fields not applied: %#v", resolved.directive)
+	}
+	if len(resolved.directive.Filter.Countries) != 1 || resolved.directive.Filter.Countries[0] != "JP" || resolved.directive.Filter.LongLived == nil || !*resolved.directive.Filter.LongLived {
+		t.Fatalf("overlay filters not applied: %#v", resolved.directive.Filter)
+	}
+	if resolved.split {
+		t.Fatal("split=false overlay was ignored")
+	}
+	resolved.directive.Filter.Countries[0] = "DE"
+	*resolved.directive.Filter.LongLived = false
+	if base.Filter.Countries[0] != "US" || *base.Filter.LongLived {
+		t.Fatalf("base profile filters were mutated: %#v", base.Filter)
+	}
+}
+
+func boolp(value bool) *bool { return &value }
 
 func TestPolicyForSplit(t *testing.T) {
 	engine := routerule.New([]string{"DOMAIN-SUFFIX,cn,DIRECT", "FINAL,PROXY"}, routerule.PolicyProxy, nil)
