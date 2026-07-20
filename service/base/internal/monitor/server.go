@@ -228,7 +228,7 @@ func NewServer(cfg Config, mgr *Manager, logger *log.Logger) *Server {
 	mux.HandleFunc("/api/source-sync/source-health", s.withAuth(s.handleSourceSyncSourceHealth))
 	mux.HandleFunc("/api/routing/status", s.withAuth(s.handleRoutingStatus))
 	mux.HandleFunc("/api/routing/config", s.withAuth(s.handleRoutingConfig))
-	mux.HandleFunc("/api/local-server/config", s.withAuth(s.handleLocalServerConfig))
+	s.registerLocalServerRoutes(mux)
 	mux.HandleFunc("/api/reload", s.withAuth(s.handleReload))
 	mux.HandleFunc("/proxy/catalog", s.withAuth(s.handleProxyCatalog))
 	mux.HandleFunc("/proxy/snapshot", s.withAuth(s.handleProxySnapshot))
@@ -2167,11 +2167,6 @@ type localServerConfigView struct {
 	SharedRevision       int64  `json:"shared_revision"`
 }
 
-type localServerConfigUpdateResponse struct {
-	localServerConfigView
-	NeedReload bool `json:"need_reload"`
-}
-
 func (s *Server) handleLocalServerConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -2183,7 +2178,14 @@ func (s *Server) handleLocalServerConfig(w http.ResponseWriter, r *http.Request)
 			writeJSON(w, map[string]any{"error": "invalid request body: " + err.Error()})
 			return
 		}
+		releaseBarrier, err := s.beginConfigMutation(r.Context())
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			writeJSON(w, map[string]any{"error": err.Error()})
+			return
+		}
 		view, needReload, err := s.updateLocalServerConfig(req)
+		releaseBarrier()
 		if err != nil {
 			switch {
 			case errors.Is(err, errReloadInProgress), errors.Is(err, errLocalServerCredentialConflict):
@@ -2196,9 +2198,15 @@ func (s *Server) handleLocalServerConfig(w http.ResponseWriter, r *http.Request)
 			writeJSON(w, map[string]any{"error": err.Error()})
 			return
 		}
-		writeJSON(w, localServerConfigUpdateResponse{
-			localServerConfigView: view,
-			NeedReload:            needReload,
+		registryRevision := uint64(0)
+		if profiles := s.profileManagerSnapshot(); profiles != nil {
+			registryRevision = profiles.RuntimeStatus().RegistryRevision
+		}
+		writeJSON(w, mutationEnvelope{
+			Revision:         view.SharedRevision,
+			RegistryRevision: registryRevision,
+			NeedReload:       needReload,
+			Resource:         view,
 		})
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -2540,6 +2548,10 @@ func (s *Server) handleRoutingStatus(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	if manager := s.profileManagerSnapshot(); manager != nil && manager.LocalServerEnabled() {
+		writeJSON(w, s.localServerRoutingStatus(manager))
+		return
+	}
 	routing := s.routingSnapshot()
 	if routing == nil {
 		writeJSON(w, RoutingStatus{Enabled: false})
@@ -2579,6 +2591,10 @@ type routingProviderConfig struct {
 // so the client can trigger a full reload (which rebinds the entry port and
 // rebuilds sing-box).
 func (s *Server) handleRoutingConfig(w http.ResponseWriter, r *http.Request) {
+	if manager := s.profileManagerSnapshot(); manager != nil && manager.LocalServerEnabled() {
+		s.handleLocalServerRoutingConfig(w, r, manager)
+		return
+	}
 	switch r.Method {
 	case http.MethodGet:
 		writeJSON(w, s.getRoutingConfig())

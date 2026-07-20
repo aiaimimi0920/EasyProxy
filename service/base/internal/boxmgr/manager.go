@@ -1005,6 +1005,17 @@ func mergeHotAppliedConfig(base, applied *config.Config) *config.Config {
 		merged.GeoIP.DatabasePath = applied.GeoIP.DatabasePath
 	}
 	if merged.LocalServer.Enabled && applied.LocalServer.Enabled && merged.DispatchListen() == applied.DispatchListen() {
+		merged.Routing.Enabled = applied.Routing.Enabled
+		merged.Routing.NodeFilter.Countries = append([]string(nil), applied.Routing.NodeFilter.Countries...)
+		merged.Routing.NodeFilter.Regions = append([]string(nil), applied.Routing.NodeFilter.Regions...)
+		if applied.Routing.NodeFilter.LongLived == nil {
+			merged.Routing.NodeFilter.LongLived = nil
+		} else {
+			longLived := *applied.Routing.NodeFilter.LongLived
+			merged.Routing.NodeFilter.LongLived = &longLived
+		}
+		merged.Routing.Session = applied.Routing.Session
+		merged.LocalServer.SharedRevision = applied.LocalServer.SharedRevision
 		merged.LocalServer.Auth = applied.LocalServer.Auth
 		merged.LocalServer.CredentialGeneration = applied.LocalServer.CredentialGeneration
 		merged.Listener.Username = applied.Listener.Username

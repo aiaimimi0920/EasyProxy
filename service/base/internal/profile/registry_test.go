@@ -50,6 +50,25 @@ func TestRegistryCloneReplacingBumpsRevisionAndCopies(t *testing.T) {
 	}
 }
 
+func TestRegistryMappingPrecedenceUsesLongestPrefixThenPriority(t *testing.T) {
+	shared := compileProfileForTest(t, "shared", KindShared, 1, Definition{SchemaVersion: 1, Enabled: true, FinalPolicy: "PROXY"})
+	registry := NewRegistry(shared, nil, []IPMapping{
+		{MappingID: "broad", Prefix: netip.MustParsePrefix("192.0.2.0/24"), DeviceID: "broad", Priority: 100},
+		{MappingID: "specific-low", Prefix: netip.MustParsePrefix("192.0.2.10/32"), DeviceID: "specific-low", Priority: 1},
+		{MappingID: "specific-high", Prefix: netip.MustParsePrefix("192.0.2.10/32"), DeviceID: "specific-high", Priority: 9},
+	}, CredentialSnapshot{}, 1)
+
+	peer := netip.MustParseAddr("192.0.2.10")
+	mapped := registry.Resolve(RequestIdentity{PeerIP: peer})
+	if mapped.DeviceID != "specific-high" || mapped.Source != IdentityIPMapping {
+		t.Fatalf("mapping resolution = %#v", mapped)
+	}
+	explicit := registry.Resolve(RequestIdentity{ExplicitDeviceID: "explicit", PeerIP: peer})
+	if explicit.DeviceID != "explicit" || explicit.Source != IdentityExplicit {
+		t.Fatalf("explicit resolution did not override mapping: %#v", explicit)
+	}
+}
+
 func TestDeviceActivityTrackerSnapshotIsolation(t *testing.T) {
 	tracker := NewDeviceActivityTracker()
 	peer := netip.MustParseAddr("192.168.1.10")

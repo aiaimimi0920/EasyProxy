@@ -174,6 +174,31 @@ func (r *Registry) CloneReplacingMappings(mappings []IPMapping) *Registry {
 	}
 }
 
+func (r *Registry) CloneReplacingMapping(mappingID string, mapping *IPMapping) *Registry {
+	if r == nil {
+		return nil
+	}
+	normalizedID := strings.TrimSpace(mappingID)
+	clonedMappings := make([]IPMapping, 0, len(r.mappings)+1)
+	for _, current := range r.mappings {
+		if current.MappingID != normalizedID {
+			clonedMappings = append(clonedMappings, current)
+		}
+	}
+	if mapping != nil {
+		clonedMappings = append(clonedMappings, *mapping)
+	}
+	clonedMappings = cloneMappings(clonedMappings)
+	sortMappings(clonedMappings)
+	return &Registry{
+		shared:      r.shared,
+		devices:     cloneDeviceMap(r.devices),
+		mappings:    clonedMappings,
+		credentials: r.credentials,
+		revision:    r.revision + 1,
+	}
+}
+
 func (r *Registry) CloneReplacingShared(shared *CompiledProfile) *Registry {
 	if r == nil {
 		return nil

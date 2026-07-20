@@ -33,6 +33,7 @@ type localServerMonitorHarness struct {
 	server   *Server
 	profiles *profile.Manager
 	config   *config.Config
+	store    store.Store
 }
 
 type jsonTestResponse struct {
@@ -45,6 +46,10 @@ func newLocalServerMonitor(t *testing.T, username, password string, generation u
 }
 
 func newLocalServerMonitorWithEnabled(t *testing.T, username, password string, generation uint64, enabled bool) localServerMonitorHarness {
+	return newLocalServerMonitorWithStoreDecorator(t, username, password, generation, enabled, nil)
+}
+
+func newLocalServerMonitorWithStoreDecorator(t *testing.T, username, password string, generation uint64, enabled bool, decorate func(store.Store) store.Store) localServerMonitorHarness {
 	t.Helper()
 	ctx := context.Background()
 	st, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
@@ -69,7 +74,11 @@ func newLocalServerMonitorWithEnabled(t *testing.T, username, password string, g
 		},
 	}
 	cfg.SetFilePath(configPath)
-	profiles, err := profile.NewManager(ctx, cfg, st)
+	profileStore := st
+	if decorate != nil {
+		profileStore = decorate(st)
+	}
+	profiles, err := profile.NewManager(ctx, cfg, profileStore)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +92,7 @@ func newLocalServerMonitorWithEnabled(t *testing.T, username, password string, g
 	server.SetConfig(cfg)
 	server.SetStore(st)
 	server.SetProfileManager(profiles)
-	return localServerMonitorHarness{server: server, profiles: profiles, config: cfg}
+	return localServerMonitorHarness{server: server, profiles: profiles, config: cfg, store: st}
 }
 
 func performJSONRequest(t *testing.T, server *Server, method, path string, body any, headers http.Header) jsonTestResponse {
@@ -188,6 +197,13 @@ func TestLocalServerCredentialRotationPublishesWithoutReload(t *testing.T) {
 	}, headers)
 	if response.Code != http.StatusOK || response.Body["need_reload"] != false {
 		t.Fatalf("credential rotation response = %#v", response)
+	}
+	resource, ok := response.Body["resource"].(map[string]any)
+	if !ok || resource["auth_username"] != "easyproxy" || resource["password_set"] != true {
+		t.Fatalf("credential rotation resource = %#v", response.Body["resource"])
+	}
+	if _, exists := resource["auth_password"]; exists {
+		t.Fatalf("credential rotation leaked password: %#v", resource)
 	}
 	credentials := harness.profiles.Credentials()
 	if credentials.Password != "new-secret" || credentials.Generation != 3 {

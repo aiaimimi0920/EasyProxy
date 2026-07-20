@@ -1,12 +1,19 @@
 package profile
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
 	"time"
 
 	"easy_proxies/internal/config"
+)
+
+var (
+	ErrInvalidDefinition     = errors.New("invalid profile definition")
+	ErrInvalidDeviceID       = errors.New("invalid device id")
+	ErrDeviceProfileNotFound = errors.New("device profile not found")
 )
 
 type Kind string
@@ -65,6 +72,13 @@ type SelectionSettings struct {
 	LongLivedMinUptime      time.Duration
 	LongLivedMinSuccessRate float64
 	SessionTTL              time.Duration
+}
+
+type RuntimeStatus struct {
+	RegistryRevision      uint64
+	ProfileCount          int
+	MappingCount          int
+	ProviderDegradedCount int
 }
 
 func DefinitionFromRouting(routing config.RoutingConfig) Definition {

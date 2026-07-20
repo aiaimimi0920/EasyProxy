@@ -1902,6 +1902,7 @@ func TestRecordAppliedConfigMergesLocalServerCredentialsIntoRollbackSnapshot(t *
 		},
 	}
 	appliedCfg := snapshotConfig(oldCfg)
+	appliedCfg.LocalServer.SharedRevision = 2
 	appliedCfg.LocalServer.Auth = config.LocalServerAuthConfig{Username: "new-user", Password: "new-secret"}
 	appliedCfg.LocalServer.CredentialGeneration = 3
 	appliedCfg.Listener.Username = "new-user"
@@ -1912,7 +1913,7 @@ func TestRecordAppliedConfigMergesLocalServerCredentialsIntoRollbackSnapshot(t *
 	manager.RecordAppliedConfig(appliedCfg)
 
 	recorded := manager.lastAppliedCfg
-	if recorded.LocalServer.Auth != appliedCfg.LocalServer.Auth || recorded.LocalServer.CredentialGeneration != 3 {
+	if recorded.LocalServer.Auth != appliedCfg.LocalServer.Auth || recorded.LocalServer.CredentialGeneration != 3 || recorded.LocalServer.SharedRevision != 2 {
 		t.Fatalf("canonical credentials were not recorded: %#v", recorded.LocalServer)
 	}
 	if recorded.Listener.Username != "new-user" || recorded.Listener.Password != "new-secret" || recorded.Management.Password != "new-secret" {
@@ -1920,6 +1921,44 @@ func TestRecordAppliedConfigMergesLocalServerCredentialsIntoRollbackSnapshot(t *
 	}
 	if recorded.LocalServer.Listen != oldCfg.LocalServer.Listen || !recorded.LocalServer.Enabled {
 		t.Fatalf("credential hot apply changed Local Server topology: %#v", recorded.LocalServer)
+	}
+}
+
+func TestRecordAppliedConfigMergesLocalServerSharedProfileIntoRollbackSnapshot(t *testing.T) {
+	oldLongLived := false
+	newLongLived := true
+	oldCfg := &config.Config{
+		Mode: "pool",
+		Routing: config.RoutingConfig{
+			Enabled:    true,
+			Listen:     "127.0.0.1:22323",
+			NodeFilter: config.RoutingNodeFilterConfig{Countries: []string{"US"}, LongLived: &oldLongLived},
+			Session:    config.SessionConfig{TTL: 10 * time.Minute},
+		},
+		LocalServer: config.LocalServerConfig{
+			Enabled:        true,
+			Listen:         "127.0.0.1:22323",
+			SharedRevision: 1,
+		},
+	}
+	appliedCfg := snapshotConfig(oldCfg)
+	appliedCfg.Routing.Enabled = false
+	appliedCfg.Routing.NodeFilter = config.RoutingNodeFilterConfig{Countries: []string{"JP"}, Regions: []string{"asia"}, LongLived: &newLongLived}
+	appliedCfg.Routing.Session.TTL = 45 * time.Minute
+	appliedCfg.LocalServer.SharedRevision = 2
+	manager := &Manager{lastAppliedCfg: snapshotConfig(oldCfg)}
+
+	manager.RecordAppliedConfig(appliedCfg)
+
+	recorded := manager.lastAppliedCfg
+	if recorded.LocalServer.SharedRevision != 2 || recorded.Routing.Enabled || recorded.Routing.Session.TTL != 45*time.Minute {
+		t.Fatalf("shared hot fields were not recorded: local=%#v routing=%#v", recorded.LocalServer, recorded.Routing)
+	}
+	if len(recorded.Routing.NodeFilter.Countries) != 1 || recorded.Routing.NodeFilter.Countries[0] != "JP" || len(recorded.Routing.NodeFilter.Regions) != 1 || recorded.Routing.NodeFilter.Regions[0] != "asia" || recorded.Routing.NodeFilter.LongLived == nil || !*recorded.Routing.NodeFilter.LongLived {
+		t.Fatalf("shared node filter was not recorded: %#v", recorded.Routing.NodeFilter)
+	}
+	if recorded.Routing.Listen != oldCfg.Routing.Listen || recorded.LocalServer.Listen != oldCfg.LocalServer.Listen || !recorded.LocalServer.Enabled {
+		t.Fatalf("shared hot apply changed topology: local=%#v routing=%#v", recorded.LocalServer, recorded.Routing)
 	}
 }
 

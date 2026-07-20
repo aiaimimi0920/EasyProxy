@@ -62,6 +62,9 @@ type PreparedShared struct {
 	ExpectedRevision int64
 	Profile          *CompiledProfile
 	Definition       Definition
+
+	manager *Manager
+	release sync.Once
 }
 
 func NewManager(ctx context.Context, cfg *config.Config, st store.Store, opts ...Option) (*Manager, error) {
@@ -254,6 +257,27 @@ func (m *Manager) ProviderStatus(profileID string) ProviderStatus {
 	return runtime.status
 }
 
+func (m *Manager) RuntimeStatus() RuntimeStatus {
+	if m == nil {
+		return RuntimeStatus{}
+	}
+	registry := m.snapshot()
+	status := RuntimeStatus{}
+	if registry != nil {
+		status.RegistryRevision = registry.Revision()
+		status.ProfileCount = registry.ProfileCount()
+		status.MappingCount = registry.MappingCount()
+	}
+	m.mutationMu.Lock()
+	for _, runtime := range m.providers {
+		if runtime.status.Degraded {
+			status.ProviderDegradedCount++
+		}
+	}
+	m.mutationMu.Unlock()
+	return status
+}
+
 func (m *Manager) ListDevices(ctx context.Context) ([]store.Device, error) {
 	if m == nil {
 		return nil, errors.New("manager is nil")
@@ -261,11 +285,29 @@ func (m *Manager) ListDevices(ctx context.Context) ([]store.Device, error) {
 	return m.store.ListDevices(ctx)
 }
 
+func (m *Manager) GetDevice(ctx context.Context, deviceID string) (*store.Device, error) {
+	if m == nil {
+		return nil, errors.New("manager is nil")
+	}
+	normalized, err := NormalizeDeviceID(deviceID)
+	if err != nil {
+		return nil, err
+	}
+	return m.store.GetDevice(ctx, normalized)
+}
+
 func (m *Manager) ListIPMappings(ctx context.Context) ([]store.DeviceIPMapping, error) {
 	if m == nil {
 		return nil, errors.New("manager is nil")
 	}
 	return m.store.ListDeviceIPMappings(ctx)
+}
+
+func (m *Manager) GetIPMapping(ctx context.Context, mappingID string) (*store.DeviceIPMapping, error) {
+	if m == nil {
+		return nil, errors.New("manager is nil")
+	}
+	return m.store.GetDeviceIPMapping(ctx, strings.TrimSpace(mappingID))
 }
 
 func (m *Manager) ActivitySnapshot() map[string]DeviceActivity {
@@ -281,7 +323,7 @@ func (m *Manager) PutDevice(ctx context.Context, deviceID, displayName string, e
 	}
 	normalized, err := NormalizeDeviceID(deviceID)
 	if err != nil {
-		return store.Device{}, err
+		return store.Device{}, fmt.Errorf("%w: %v", ErrInvalidDeviceID, err)
 	}
 	return m.store.PutDevice(ctx, store.Device{
 		DeviceID:    normalized,
@@ -295,7 +337,7 @@ func (m *Manager) PutDeviceProfile(ctx context.Context, deviceID string, definit
 	}
 	normalized, err := NormalizeDeviceID(deviceID)
 	if err != nil {
-		return MutationResult{}, err
+		return MutationResult{}, fmt.Errorf("%w: %v", ErrInvalidDeviceID, err)
 	}
 
 	m.mutationMu.Lock()
@@ -332,14 +374,14 @@ func (m *Manager) SetDeviceProfileEnabled(ctx context.Context, deviceID string, 
 	}
 	normalized, err := NormalizeDeviceID(deviceID)
 	if err != nil {
-		return MutationResult{}, err
+		return MutationResult{}, fmt.Errorf("%w: %v", ErrInvalidDeviceID, err)
 	}
 	current, err := m.store.GetDeviceProfile(ctx, normalized)
 	if err != nil {
 		return MutationResult{}, err
 	}
 	if current == nil {
-		return MutationResult{}, fmt.Errorf("device profile %q not found", normalized)
+		return MutationResult{}, fmt.Errorf("%w: %q", ErrDeviceProfileNotFound, normalized)
 	}
 
 	var definition Definition
@@ -356,7 +398,7 @@ func (m *Manager) DeleteDeviceProfile(ctx context.Context, deviceID string, expe
 	}
 	normalized, err := NormalizeDeviceID(deviceID)
 	if err != nil {
-		return MutationResult{}, err
+		return MutationResult{}, fmt.Errorf("%w: %v", ErrInvalidDeviceID, err)
 	}
 
 	m.mutationMu.Lock()
@@ -382,9 +424,25 @@ func (m *Manager) PutIPMapping(ctx context.Context, mapping store.DeviceIPMappin
 	}
 	normalizedDeviceID, err := NormalizeDeviceID(mapping.DeviceID)
 	if err != nil {
-		return store.DeviceIPMapping{}, 0, err
+		return store.DeviceIPMapping{}, 0, fmt.Errorf("%w: %v", ErrInvalidDeviceID, err)
 	}
 	mapping.DeviceID = normalizedDeviceID
+	mapping.MappingID = strings.TrimSpace(mapping.MappingID)
+	if mapping.MappingID == "" {
+		return store.DeviceIPMapping{}, 0, errors.New("mapping id is required")
+	}
+	prefix, err := netip.ParsePrefix(strings.TrimSpace(mapping.CIDR))
+	if err != nil {
+		return store.DeviceIPMapping{}, 0, fmt.Errorf("invalid mapping CIDR %q: %w", mapping.CIDR, err)
+	}
+	prefix = prefix.Masked()
+	mapping.CIDR = prefix.String()
+	prepared := IPMapping{
+		MappingID: mapping.MappingID,
+		Prefix:    prefix,
+		DeviceID:  normalizedDeviceID,
+		Priority:  mapping.Priority,
+	}
 
 	m.mutationMu.Lock()
 	defer m.mutationMu.Unlock()
@@ -393,12 +451,15 @@ func (m *Manager) PutIPMapping(ctx context.Context, mapping store.DeviceIPMappin
 	if err != nil {
 		return store.DeviceIPMapping{}, 0, err
 	}
-	mappings, err := m.loadMappings(ctx)
-	if err != nil {
-		return store.DeviceIPMapping{}, 0, err
-	}
 	current := m.snapshot()
-	next := current.CloneReplacingMappings(mappings)
+	var active *IPMapping
+	if saved.Enabled {
+		prepared.MappingID = saved.MappingID
+		prepared.DeviceID = saved.DeviceID
+		prepared.Priority = saved.Priority
+		active = &prepared
+	}
+	next := current.CloneReplacingMapping(saved.MappingID, active)
 	m.registry.Store(next)
 	return saved, next.Revision(), nil
 }
@@ -418,11 +479,7 @@ func (m *Manager) DeleteIPMapping(ctx context.Context, mappingID string, expecte
 	if !deleted {
 		return current.Revision(), nil
 	}
-	mappings, err := m.loadMappings(ctx)
-	if err != nil {
-		return 0, err
-	}
-	next := current.CloneReplacingMappings(mappings)
+	next := current.CloneReplacingMapping(mappingID, nil)
 	m.registry.Store(next)
 	return next.Revision(), nil
 }
@@ -442,26 +499,55 @@ func (m *Manager) PrepareShared(definition Definition, expected int64) (*Prepare
 	}, nil
 }
 
-func (m *Manager) PublishShared(prepared *PreparedShared) MutationResult {
-	if m == nil || prepared == nil || prepared.Profile == nil {
-		return MutationResult{}
+func (m *Manager) ReserveShared(prepared *PreparedShared) error {
+	if m == nil {
+		return errors.New("manager is nil")
+	}
+	if prepared == nil || prepared.Profile == nil {
+		return errors.New("prepared shared profile is required")
 	}
 	m.mutationMu.Lock()
-	defer m.mutationMu.Unlock()
-
 	current := m.snapshot()
-	shared := current.SharedProfile()
 	currentRevision := int64(0)
-	if shared != nil {
-		currentRevision = shared.Revision()
+	if current != nil && current.SharedProfile() != nil {
+		currentRevision = current.SharedProfile().Revision()
 	}
 	if currentRevision != prepared.ExpectedRevision {
-		return mutationResult(current, currentRevision, shared)
+		m.mutationMu.Unlock()
+		return &store.RevisionConflictError{CurrentRevision: currentRevision}
 	}
+	prepared.manager = m
+	return nil
+}
+
+func (m *Manager) PublishShared(prepared *PreparedShared) MutationResult {
+	if m == nil || prepared == nil || prepared.Profile == nil || prepared.manager != m {
+		return MutationResult{}
+	}
+	defer prepared.releaseReservation()
+
+	current := m.snapshot()
 	next := current.CloneReplacingShared(prepared.Profile)
 	m.registry.Store(next)
 	m.restartProviderLocked(next.SharedProfile())
 	return mutationResult(next, prepared.Profile.Revision(), prepared.Profile)
+}
+
+func (m *Manager) AbortShared(prepared *PreparedShared) {
+	if prepared != nil && prepared.manager == m {
+		prepared.releaseReservation()
+	}
+}
+
+func (p *PreparedShared) releaseReservation() {
+	if p == nil {
+		return
+	}
+	p.release.Do(func() {
+		if p.manager != nil {
+			p.manager.mutationMu.Unlock()
+		}
+	})
 }
 
 func (m *Manager) PublishCredentials(snapshot CredentialSnapshot) uint64 {
@@ -483,7 +569,7 @@ func (m *Manager) PublishCredentials(snapshot CredentialSnapshot) uint64 {
 func (m *Manager) prepareDefinition(profileID string, kind Kind, revision int64, definition Definition) (*CompiledProfile, []byte, error) {
 	compiled, err := Compile(profileID, kind, revision, definition, m.lookup)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("%w: %v", ErrInvalidDefinition, err)
 	}
 	encoded, err := json.Marshal(compiled.Definition())
 	if err != nil {
