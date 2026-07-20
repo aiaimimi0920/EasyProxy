@@ -80,16 +80,16 @@ func TestDefinitionRoutingRoundTripPreservesListen(t *testing.T) {
 func TestCloneDefinitionDeepCopiesReferenceFields(t *testing.T) {
 	longLivedOnly := true
 	original := Definition{
-		SchemaVersion:    1,
-		Enabled:          true,
-		DefaultStrategy:  "stable",
-		UseDefaultRules:  true,
-		FinalPolicy:      "PROXY",
-		Rules:            []string{"DOMAIN-SUFFIX,example.com,PROXY"},
-		RuleProviders:    []RuleProvider{{URL: "https://example.com/rules.txt", Policy: "DIRECT", Behavior: "domain", Interval: "1h"}},
-		NodeFilter:       NodeFilter{Countries: []string{"US"}, Regions: []string{"hk"}, LongLived: &longLivedOnly},
-		LongLived:        LongLivedPolicy{MinUptime: "1h", MinSuccessRate: 0.8},
-		Session:          SessionPolicy{TTL: "10m"},
+		SchemaVersion:   1,
+		Enabled:         true,
+		DefaultStrategy: "stable",
+		UseDefaultRules: true,
+		FinalPolicy:     "PROXY",
+		Rules:           []string{"DOMAIN-SUFFIX,example.com,PROXY"},
+		RuleProviders:   []RuleProvider{{URL: "https://example.com/rules.txt", Policy: "DIRECT", Behavior: "domain", Interval: "1h"}},
+		NodeFilter:      NodeFilter{Countries: []string{"US"}, Regions: []string{"hk"}, LongLived: &longLivedOnly},
+		LongLived:       LongLivedPolicy{MinUptime: "1h", MinSuccessRate: 0.8},
+		Session:         SessionPolicy{TTL: "10m"},
 	}
 
 	cloned := cloneDefinition(original)
