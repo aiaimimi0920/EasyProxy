@@ -72,7 +72,8 @@ COPY --from=cloudflared-fetch /out-cloudflared /usr/local/bin/cloudflared
 COPY deploy/service/base/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 COPY deploy/service/base/bootstrap-service-config.py /usr/local/bin/bootstrap-service-config.py
 COPY scripts/easyproxy-import-code.py /usr/local/bin/easyproxy-import-code.py
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
+    && chmod +x /usr/local/bin/docker-entrypoint.sh
 COPY --chown=easy:easy deploy/service/base/config.template.yaml /etc/easy-proxy/config.yaml
 
 EXPOSE 22323 29888 25000-25500
