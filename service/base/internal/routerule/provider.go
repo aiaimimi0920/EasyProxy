@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -32,27 +33,44 @@ type ProviderSpec struct {
 	Behavior string
 }
 
+// ProviderStatus reports aggregate remote provider health for one manager.
+type ProviderStatus struct {
+	Degraded  bool
+	LastError string
+	UpdatedAt time.Time
+}
+
 // ProviderManager fetches one or more providers and feeds their materialized
 // rule lines into a sink (typically Engine.SetRules with the static rules
 // prepended). It is safe for concurrent use.
 type ProviderManager struct {
-	mu        sync.Mutex
-	specs     []ProviderSpec
-	cached    map[string][]string // url -> materialized rule lines
-	client    *http.Client
-	onUpdate  func(allProviderRules []string)
-	cancel    context.CancelFunc
+	mu       sync.Mutex
+	specs    []ProviderSpec
+	cached   map[string][]string // url -> materialized rule lines
+	failures map[string]string   // url -> last fetch error
+	client   *http.Client
+	onUpdate func(allProviderRules []string)
+	onStatus func(ProviderStatus)
+	cancel   context.CancelFunc
 }
 
 // NewProviderManager creates a manager. onUpdate is invoked (off the caller's
 // goroutine) whenever any provider's content changes, with the concatenated
 // rule lines from all providers in spec order.
 func NewProviderManager(specs []ProviderSpec, onUpdate func(allProviderRules []string)) *ProviderManager {
+	return NewProviderManagerWithStatus(specs, onUpdate, nil)
+}
+
+// NewProviderManagerWithStatus creates a manager with an optional status
+// callback that receives aggregate provider health updates.
+func NewProviderManagerWithStatus(specs []ProviderSpec, onUpdate func(allProviderRules []string), onStatus func(ProviderStatus)) *ProviderManager {
 	return &ProviderManager{
 		specs:    specs,
 		cached:   make(map[string][]string),
+		failures: make(map[string]string),
 		client:   &http.Client{Timeout: 30 * time.Second},
 		onUpdate: onUpdate,
+		onStatus: onStatus,
 	}
 }
 
@@ -122,8 +140,10 @@ func (m *ProviderManager) refreshOne(ctx context.Context, spec ProviderSpec) boo
 	lines, err := m.fetch(ctx, spec)
 	if err != nil {
 		// Keep previously cached content on failure (fail-soft).
+		m.recordFailure(spec.URL, err)
 		return false
 	}
+	m.recordSuccess(spec.URL)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	prev := m.cached[spec.URL]
@@ -216,4 +236,60 @@ func equalLines(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func (m *ProviderManager) recordFailure(url string, err error) {
+	if m == nil || err == nil {
+		return
+	}
+	m.mu.Lock()
+	previous, existed := m.failures[url]
+	next := err.Error()
+	m.failures[url] = next
+	status := m.statusLocked()
+	m.mu.Unlock()
+	if !existed || previous != next {
+		m.emitStatus(status)
+	}
+}
+
+func (m *ProviderManager) recordSuccess(url string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	_, existed := m.failures[url]
+	if existed {
+		delete(m.failures, url)
+	}
+	status := m.statusLocked()
+	m.mu.Unlock()
+	if existed {
+		m.emitStatus(status)
+	}
+}
+
+func (m *ProviderManager) statusLocked() ProviderStatus {
+	status := ProviderStatus{UpdatedAt: time.Now().UTC()}
+	if len(m.failures) == 0 {
+		return status
+	}
+	status.Degraded = true
+	urls := make([]string, 0, len(m.failures))
+	for url := range m.failures {
+		urls = append(urls, url)
+	}
+	sort.Strings(urls)
+	status.LastError = m.failures[urls[0]]
+	return status
+}
+
+func (m *ProviderManager) emitStatus(status ProviderStatus) {
+	if m == nil || m.onStatus == nil {
+		return
+	}
+	if status.UpdatedAt.IsZero() {
+		status.UpdatedAt = time.Now().UTC()
+	}
+	m.onStatus(status)
 }

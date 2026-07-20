@@ -9,12 +9,15 @@ import (
 )
 
 type CompiledProfile struct {
-	id         string
-	kind       Kind
-	revision   int64
-	definition Definition
-	selection  SelectionSettings
-	engine     *routerule.Engine
+	id            string
+	kind          Kind
+	revision      int64
+	definition    Definition
+	selection     SelectionSettings
+	engine        *routerule.Engine
+	baseRules     []string
+	finalPolicy   routerule.Policy
+	providerSpecs []routerule.ProviderSpec
 }
 
 func Compile(id string, kind Kind, revision int64, definition Definition, lookup routerule.CountryLookup) (*CompiledProfile, error) {
@@ -50,14 +53,31 @@ func Compile(id string, kind Kind, revision int64, definition Definition, lookup
 		return nil, err
 	}
 
+	providerSpecs := make([]routerule.ProviderSpec, 0, len(normalized.RuleProviders))
+	for _, provider := range normalized.RuleProviders {
+		interval, err := time.ParseDuration(provider.Interval)
+		if err != nil {
+			return nil, fmt.Errorf("parse rule provider interval %q: %w", provider.Interval, err)
+		}
+		providerSpecs = append(providerSpecs, routerule.ProviderSpec{
+			URL:      provider.URL,
+			Policy:   routerule.Policy(provider.Policy),
+			Behavior: provider.Behavior,
+			Interval: interval,
+		})
+	}
+
 	engine := routerule.New(rules, finalPolicy, lookup)
 	return &CompiledProfile{
-		id:         id,
-		kind:       kind,
-		revision:   revision,
-		definition: cloneDefinition(normalized),
-		selection:  cloneSelection(selection),
-		engine:     engine,
+		id:            id,
+		kind:          kind,
+		revision:      revision,
+		definition:    cloneDefinition(normalized),
+		selection:     cloneSelection(selection),
+		engine:        engine,
+		baseRules:     cloneStringSlice(rules),
+		finalPolicy:   finalPolicy,
+		providerSpecs: cloneProviderSpecs(providerSpecs),
 	}, nil
 }
 
@@ -121,6 +141,13 @@ func (p *CompiledProfile) FinalPolicy() routerule.Policy {
 	return p.engine.Final()
 }
 
+func (p *CompiledProfile) ProviderSpecs() []routerule.ProviderSpec {
+	if p == nil {
+		return nil
+	}
+	return cloneProviderSpecs(p.providerSpecs)
+}
+
 func (p *CompiledProfile) WithRevision(revision int64) *CompiledProfile {
 	if p == nil {
 		return nil
@@ -128,6 +155,15 @@ func (p *CompiledProfile) WithRevision(revision int64) *CompiledProfile {
 	cloned := *p
 	cloned.revision = revision
 	return &cloned
+}
+
+func cloneProviderSpecs(values []routerule.ProviderSpec) []routerule.ProviderSpec {
+	if values == nil {
+		return nil
+	}
+	cloned := make([]routerule.ProviderSpec, len(values))
+	copy(cloned, values)
+	return cloned
 }
 
 func normalizeDefinition(def Definition) (Definition, SelectionSettings, error) {

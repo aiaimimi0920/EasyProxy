@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"errors"
 	"net/netip"
 	"sort"
 	"strings"
@@ -253,6 +254,25 @@ func resolutionForProfile(deviceID string, source IdentitySource, profile *Compi
 	return resolution
 }
 
+// NormalizeDeviceID canonicalizes a device identifier for persistence and
+// request handling.
+func NormalizeDeviceID(deviceID string) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(deviceID))
+	if len(normalized) == 0 || len(normalized) > 64 {
+		return "", errors.New("device_id length must be 1-64")
+	}
+	for _, r := range normalized {
+		if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-') {
+			return "", errors.New("device_id contains invalid characters")
+		}
+	}
+	return normalized, nil
+}
+
 func normalizeDeviceID(deviceID string) string {
-	return strings.ToLower(strings.TrimSpace(deviceID))
+	normalized, err := NormalizeDeviceID(deviceID)
+	if err != nil {
+		return strings.ToLower(strings.TrimSpace(deviceID))
+	}
+	return normalized
 }
