@@ -20,6 +20,39 @@ def read_json_lines(path: Path):
 
 
 class ScriptSmokeTests(unittest.TestCase):
+    def root_config_fixture(self):
+        return yaml.safe_load((REPO_ROOT / "config.example.yaml").read_text(encoding="utf-8")) or {}
+
+    def run_renderer(self, root):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root_path = Path(temp_dir) / "config.yaml"
+            output_path = Path(temp_dir) / "service-config.yaml"
+            root_path.write_text(
+                yaml.safe_dump(root, sort_keys=False, allow_unicode=True),
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(REPO_ROOT / "scripts" / "render-derived-configs.py"),
+                    "--root-config",
+                    str(root_path),
+                    "--service-output",
+                    str(output_path),
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            rendered = yaml.safe_load(output_path.read_text(encoding="utf-8")) if output_path.exists() else None
+            return result, rendered
+
+    def render_service_runtime(self, root):
+        result, rendered = self.run_renderer(root)
+        self.assertEqual(result.returncode, 0, msg=result.stderr or result.stdout)
+        return rendered or {}
+
     def run_powershell(self, args, env=None):
         merged_env = os.environ.copy()
         if env:
@@ -73,6 +106,8 @@ class ScriptSmokeTests(unittest.TestCase):
         runtime = root.get("serviceBase", {}).get("runtime", {})
         self.assertIn("routing", runtime, "config.example.yaml must expose the canonical routing block")
         self.assertFalse(runtime["routing"].get("enabled", True))
+        self.assertIn("local_server", runtime, "config.example.yaml must expose the canonical Local Server block")
+        self.assertFalse(runtime["local_server"].get("enabled", True))
 
         with tempfile.TemporaryDirectory() as temp_dir:
             output = Path(temp_dir) / "service-config.yaml"
@@ -95,6 +130,144 @@ class ScriptSmokeTests(unittest.TestCase):
             self.assertEqual(rendered["routing"]["enabled"], False)
             self.assertEqual(rendered["routing"]["final_policy"], "PROXY")
             self.assertIn("long_lived", rendered["routing"])
+
+    def test_root_local_server_render_derives_canonical_credentials(self):
+        root = self.root_config_fixture()
+        runtime = root["serviceBase"]["runtime"]
+        runtime["mode"] = "pool"
+        runtime["listener"]["protocol"] = "mixed"
+        runtime["local_server"] = {
+            "enabled": True,
+            "listen": "",
+            "auth": {"username": "easyproxy", "password": "test-secret"},
+        }
+
+        rendered = self.render_service_runtime(root)
+
+        self.assertTrue(rendered["local_server"]["enabled"])
+        self.assertEqual(rendered["listener"]["username"], "easyproxy")
+        self.assertEqual(rendered["listener"]["password"], "test-secret")
+        self.assertEqual(rendered["management"]["password"], "test-secret")
+        self.assertEqual(rendered["local_server"]["shared_revision"], 1)
+        self.assertEqual(rendered["local_server"]["credential_generation"], 2)
+
+    def test_root_local_server_render_rejects_bypass_topology(self):
+        root = self.root_config_fixture()
+        root["serviceBase"]["runtime"]["local_server"] = {
+            "enabled": True,
+            "listen": "",
+            "auth": {"username": "easyproxy", "password": "test-secret"},
+        }
+
+        result, _ = self.run_renderer(root)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("mode: pool", result.stderr)
+
+    def test_root_local_server_render_rejects_non_mixed_listener(self):
+        root = self.root_config_fixture()
+        runtime = root["serviceBase"]["runtime"]
+        runtime["mode"] = "pool"
+        runtime["listener"]["protocol"] = "http"
+        runtime["local_server"] = {
+            "enabled": True,
+            "listen": "",
+            "auth": {"username": "easyproxy", "password": "test-secret"},
+        }
+
+        result, _ = self.run_renderer(root)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("listener.protocol: mixed", result.stderr)
+
+    def test_root_local_server_render_rejects_extra_listeners(self):
+        root = self.root_config_fixture()
+        runtime = root["serviceBase"]["runtime"]
+        runtime["mode"] = "pool"
+        runtime["listener"]["protocol"] = "mixed"
+        runtime["extra_listeners"] = [{"address": "0.0.0.0", "port": 24000, "protocol": "http"}]
+        runtime["local_server"] = {
+            "enabled": True,
+            "listen": "",
+            "auth": {"username": "easyproxy", "password": "test-secret"},
+        }
+
+        result, _ = self.run_renderer(root)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("does not allow extra_listeners", result.stderr)
+
+    def test_root_local_server_render_rejects_conflicting_listens(self):
+        root = self.root_config_fixture()
+        runtime = root["serviceBase"]["runtime"]
+        runtime["mode"] = "pool"
+        runtime["listener"]["protocol"] = "mixed"
+        runtime["routing"]["listen"] = "0.0.0.0:22324"
+        runtime["local_server"] = {
+            "enabled": True,
+            "listen": "0.0.0.0:22323",
+            "auth": {"username": "easyproxy", "password": "test-secret"},
+        }
+
+        result, _ = self.run_renderer(root)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("local_server.listen conflicts with routing.listen", result.stderr)
+
+    def test_root_local_server_render_rejects_invalid_username(self):
+        root = self.root_config_fixture()
+        runtime = root["serviceBase"]["runtime"]
+        runtime["mode"] = "pool"
+        runtime["listener"]["protocol"] = "mixed"
+        runtime["local_server"] = {
+            "enabled": True,
+            "listen": "",
+            "auth": {"username": "invalid user", "password": "test-secret"},
+        }
+
+        result, _ = self.run_renderer(root)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("canonical username is invalid", result.stderr)
+
+    def test_root_local_server_render_rejects_unresolved_password(self):
+        for password in ("", "change_me_to_a_strong_shared_password"):
+            with self.subTest(password=password):
+                root = self.root_config_fixture()
+                runtime = root["serviceBase"]["runtime"]
+                runtime["mode"] = "pool"
+                runtime["listener"]["protocol"] = "mixed"
+                runtime["local_server"] = {
+                    "enabled": True,
+                    "listen": "",
+                    "auth": {"username": "easyproxy", "password": password},
+                }
+
+                result, _ = self.run_renderer(root)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("canonical credential is unresolved", result.stderr)
+
+    def test_disabled_root_local_server_preserves_legacy_credentials(self):
+        root = self.root_config_fixture()
+        runtime = root["serviceBase"]["runtime"]
+        runtime["listener"]["username"] = "legacy-user"
+        runtime["listener"]["password"] = "legacy-proxy-password"
+        runtime["management"]["password"] = "legacy-management-password"
+        runtime["local_server"] = {
+            "enabled": False,
+            "listen": "",
+            "auth": {
+                "username": "easyproxy",
+                "password": "change_me_to_a_strong_shared_password",
+            },
+        }
+
+        rendered = self.render_service_runtime(root)
+
+        self.assertEqual(rendered["listener"]["username"], "legacy-user")
+        self.assertEqual(rendered["listener"]["password"], "legacy-proxy-password")
+        self.assertEqual(rendered["management"]["password"], "legacy-management-password")
 
     def test_deploy_subproject_dispatches_publish_service_base_config(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -172,6 +345,43 @@ class ScriptSmokeTests(unittest.TestCase):
             self.assertIn("-GhcrOwner", args)
             self.assertIn("test-owner", args)
             self.assertIn("-SkipPull", args)
+
+    def test_deploy_subproject_rejects_unresolved_local_server_password_before_dispatch(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            capture_path = Path(temp_dir) / "external.jsonl"
+            temp_config = Path(temp_dir) / "config.yaml"
+            root = self.root_config_fixture()
+            runtime = root["serviceBase"]["runtime"]
+            runtime["mode"] = "pool"
+            runtime["listener"]["protocol"] = "mixed"
+            runtime["local_server"] = {
+                "enabled": True,
+                "listen": "",
+                "auth": {
+                    "username": "easyproxy",
+                    "password": "change_me_to_a_strong_shared_password",
+                },
+            }
+            temp_config.write_text(
+                yaml.safe_dump(root, sort_keys=False, allow_unicode=True),
+                encoding="utf-8",
+            )
+
+            result = self.run_powershell(
+                [
+                    "-File",
+                    str(REPO_ROOT / "scripts" / "deploy-subproject.ps1"),
+                    "-Project",
+                    "easyproxy",
+                    "-ConfigPath",
+                    str(temp_config),
+                ],
+                env={"EASYPROXY_TEST_CAPTURE_EXTERNAL_COMMANDS_PATH": str(capture_path)},
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("local_server.auth.password must be a real shared secret", f"{result.stdout}\n{result.stderr}")
+            self.assertEqual(read_json_lines(capture_path), [])
 
     def test_deploy_subproject_dispatches_sync_github_settings(self):
         with tempfile.TemporaryDirectory() as temp_dir:

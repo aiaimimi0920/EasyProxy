@@ -28,9 +28,9 @@ services:
     # - ./nodes.txt:/etc/easy-proxy/nodes.txt
 
     # Notes:
-    # - 22323: pool listener
-    # - 29888: management API and WebUI
-    # - 25000-25500: multi-port range for multi-port/hybrid mode
+    # - 22323: canonical Local Server mixed entry (legacy pool when disabled)
+    # - 29888: shared Web Console and management API
+    # - 25000-25500: legacy-only multi-port range; incompatible with Local Server
     # - image also contains /usr/local/bin/ech-workers for connector runtime
     # - image also contains /usr/local/bin/cfst + /usr/local/share/cfst/ip.txt
     #   for local preferred Cloudflare entry-IP generation

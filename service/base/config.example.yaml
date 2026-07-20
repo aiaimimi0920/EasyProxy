@@ -64,6 +64,15 @@ management:
   health_check_interval: 2h                          # 周期健康检查间隔（默认 2 小时）
   password: "123456"                                # WebUI 访问密码；服务间也可直接作为 Authorization 头值调用管理 API
 
+# Canonical Local Server is opt-in. When enabled, use mode: pool,
+# listener.protocol: mixed, and replace the placeholder with one shared secret.
+local_server:
+  enabled: false
+  listen: ""
+  auth:
+    username: easyproxy
+    password: change_me_to_a_strong_shared_password
+
 # ───────────────────────────────────────────────────────────────
 # GeoIP 地域分区配置（可选）
 # ───────────────────────────────────────────────────────────────
