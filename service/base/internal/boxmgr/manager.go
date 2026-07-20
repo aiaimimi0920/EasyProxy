@@ -977,7 +977,9 @@ func (m *Manager) RecordAppliedConfig(cfg *config.Config) {
 // can apply without rebuilding sing-box. Structural fields (mode, listeners,
 // nodes, pool settings, session TTL, and GeoIP listener settings) remain from
 // the last applied snapshot so a later rollback cannot restore a config that
-// was merely edited in memory but never reloaded.
+// was merely edited in memory but never reloaded. Local Server credentials are
+// hot state because the dispatcher and management server share the Profile
+// Manager snapshot without rebinding either listener.
 func mergeHotAppliedConfig(base, applied *config.Config) *config.Config {
 	if applied == nil {
 		return nil
@@ -1001,6 +1003,13 @@ func mergeHotAppliedConfig(base, applied *config.Config) *config.Config {
 	if merged.Routing.Enabled && applied.Routing.Enabled {
 		merged.GeoIP.Enabled = applied.GeoIP.Enabled
 		merged.GeoIP.DatabasePath = applied.GeoIP.DatabasePath
+	}
+	if merged.LocalServer.Enabled && applied.LocalServer.Enabled && merged.DispatchListen() == applied.DispatchListen() {
+		merged.LocalServer.Auth = applied.LocalServer.Auth
+		merged.LocalServer.CredentialGeneration = applied.LocalServer.CredentialGeneration
+		merged.Listener.Username = applied.Listener.Username
+		merged.Listener.Password = applied.Listener.Password
+		merged.Management.Password = applied.Management.Password
 	}
 	return merged
 }

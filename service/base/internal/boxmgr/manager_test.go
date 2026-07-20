@@ -1889,6 +1889,40 @@ func TestRecordAppliedConfigRefreshesIndependentRollbackSnapshot(t *testing.T) {
 	}
 }
 
+func TestRecordAppliedConfigMergesLocalServerCredentialsIntoRollbackSnapshot(t *testing.T) {
+	oldCfg := &config.Config{
+		Mode:       "pool",
+		Listener:   config.ListenerConfig{Username: "old-user", Password: "old-secret"},
+		Management: config.ManagementConfig{Password: "old-secret"},
+		LocalServer: config.LocalServerConfig{
+			Enabled:              true,
+			Listen:               "127.0.0.1:22323",
+			Auth:                 config.LocalServerAuthConfig{Username: "old-user", Password: "old-secret"},
+			CredentialGeneration: 2,
+		},
+	}
+	appliedCfg := snapshotConfig(oldCfg)
+	appliedCfg.LocalServer.Auth = config.LocalServerAuthConfig{Username: "new-user", Password: "new-secret"}
+	appliedCfg.LocalServer.CredentialGeneration = 3
+	appliedCfg.Listener.Username = "new-user"
+	appliedCfg.Listener.Password = "new-secret"
+	appliedCfg.Management.Password = "new-secret"
+	manager := &Manager{lastAppliedCfg: snapshotConfig(oldCfg)}
+
+	manager.RecordAppliedConfig(appliedCfg)
+
+	recorded := manager.lastAppliedCfg
+	if recorded.LocalServer.Auth != appliedCfg.LocalServer.Auth || recorded.LocalServer.CredentialGeneration != 3 {
+		t.Fatalf("canonical credentials were not recorded: %#v", recorded.LocalServer)
+	}
+	if recorded.Listener.Username != "new-user" || recorded.Listener.Password != "new-secret" || recorded.Management.Password != "new-secret" {
+		t.Fatalf("derived credentials were not recorded: listener=%#v management=%q", recorded.Listener, recorded.Management.Password)
+	}
+	if recorded.LocalServer.Listen != oldCfg.LocalServer.Listen || !recorded.LocalServer.Enabled {
+		t.Fatalf("credential hot apply changed Local Server topology: %#v", recorded.LocalServer)
+	}
+}
+
 func TestReloadRollbackAdvancesMonitorGenerationAndSweepsCandidateNodes(t *testing.T) {
 	monitorMgr, err := monitor.NewManager(monitor.Config{})
 	if err != nil {

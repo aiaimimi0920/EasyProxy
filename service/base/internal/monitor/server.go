@@ -3,6 +3,7 @@ package monitor
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"embed"
 	"encoding/hex"
@@ -36,9 +37,10 @@ var embeddedFS embed.FS
 
 // Session represents a user session with expiration.
 type Session struct {
-	Token     string
-	CreatedAt time.Time
-	ExpiresAt time.Time
+	Token                string
+	CreatedAt            time.Time
+	ExpiresAt            time.Time
+	CredentialGeneration uint64
 }
 
 // NodeManager exposes config node CRUD and reload operations.
@@ -116,13 +118,14 @@ type SubscriptionStatus struct {
 
 // Server exposes HTTP endpoints for monitoring.
 type Server struct {
-	cfg               Config
-	cfgMu             sync.RWMutex   // protects cfgSrc pointer assignment and local cfg fields
-	cfgSrc            *config.Config // 可持久化的配置对象; fields protected by cfgSrc.mu
-	configUpdateMu    sync.Mutex     // serializes cfgSrc swaps with persisted config edits
-	reloadWindowCount int            // nested reload intents that reject persisted edits
-	mgr               *Manager
-	handler           http.Handler
+	cfg                      Config
+	cfgMu                    sync.RWMutex   // protects cfgSrc pointer assignment and local cfg fields
+	cfgSrc                   *config.Config // 可持久化的配置对象; fields protected by cfgSrc.mu
+	configUpdateMu           sync.Mutex     // serializes cfgSrc swaps with persisted config edits
+	reloadWindowCount        int            // nested reload intents that reject persisted edits
+	localServerReloadPending bool           // persisted Local Server edit awaits reload publication
+	mgr                      *Manager
+	handler                  http.Handler
 
 	lifecycleMu sync.Mutex
 	srv         *http.Server
@@ -160,7 +163,11 @@ type Server struct {
 	proxyCompatCheckoutMu sync.Mutex
 }
 
-var errReloadInProgress = errors.New("configuration update deferred while reload is in progress")
+var (
+	errReloadInProgress              = errors.New("configuration update deferred while reload is in progress")
+	errInvalidLocalServerConfig      = errors.New("invalid local server config")
+	errLocalServerCredentialConflict = errors.New("local server credential conflict")
+)
 
 // NewServer constructs the reusable monitor runtime. A disabled config creates
 // a dormant server so integrations can be wired before management is enabled.
@@ -221,6 +228,7 @@ func NewServer(cfg Config, mgr *Manager, logger *log.Logger) *Server {
 	mux.HandleFunc("/api/source-sync/source-health", s.withAuth(s.handleSourceSyncSourceHealth))
 	mux.HandleFunc("/api/routing/status", s.withAuth(s.handleRoutingStatus))
 	mux.HandleFunc("/api/routing/config", s.withAuth(s.handleRoutingConfig))
+	mux.HandleFunc("/api/local-server/config", s.withAuth(s.handleLocalServerConfig))
 	mux.HandleFunc("/api/reload", s.withAuth(s.handleReload))
 	mux.HandleFunc("/proxy/catalog", s.withAuth(s.handleProxyCatalog))
 	mux.HandleFunc("/proxy/snapshot", s.withAuth(s.handleProxySnapshot))
@@ -648,6 +656,7 @@ func (s *Server) SetConfig(cfg *config.Config) {
 	if hasConfig {
 		applyPersistedServerConfig(&s.cfg, runtimeCfg)
 	}
+	s.localServerReloadPending = false
 }
 
 // BeginReloadWindow rejects persisted edits while a reload intent is capturing
@@ -739,6 +748,7 @@ func (s *Server) applyPreparedConfigLocked(source *config.Config, snapshot persi
 	s.cfgSrc = source
 	applyPersistedServerConfig(&s.cfg, snapshot)
 	s.cfgMu.Unlock()
+	s.localServerReloadPending = false
 }
 
 func (s *Server) restorePreparedConfig(source *config.Config, runtimeCfg Config) {
@@ -752,6 +762,7 @@ func (s *Server) restorePreparedConfigLocked(source *config.Config, runtimeCfg C
 	s.cfgSrc = source
 	s.cfg = cloneRuntimeConfig(runtimeCfg)
 	s.cfgMu.Unlock()
+	s.localServerReloadPending = false
 }
 
 func settingsChangeRequiresReload(c *config.Config, req allSettingsRequest) bool {
@@ -1806,7 +1817,8 @@ func writeJSON(w http.ResponseWriter, payload any) {
 // withAuth 认证中间件，如果配置了密码则需要验证
 func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		password := s.managementPassword()
+		credentials := s.credentialSnapshot()
+		password := credentials.Password
 		// 如果没有配置密码，直接放行
 		if password == "" {
 			next(w, r)
@@ -1829,6 +1841,17 @@ func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
 				next(w, r)
 				return
 			}
+			if credentials.Username != "" {
+				if username, suppliedPassword, ok := r.BasicAuth(); ok && secureComparePair(
+					username,
+					suppliedPassword,
+					credentials.Username,
+					credentials.Password,
+				) {
+					next(w, r)
+					return
+				}
+			}
 			if s.validateManagementPassword(authHeader) {
 				next(w, r)
 				return
@@ -1850,7 +1873,7 @@ func bearerTokenFromHeader(authHeader string) (string, bool) {
 }
 
 func (s *Server) validateManagementPassword(authHeader string) bool {
-	password := s.managementPassword()
+	password := s.credentialSnapshot().Password
 	if password == "" {
 		return false
 	}
@@ -1865,6 +1888,17 @@ func (s *Server) validateManagementPassword(authHeader string) bool {
 	}
 
 	return secureCompareStrings(token, password)
+}
+
+func (s *Server) credentialSnapshot() profile.CredentialSnapshot {
+	if manager := s.profileManagerSnapshot(); manager != nil && manager.LocalServerEnabled() {
+		credentials := manager.Credentials()
+		if credentials.Generation == 0 {
+			credentials.Generation = 1
+		}
+		return credentials
+	}
+	return profile.CredentialSnapshot{Password: s.managementPassword(), Generation: 1}
 }
 
 func (s *Server) managementPassword() string {
@@ -1889,7 +1923,8 @@ func (s *Server) runtimeConfig() Config {
 
 // handleAuth 处理登录认证
 func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
-	password := s.managementPassword()
+	credentials := s.credentialSnapshot()
+	password := credentials.Password
 	// 如果没有配置密码，直接返回成功（不需要token）
 	if password == "" {
 		writeJSON(w, map[string]any{"message": "无需密码", "no_password": true})
@@ -1898,7 +1933,16 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 
 	// GET 请求用于检查是否需要密码（供前端初始化时使用）
 	if r.Method == http.MethodGet {
-		writeJSON(w, map[string]any{"message": "需要密码", "no_password": false})
+		if credentials.Username != "" {
+			writeJSON(w, map[string]any{
+				"message":           "需要用户名和密码",
+				"auth_mode":         "canonical_pair",
+				"username_required": true,
+				"no_password":       false,
+			})
+			return
+		}
+		writeJSON(w, map[string]any{"message": "需要密码", "auth_mode": "password", "username_required": false, "no_password": false})
 		return
 	}
 
@@ -1908,6 +1952,7 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
+		Username string `json:"username"`
 		Password string `json:"password"`
 	}
 
@@ -1918,7 +1963,11 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 使用 constant-time 比较防止时序攻击
-	if !secureCompareStrings(req.Password, password) {
+	valid := secureCompareStrings(req.Password, password)
+	if credentials.Username != "" {
+		valid = secureComparePair(req.Username, req.Password, credentials.Username, credentials.Password)
+	}
+	if !valid {
 		// 添加随机延迟防止暴力破解
 		time.Sleep(time.Duration(100+mathrand.Intn(200)) * time.Millisecond)
 		w.WriteHeader(http.StatusUnauthorized)
@@ -2100,6 +2149,305 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
+}
+
+type localServerConfigUpdate struct {
+	Enabled      *bool   `json:"enabled,omitempty"`
+	Listen       *string `json:"listen,omitempty"`
+	AuthUsername *string `json:"auth_username,omitempty"`
+	AuthPassword *string `json:"auth_password,omitempty"`
+}
+
+type localServerConfigView struct {
+	Enabled              bool   `json:"enabled"`
+	Listen               string `json:"listen"`
+	AuthUsername         string `json:"auth_username"`
+	PasswordSet          bool   `json:"password_set"`
+	CredentialGeneration uint64 `json:"credential_generation"`
+	SharedRevision       int64  `json:"shared_revision"`
+}
+
+type localServerConfigUpdateResponse struct {
+	localServerConfigView
+	NeedReload bool `json:"need_reload"`
+}
+
+func (s *Server) handleLocalServerConfig(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, s.getLocalServerConfig())
+	case http.MethodPut:
+		var req localServerConfigUpdate
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			writeJSON(w, map[string]any{"error": "invalid request body: " + err.Error()})
+			return
+		}
+		view, needReload, err := s.updateLocalServerConfig(req)
+		if err != nil {
+			switch {
+			case errors.Is(err, errReloadInProgress), errors.Is(err, errLocalServerCredentialConflict):
+				w.WriteHeader(http.StatusConflict)
+			case errors.Is(err, errInvalidLocalServerConfig):
+				w.WriteHeader(http.StatusUnprocessableEntity)
+			default:
+				w.WriteHeader(http.StatusInternalServerError)
+			}
+			writeJSON(w, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, localServerConfigUpdateResponse{
+			localServerConfigView: view,
+			NeedReload:            needReload,
+		})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) getLocalServerConfig() localServerConfigView {
+	s.cfgMu.RLock()
+	c := s.cfgSrc
+	s.cfgMu.RUnlock()
+	if c == nil {
+		return localServerConfigView{}
+	}
+	c.RLock()
+	defer c.RUnlock()
+	return localServerConfigViewFromConfig(c)
+}
+
+func localServerConfigViewFromConfig(c *config.Config) localServerConfigView {
+	if c == nil {
+		return localServerConfigView{}
+	}
+	generation := c.LocalServer.CredentialGeneration
+	if generation == 0 {
+		generation = 1
+	}
+	sharedRevision := c.LocalServer.SharedRevision
+	if sharedRevision == 0 {
+		sharedRevision = 1
+	}
+	return localServerConfigView{
+		Enabled:              c.LocalServer.Enabled,
+		Listen:               strings.TrimSpace(c.LocalServer.Listen),
+		AuthUsername:         strings.TrimSpace(c.LocalServer.Auth.Username),
+		PasswordSet:          c.LocalServer.Auth.Password != "",
+		CredentialGeneration: generation,
+		SharedRevision:       sharedRevision,
+	}
+}
+
+func (s *Server) updateLocalServerConfig(req localServerConfigUpdate) (localServerConfigView, bool, error) {
+	s.configUpdateMu.Lock()
+	defer s.configUpdateMu.Unlock()
+
+	s.cfgMu.RLock()
+	c := s.cfgSrc
+	s.cfgMu.RUnlock()
+	if c == nil {
+		return localServerConfigView{}, false, errors.New("config storage is not initialized")
+	}
+	if s.reloadWindowCount > 0 {
+		return localServerConfigView{}, false, errReloadInProgress
+	}
+
+	c.Lock()
+	pendingReload := s.localServerReloadPending
+	currentEnabled := c.LocalServer.Enabled
+	currentListen := strings.TrimSpace(c.LocalServer.Listen)
+	currentUsername := strings.TrimSpace(c.LocalServer.Auth.Username)
+	currentPassword := c.LocalServer.Auth.Password
+	candidate := c.Clone()
+
+	if req.Enabled != nil {
+		candidate.LocalServer.Enabled = *req.Enabled
+	}
+	if req.Listen != nil {
+		candidate.LocalServer.Listen = strings.TrimSpace(*req.Listen)
+	}
+	if req.AuthUsername != nil {
+		candidate.LocalServer.Auth.Username = strings.TrimSpace(*req.AuthUsername)
+	} else if candidate.LocalServer.Enabled && strings.TrimSpace(candidate.LocalServer.Auth.Username) == "" {
+		legacyUsername := strings.TrimSpace(candidate.Listener.Username)
+		if validLocalServerUsername(legacyUsername) {
+			candidate.LocalServer.Auth.Username = legacyUsername
+		} else {
+			candidate.LocalServer.Auth.Username = "easyproxy"
+		}
+	}
+	if req.AuthPassword != nil {
+		if *req.AuthPassword == "" {
+			c.Unlock()
+			return localServerConfigView{}, false, fmt.Errorf("%w: auth_password must not be empty", errInvalidLocalServerConfig)
+		}
+		candidate.LocalServer.Auth.Password = *req.AuthPassword
+	} else if candidate.LocalServer.Enabled && candidate.LocalServer.Auth.Password == "" {
+		listenerPassword := candidate.Listener.Password
+		managementPassword := candidate.Management.Password
+		switch {
+		case listenerPassword != "" && managementPassword != "" && listenerPassword != managementPassword:
+			c.Unlock()
+			return localServerConfigView{}, false, fmt.Errorf("%w: legacy listener and management passwords differ", errLocalServerCredentialConflict)
+		case listenerPassword != "":
+			candidate.LocalServer.Auth.Password = listenerPassword
+		case managementPassword != "":
+			candidate.LocalServer.Auth.Password = managementPassword
+		}
+	}
+
+	if err := validateLocalServerConfigCandidate(candidate, req.AuthUsername != nil); err != nil {
+		c.Unlock()
+		return localServerConfigView{}, false, err
+	}
+
+	credentialChanged := currentUsername != candidate.LocalServer.Auth.Username ||
+		currentPassword != candidate.LocalServer.Auth.Password
+	enabledCredentialChange := !currentEnabled && candidate.LocalServer.Enabled
+	if credentialChanged || enabledCredentialChange {
+		generation := c.LocalServer.CredentialGeneration
+		if generation == 0 {
+			generation = 1
+		}
+		if generation == ^uint64(0) {
+			c.Unlock()
+			return localServerConfigView{}, false, fmt.Errorf("%w: credential generation overflow", errInvalidLocalServerConfig)
+		}
+		candidate.LocalServer.CredentialGeneration = generation + 1
+	}
+
+	if candidate.LocalServer.Auth.Username != "" {
+		candidate.Listener.Username = candidate.LocalServer.Auth.Username
+	}
+	if candidate.LocalServer.Auth.Password != "" {
+		candidate.Listener.Password = candidate.LocalServer.Auth.Password
+		candidate.Management.Password = candidate.LocalServer.Auth.Password
+	}
+
+	listenChanged := currentListen != candidate.LocalServer.Listen
+	needReload := pendingReload || currentEnabled != candidate.LocalServer.Enabled || listenChanged || (!currentEnabled && credentialChanged)
+
+	candidate.Lock()
+	err := candidate.SaveSettings()
+	candidate.Unlock()
+	if err != nil {
+		c.Unlock()
+		return localServerConfigView{}, false, fmt.Errorf("save config: %w", err)
+	}
+	commitLocalServerConfig(c, candidate)
+	c.Unlock()
+	s.localServerReloadPending = needReload
+
+	if !needReload {
+		runtimeCfg, _ := snapshotPersistedServerConfig(candidate)
+		s.cfgMu.Lock()
+		applyPersistedServerConfig(&s.cfg, runtimeCfg)
+		s.cfgMu.Unlock()
+
+		if currentEnabled && candidate.LocalServer.Enabled && credentialChanged {
+			if profiles := s.profileManagerSnapshot(); profiles != nil {
+				profiles.PublishCredentials(profile.CredentialSnapshot{
+					Username:   candidate.LocalServer.Auth.Username,
+					Password:   candidate.LocalServer.Auth.Password,
+					Generation: candidate.LocalServer.CredentialGeneration,
+				})
+			}
+			if routing := s.routingSnapshot(); routing != nil {
+				_ = routing.ApplyHot(candidate)
+			}
+		}
+	}
+
+	return localServerConfigViewFromConfig(candidate), needReload, nil
+}
+
+func commitLocalServerConfig(target, candidate *config.Config) {
+	target.LocalServer = candidate.LocalServer
+	target.Listener.Username = candidate.Listener.Username
+	target.Listener.Password = candidate.Listener.Password
+	target.Management.Password = candidate.Management.Password
+}
+
+func validateLocalServerConfigCandidate(candidate *config.Config, usernameExplicit bool) error {
+	if candidate == nil {
+		return fmt.Errorf("%w: config is nil", errInvalidLocalServerConfig)
+	}
+	username := strings.TrimSpace(candidate.LocalServer.Auth.Username)
+	if usernameExplicit || candidate.LocalServer.Enabled || username != "" {
+		if !validLocalServerUsername(username) {
+			return fmt.Errorf("%w: auth_username must be 1-64 ASCII letters, digits, '.', '_' or '-'", errInvalidLocalServerConfig)
+		}
+	}
+	candidate.LocalServer.Auth.Username = username
+
+	password := candidate.LocalServer.Auth.Password
+	if candidate.LocalServer.Enabled && password == "" {
+		return fmt.Errorf("%w: auth_password is required while Local Server is enabled", errInvalidLocalServerConfig)
+	}
+	if strings.IndexByte(password, 0) >= 0 {
+		return fmt.Errorf("%w: auth_password must not contain NUL", errInvalidLocalServerConfig)
+	}
+	if len(password) > 256 {
+		return fmt.Errorf("%w: auth_password must be at most 256 bytes", errInvalidLocalServerConfig)
+	}
+
+	listen := strings.TrimSpace(candidate.LocalServer.Listen)
+	if err := validateLocalServerListen(listen); err != nil {
+		return fmt.Errorf("%w: %v", errInvalidLocalServerConfig, err)
+	}
+	candidate.LocalServer.Listen = listen
+
+	if !candidate.LocalServer.Enabled {
+		return nil
+	}
+	if candidate.Mode != "pool" {
+		return fmt.Errorf("%w: enabled Local Server requires mode %q", errInvalidLocalServerConfig, "pool")
+	}
+	if candidate.Listener.Protocol != config.InboundProtocolMixed {
+		return fmt.Errorf("%w: enabled Local Server requires listener.protocol %q", errInvalidLocalServerConfig, config.InboundProtocolMixed)
+	}
+	if len(candidate.ExtraListeners) > 0 {
+		return fmt.Errorf("%w: enabled Local Server does not support extra_listeners", errInvalidLocalServerConfig)
+	}
+	routingListen := strings.TrimSpace(candidate.Routing.Listen)
+	if listen != "" && routingListen != "" && listen != routingListen {
+		return fmt.Errorf("%w: local_server.listen %q conflicts with routing.listen %q", errInvalidLocalServerConfig, listen, routingListen)
+	}
+	return nil
+}
+
+func validLocalServerUsername(username string) bool {
+	if username == "" || len(username) > 64 {
+		return false
+	}
+	for idx := 0; idx < len(username); idx++ {
+		ch := username[idx]
+		switch {
+		case ch >= 'a' && ch <= 'z':
+		case ch >= 'A' && ch <= 'Z':
+		case ch >= '0' && ch <= '9':
+		case ch == '.', ch == '_', ch == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func validateLocalServerListen(listen string) error {
+	if listen == "" {
+		return nil
+	}
+	_, portText, err := net.SplitHostPort(listen)
+	if err != nil {
+		return fmt.Errorf("listen must be a valid host:port: %w", err)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port < 1 || port > 65535 {
+		return fmt.Errorf("listen port must be between 1 and 65535")
+	}
+	return nil
 }
 
 // handleSubscriptionStatus returns the current subscription refresh status.
@@ -2762,19 +3110,25 @@ func (s *Server) createSession() (*Session, error) {
 	}
 
 	now := time.Now()
+	generation := s.credentialSnapshot().Generation
+	if generation == 0 {
+		generation = 1
+	}
 	session := &Session{
-		Token:     token,
-		CreatedAt: now,
-		ExpiresAt: now.Add(s.sessionTTL),
+		Token:                token,
+		CreatedAt:            now,
+		ExpiresAt:            now.Add(s.sessionTTL),
+		CredentialGeneration: generation,
 	}
 
 	// Persist to Store if available
 	storeRef := s.storeSnapshot()
 	if storeRef != nil {
 		storeSession := &store.Session{
-			Token:     session.Token,
-			CreatedAt: session.CreatedAt,
-			ExpiresAt: session.ExpiresAt,
+			Token:                session.Token,
+			CreatedAt:            session.CreatedAt,
+			ExpiresAt:            session.ExpiresAt,
+			CredentialGeneration: session.CredentialGeneration,
 		}
 		if err := storeRef.CreateSession(context.Background(), storeSession); err != nil {
 			s.logger.Printf("Failed to persist session to store: %v", err)
@@ -2792,13 +3146,21 @@ func (s *Server) createSession() (*Session, error) {
 // validateSession checks if a session token is valid and not expired.
 func (s *Server) validateSession(token string) bool {
 	storeRef := s.storeSnapshot()
+	currentGeneration := s.credentialSnapshot().Generation
+	if currentGeneration == 0 {
+		currentGeneration = 1
+	}
 	// Check in-memory cache first
 	s.sessionMu.RLock()
 	session, exists := s.sessions[token]
 	s.sessionMu.RUnlock()
 
 	if exists {
-		if time.Now().After(session.ExpiresAt) {
+		sessionGeneration := session.CredentialGeneration
+		if sessionGeneration == 0 {
+			sessionGeneration = 1
+		}
+		if time.Now().After(session.ExpiresAt) || sessionGeneration != currentGeneration {
 			s.sessionMu.Lock()
 			delete(s.sessions, token)
 			s.sessionMu.Unlock()
@@ -2817,16 +3179,21 @@ func (s *Server) validateSession(token string) bool {
 		if err != nil || storeSess == nil {
 			return false
 		}
-		if time.Now().After(storeSess.ExpiresAt) {
+		storeGeneration := storeSess.CredentialGeneration
+		if storeGeneration == 0 {
+			storeGeneration = 1
+		}
+		if time.Now().After(storeSess.ExpiresAt) || storeGeneration != currentGeneration {
 			_ = storeRef.DeleteSession(context.Background(), token)
 			return false
 		}
 		// Restore to in-memory cache
 		s.sessionMu.Lock()
 		s.sessions[token] = &Session{
-			Token:     storeSess.Token,
-			CreatedAt: storeSess.CreatedAt,
-			ExpiresAt: storeSess.ExpiresAt,
+			Token:                storeSess.Token,
+			CreatedAt:            storeSess.CreatedAt,
+			ExpiresAt:            storeSess.ExpiresAt,
+			CredentialGeneration: storeGeneration,
 		}
 		s.sessionMu.Unlock()
 		return true
@@ -2864,5 +3231,13 @@ func (s *Server) cleanupExpiredSessions() {
 
 // secureCompareStrings performs constant-time string comparison to prevent timing attacks.
 func secureCompareStrings(a, b string) bool {
-	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
+	aHash := sha256.Sum256([]byte(a))
+	bHash := sha256.Sum256([]byte(b))
+	return subtle.ConstantTimeCompare(aHash[:], bHash[:]) == 1
+}
+
+func secureComparePair(username, password, expectedUsername, expectedPassword string) bool {
+	usernameOK := secureCompareStrings(username, expectedUsername)
+	passwordOK := secureCompareStrings(password, expectedPassword)
+	return usernameOK && passwordOK
 }

@@ -476,6 +476,7 @@ func (m *Manager) PublishCredentials(snapshot CredentialSnapshot) uint64 {
 	current := m.snapshot()
 	next := current.CloneReplacingCredentials(snapshot)
 	m.registry.Store(next)
+	m.cleanupSessionsBeforeGeneration(snapshot.Generation)
 	return next.Revision()
 }
 
@@ -657,7 +658,18 @@ func (m *Manager) publishPreparedConfigLocked(prepared *preparedConfigSnapshot) 
 	m.localServerEnabled.Store(prepared.localServerEnabled)
 	m.prepared = nil
 	m.restartProviderLocked(next.SharedProfile())
+	m.cleanupSessionsBeforeGeneration(prepared.credentials.Generation)
 	return nil
+}
+
+func (m *Manager) cleanupSessionsBeforeGeneration(generation uint64) {
+	if m == nil || m.store == nil || generation == 0 {
+		return
+	}
+	storeRef := m.store
+	go func() {
+		_ = storeRef.DeleteSessionsBeforeGeneration(context.Background(), generation)
+	}()
 }
 
 func (m *Manager) loadDeviceProfiles(ctx context.Context) (map[string]*CompiledProfile, error) {

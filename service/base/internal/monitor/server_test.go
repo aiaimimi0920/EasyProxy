@@ -3,6 +3,7 @@ package monitor
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -18,12 +19,398 @@ import (
 	"time"
 
 	"easy_proxies/internal/config"
+	"easy_proxies/internal/profile"
+	"easy_proxies/internal/store"
 )
 
 type recordingRoutingController struct {
 	applyCalls  int
 	applyResult bool
 	lastConfig  *config.Config
+}
+
+type localServerMonitorHarness struct {
+	server   *Server
+	profiles *profile.Manager
+	config   *config.Config
+}
+
+type jsonTestResponse struct {
+	Code int
+	Body map[string]any
+}
+
+func newLocalServerMonitor(t *testing.T, username, password string, generation uint64) localServerMonitorHarness {
+	return newLocalServerMonitorWithEnabled(t, username, password, generation, true)
+}
+
+func newLocalServerMonitorWithEnabled(t *testing.T, username, password string, generation uint64, enabled bool) localServerMonitorHarness {
+	t.Helper()
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte("mode: pool\nlistener:\n  address: 127.0.0.1\n  port: 22323\n  protocol: mixed\nmanagement: {}\nrouting: {}\nlocal_server: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{
+		Mode:       "pool",
+		Listener:   config.ListenerConfig{Address: "127.0.0.1", Port: 22323, Protocol: config.InboundProtocolMixed, Username: username, Password: password},
+		Management: config.ManagementConfig{Password: password},
+		Routing:    config.RoutingConfig{Enabled: true, FinalPolicy: "PROXY"},
+		LocalServer: config.LocalServerConfig{
+			Enabled:              enabled,
+			SharedRevision:       1,
+			CredentialGeneration: generation,
+			Auth:                 config.LocalServerAuthConfig{Username: username, Password: password},
+		},
+	}
+	cfg.SetFilePath(configPath)
+	profiles, err := profile.NewManager(ctx, cfg, st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(profiles.Close)
+	monitorManager, err := NewManager(Config{Password: password})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(monitorManager.Stop)
+	server := NewServer(Config{Password: password}, monitorManager, nil)
+	server.SetConfig(cfg)
+	server.SetStore(st)
+	server.SetProfileManager(profiles)
+	return localServerMonitorHarness{server: server, profiles: profiles, config: cfg}
+}
+
+func performJSONRequest(t *testing.T, server *Server, method, path string, body any, headers http.Header) jsonTestResponse {
+	t.Helper()
+	var reader io.Reader
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reader = bytes.NewReader(encoded)
+	}
+	req := httptest.NewRequest(method, path, reader)
+	for key, values := range headers {
+		for _, value := range values {
+			req.Header.Add(key, value)
+		}
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	rr := httptest.NewRecorder()
+	server.handler.ServeHTTP(rr, req)
+	result := jsonTestResponse{Code: rr.Code, Body: map[string]any{}}
+	if rr.Body.Len() != 0 {
+		if err := json.Unmarshal(rr.Body.Bytes(), &result.Body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return result
+}
+
+func TestLocalServerAuthRequiresCanonicalPair(t *testing.T) {
+	harness := newLocalServerMonitor(t, "easyproxy", "secret", 4)
+	status := performJSONRequest(t, harness.server, http.MethodGet, "/api/auth", nil, nil)
+	if status.Body["auth_mode"] != "canonical_pair" || status.Body["username_required"] != true {
+		t.Fatalf("auth status = %#v", status.Body)
+	}
+	login := performJSONRequest(t, harness.server, http.MethodPost, "/api/auth", map[string]any{
+		"username": "easyproxy", "password": "secret",
+	}, nil)
+	if login.Code != http.StatusOK || login.Body["token"] == "" {
+		t.Fatalf("login = %#v", login)
+	}
+}
+
+func TestLocalServerManagementAcceptsCanonicalBasicAuth(t *testing.T) {
+	harness := newLocalServerMonitor(t, "easyproxy", "secret", 1)
+	headers := make(http.Header)
+	headers.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("easyproxy:secret")))
+	response := performJSONRequest(t, harness.server, http.MethodGet, "/api/settings", nil, headers)
+	if response.Code != http.StatusOK {
+		t.Fatalf("Basic management auth status = %d body=%#v", response.Code, response.Body)
+	}
+}
+
+func TestManagementDoesNotAcceptProxyAuthorization(t *testing.T) {
+	harness := newLocalServerMonitor(t, "easyproxy", "secret", 1)
+	headers := make(http.Header)
+	headers.Set("Proxy-Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("easyproxy:secret")))
+	response := performJSONRequest(t, harness.server, http.MethodGet, "/api/settings", nil, headers)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("Proxy-Authorization status = %d", response.Code)
+	}
+}
+
+func TestSessionGenerationInvalidatesOldSession(t *testing.T) {
+	harness := newLocalServerMonitor(t, "easyproxy", "old", 2)
+	session, err := harness.server.createSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	harness.profiles.PublishCredentials(profile.CredentialSnapshot{Username: "easyproxy", Password: "new", Generation: 3})
+	if harness.server.validateSession(session.Token) {
+		t.Fatal("old-generation session remained valid")
+	}
+}
+
+func TestLocalServerConfigDoesNotReturnPassword(t *testing.T) {
+	harness := newLocalServerMonitor(t, "easyproxy", "secret", 1)
+	headers := make(http.Header)
+	headers.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("easyproxy:secret")))
+	response := performJSONRequest(t, harness.server, http.MethodGet, "/api/local-server/config", nil, headers)
+	if response.Code != http.StatusOK || response.Body["auth_username"] != "easyproxy" || response.Body["password_set"] != true {
+		t.Fatalf("Local Server config response = %#v", response)
+	}
+	if _, ok := response.Body["auth_password"]; ok {
+		t.Fatalf("Local Server config leaked password: %#v", response.Body)
+	}
+}
+
+func TestLocalServerCredentialRotationPublishesWithoutReload(t *testing.T) {
+	harness := newLocalServerMonitor(t, "easyproxy", "old-secret", 2)
+	session, err := harness.server.createSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	headers := make(http.Header)
+	headers.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("easyproxy:old-secret")))
+	response := performJSONRequest(t, harness.server, http.MethodPut, "/api/local-server/config", map[string]any{
+		"auth_password": "new-secret",
+	}, headers)
+	if response.Code != http.StatusOK || response.Body["need_reload"] != false {
+		t.Fatalf("credential rotation response = %#v", response)
+	}
+	credentials := harness.profiles.Credentials()
+	if credentials.Password != "new-secret" || credentials.Generation != 3 {
+		t.Fatalf("published credentials = %#v", credentials)
+	}
+	if harness.server.validateSession(session.Token) {
+		t.Fatal("credential rotation left old session valid")
+	}
+}
+
+func TestLocalServerStructuralChangeDoesNotPublishCredentialsBeforeReload(t *testing.T) {
+	harness := newLocalServerMonitor(t, "easyproxy", "old-secret", 2)
+	headers := make(http.Header)
+	headers.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("easyproxy:old-secret")))
+	response := performJSONRequest(t, harness.server, http.MethodPut, "/api/local-server/config", map[string]any{
+		"listen":        "127.0.0.1:32323",
+		"auth_password": "new-secret",
+	}, headers)
+	if response.Code != http.StatusOK || response.Body["need_reload"] != true {
+		t.Fatalf("structural update response = %#v", response)
+	}
+	credentials := harness.profiles.Credentials()
+	if credentials.Password != "old-secret" || credentials.Generation != 2 {
+		t.Fatalf("structural update published credentials early: %#v", credentials)
+	}
+}
+
+func TestLocalServerPendingStructuralChangeKeepsLaterCredentialsPending(t *testing.T) {
+	harness := newLocalServerMonitor(t, "easyproxy", "old-secret", 2)
+	headers := make(http.Header)
+	headers.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("easyproxy:old-secret")))
+	first := performJSONRequest(t, harness.server, http.MethodPut, "/api/local-server/config", map[string]any{
+		"listen":        "127.0.0.1:32323",
+		"auth_password": "pending-secret",
+	}, headers)
+	if first.Code != http.StatusOK || first.Body["need_reload"] != true {
+		t.Fatalf("structural update response = %#v", first)
+	}
+	second := performJSONRequest(t, harness.server, http.MethodPut, "/api/local-server/config", map[string]any{
+		"auth_password": "final-secret",
+	}, headers)
+	if second.Code != http.StatusOK || second.Body["need_reload"] != true {
+		t.Fatalf("follow-up credential response = %#v", second)
+	}
+	credentials := harness.profiles.Credentials()
+	if credentials.Password != "old-secret" || credentials.Generation != 2 {
+		t.Fatalf("pending structural update published credentials early: %#v", credentials)
+	}
+}
+
+func TestLocalServerRejectsEmptyPasswordUpdate(t *testing.T) {
+	harness := newLocalServerMonitor(t, "easyproxy", "secret", 1)
+	headers := make(http.Header)
+	headers.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("easyproxy:secret")))
+	response := performJSONRequest(t, harness.server, http.MethodPut, "/api/local-server/config", map[string]any{
+		"auth_password": "",
+	}, headers)
+	if response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("empty password status = %d body=%#v", response.Code, response.Body)
+	}
+}
+
+func TestLocalServerConfigPreservesPasswordWhenOmitted(t *testing.T) {
+	harness := newLocalServerMonitor(t, "easyproxy", "secret", 4)
+	headers := make(http.Header)
+	headers.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("easyproxy:secret")))
+	response := performJSONRequest(t, harness.server, http.MethodPut, "/api/local-server/config", map[string]any{
+		"auth_username": "rotated-user",
+	}, headers)
+	if response.Code != http.StatusOK || response.Body["need_reload"] != false {
+		t.Fatalf("username rotation response = %#v", response)
+	}
+	credentials := harness.profiles.Credentials()
+	if credentials.Username != "rotated-user" || credentials.Password != "secret" || credentials.Generation != 5 {
+		t.Fatalf("published credentials = %#v", credentials)
+	}
+	harness.config.RLock()
+	defer harness.config.RUnlock()
+	if harness.config.Listener.Username != "rotated-user" || harness.config.Listener.Password != "secret" || harness.config.Management.Password != "secret" {
+		t.Fatalf("derived credentials = listener=%#v management=%q", harness.config.Listener, harness.config.Management.Password)
+	}
+}
+
+func TestLocalServerConfigRejectsInvalidValues(t *testing.T) {
+	tests := []struct {
+		name string
+		body map[string]any
+	}{
+		{name: "username characters", body: map[string]any{"auth_username": "bad user"}},
+		{name: "username length", body: map[string]any{"auth_username": strings.Repeat("a", 65)}},
+		{name: "password nul", body: map[string]any{"auth_password": "bad\x00secret"}},
+		{name: "password length", body: map[string]any{"auth_password": strings.Repeat("a", 257)}},
+		{name: "listen syntax", body: map[string]any{"listen": "not-a-listen"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			harness := newLocalServerMonitor(t, "easyproxy", "secret", 1)
+			headers := make(http.Header)
+			headers.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("easyproxy:secret")))
+			response := performJSONRequest(t, harness.server, http.MethodPut, "/api/local-server/config", tt.body, headers)
+			if response.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("status = %d body=%#v", response.Code, response.Body)
+			}
+		})
+	}
+}
+
+func TestLocalServerConfigRejectsListenConflict(t *testing.T) {
+	harness := newLocalServerMonitor(t, "easyproxy", "secret", 1)
+	harness.config.Lock()
+	harness.config.Routing.Listen = "127.0.0.1:32324"
+	harness.config.Unlock()
+	headers := make(http.Header)
+	headers.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("easyproxy:secret")))
+	response := performJSONRequest(t, harness.server, http.MethodPut, "/api/local-server/config", map[string]any{
+		"listen": "127.0.0.1:32323",
+	}, headers)
+	if response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d body=%#v", response.Code, response.Body)
+	}
+}
+
+func TestLocalServerConfigRejectsReloadWindow(t *testing.T) {
+	harness := newLocalServerMonitor(t, "easyproxy", "secret", 1)
+	harness.server.BeginReloadWindow()
+	defer harness.server.EndReloadWindow()
+	headers := make(http.Header)
+	headers.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("easyproxy:secret")))
+	response := performJSONRequest(t, harness.server, http.MethodPut, "/api/local-server/config", map[string]any{
+		"auth_password": "rotated-secret",
+	}, headers)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status = %d body=%#v", response.Code, response.Body)
+	}
+	if got := harness.profiles.Credentials().Password; got != "secret" {
+		t.Fatalf("credentials changed during reload window: %q", got)
+	}
+}
+
+func TestLocalServerConfigSaveFailureDoesNotPublish(t *testing.T) {
+	harness := newLocalServerMonitor(t, "easyproxy", "secret", 1)
+	harness.config.SetFilePath(filepath.Join(t.TempDir(), "missing", "config.yaml"))
+	headers := make(http.Header)
+	headers.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("easyproxy:secret")))
+	response := performJSONRequest(t, harness.server, http.MethodPut, "/api/local-server/config", map[string]any{
+		"auth_password": "rotated-secret",
+	}, headers)
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d body=%#v", response.Code, response.Body)
+	}
+	credentials := harness.profiles.Credentials()
+	if credentials.Password != "secret" || credentials.Generation != 1 {
+		t.Fatalf("credentials changed after save failure: %#v", credentials)
+	}
+}
+
+func TestLocalServerConfigEnableIncrementsGenerationOnReload(t *testing.T) {
+	harness := newLocalServerMonitorWithEnabled(t, "easyproxy", "secret", 1, false)
+	headers := make(http.Header)
+	headers.Set("Authorization", "Bearer secret")
+	response := performJSONRequest(t, harness.server, http.MethodPut, "/api/local-server/config", map[string]any{
+		"enabled": true,
+	}, headers)
+	if response.Code != http.StatusOK || response.Body["need_reload"] != true {
+		t.Fatalf("enable response = %#v", response)
+	}
+	harness.config.RLock()
+	gotGeneration := harness.config.LocalServer.CredentialGeneration
+	harness.config.RUnlock()
+	if gotGeneration != 2 {
+		t.Fatalf("persisted generation = %d, want 2", gotGeneration)
+	}
+	if credentials := harness.profiles.Credentials(); credentials.Generation != 1 || harness.profiles.LocalServerEnabled() {
+		t.Fatalf("active profile state changed before reload: %#v enabled=%v", credentials, harness.profiles.LocalServerEnabled())
+	}
+}
+
+func TestLocalServerConfigEnableMigratesLegacyCredentials(t *testing.T) {
+	harness := newLocalServerMonitorWithEnabled(t, "placeholder", "legacy-secret", 1, false)
+	harness.config.Lock()
+	harness.config.LocalServer.Auth = config.LocalServerAuthConfig{}
+	harness.config.Listener.Username = "legacy-user"
+	harness.config.Listener.Password = "legacy-secret"
+	harness.config.Management.Password = "legacy-secret"
+	harness.config.Unlock()
+	harness.server.SetConfig(harness.config)
+
+	headers := make(http.Header)
+	headers.Set("Authorization", "Bearer legacy-secret")
+	response := performJSONRequest(t, harness.server, http.MethodPut, "/api/local-server/config", map[string]any{
+		"enabled": true,
+	}, headers)
+	if response.Code != http.StatusOK || response.Body["need_reload"] != true {
+		t.Fatalf("enable response = %#v", response)
+	}
+	harness.config.RLock()
+	defer harness.config.RUnlock()
+	if harness.config.LocalServer.Auth.Username != "legacy-user" || harness.config.LocalServer.Auth.Password != "legacy-secret" {
+		t.Fatalf("canonical credentials = %#v", harness.config.LocalServer.Auth)
+	}
+	if harness.config.LocalServer.CredentialGeneration != 2 {
+		t.Fatalf("credential generation = %d, want 2", harness.config.LocalServer.CredentialGeneration)
+	}
+}
+
+func TestLocalServerConfigEnableRejectsLegacyCredentialConflict(t *testing.T) {
+	harness := newLocalServerMonitorWithEnabled(t, "placeholder", "management-secret", 1, false)
+	harness.config.Lock()
+	harness.config.LocalServer.Auth = config.LocalServerAuthConfig{}
+	harness.config.Listener.Username = "legacy-user"
+	harness.config.Listener.Password = "listener-secret"
+	harness.config.Management.Password = "management-secret"
+	harness.config.Unlock()
+	harness.server.SetConfig(harness.config)
+
+	headers := make(http.Header)
+	headers.Set("Authorization", "Bearer management-secret")
+	response := performJSONRequest(t, harness.server, http.MethodPut, "/api/local-server/config", map[string]any{
+		"enabled": true,
+	}, headers)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status = %d body=%#v", response.Code, response.Body)
+	}
 }
 
 func TestSetConfigDoesNotHoldCfgMuWhileWaitingForConfigRead(t *testing.T) {
