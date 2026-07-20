@@ -88,7 +88,7 @@ func newLocalServerMonitorWithStoreDecorator(t *testing.T, username, password st
 		t.Fatal(err)
 	}
 	t.Cleanup(monitorManager.Stop)
-	server := NewServer(Config{Password: password}, monitorManager, nil)
+	server := NewServer(Config{Password: password, ProxyUsername: username, ProxyPassword: password}, monitorManager, nil)
 	server.SetConfig(cfg)
 	server.SetStore(st)
 	server.SetProfileManager(profiles)
@@ -181,6 +181,84 @@ func TestLocalServerConfigDoesNotReturnPassword(t *testing.T) {
 	}
 	if _, ok := response.Body["auth_password"]; ok {
 		t.Fatalf("Local Server config leaked password: %#v", response.Body)
+	}
+}
+
+func TestLocalServerSettingsDoNotExposeOrAcceptLegacyPasswords(t *testing.T) {
+	harness := newLocalServerMonitor(t, "easyproxy", "secret", 1)
+	harness.config.Lock()
+	harness.config.MultiPort.Password = "legacy-multi-secret"
+	harness.config.Unlock()
+	settings := performAuthedJSON(t, harness.server, http.MethodGet, "/api/settings", nil)
+	encoded, _ := json.Marshal(settings.Body)
+	if settings.Code != http.StatusOK || bytes.Contains(encoded, []byte("listener_password")) || bytes.Contains(encoded, []byte("management_password")) || bytes.Contains(encoded, []byte("multi_port_password")) {
+		t.Fatalf("legacy password leaked: %s", encoded)
+	}
+	if settings.Body["local_server_enabled"] != true || settings.Body["local_server_auth_username"] != "easyproxy" || settings.Body["local_server_password_set"] != true {
+		t.Fatalf("canonical settings = %#v", settings.Body)
+	}
+
+	conflict := performAuthedJSON(t, harness.server, http.MethodPut, "/api/settings", map[string]any{
+		"listener_password":   "legacy-secret",
+		"management_password": "legacy-secret",
+	})
+	if conflict.Code != http.StatusConflict || conflict.Body["error"] != "credential_source_conflict" {
+		t.Fatalf("legacy credential update = %#v", conflict)
+	}
+	multiPortConflict := performAuthedJSON(t, harness.server, http.MethodPut, "/api/settings", map[string]any{
+		"multi_port_password": "legacy-multi-secret",
+	})
+	if multiPortConflict.Code != http.StatusConflict || multiPortConflict.Body["error"] != "credential_source_conflict" {
+		t.Fatalf("legacy multi-port credential update = %#v", multiPortConflict)
+	}
+
+	delete(settings.Body, "local_server_enabled")
+	delete(settings.Body, "local_server_auth_username")
+	delete(settings.Body, "local_server_password_set")
+	settings.Body["log_level"] = "debug"
+	settings.Body["multi_port_base_port"] = float64(30000)
+	settings.Body["multi_port_protocol"] = "http"
+	settings.Body["pool_mode"] = "auto"
+	for _, key := range []string{
+		"pool_blacklist_duration",
+		"sub_refresh_interval",
+		"sub_refresh_timeout",
+		"sub_refresh_health_check_timeout",
+		"sub_refresh_drain_timeout",
+		"source_sync_refresh_interval",
+		"source_sync_request_timeout",
+		"geoip_auto_update_interval",
+		"management_health_check_interval",
+	} {
+		delete(settings.Body, key)
+	}
+	preserved := performAuthedJSON(t, harness.server, http.MethodPut, "/api/settings", settings.Body)
+	if preserved.Code != http.StatusOK {
+		t.Fatalf("sanitized settings save = %#v", preserved)
+	}
+	credentials := harness.profiles.Credentials()
+	if credentials.Username != "easyproxy" || credentials.Password != "secret" {
+		t.Fatalf("canonical credentials changed after sanitized save: %#v", credentials)
+	}
+	harness.config.RLock()
+	if harness.config.Listener.Username != "easyproxy" || harness.config.Listener.Password != "secret" || harness.config.Management.Password != "secret" {
+		t.Fatalf("derived credentials changed after sanitized save: listener=%#v management=%q", harness.config.Listener, harness.config.Management.Password)
+	}
+	harness.config.RUnlock()
+}
+
+func TestLocalServerSettingsRemainSanitizedDuringPendingDisable(t *testing.T) {
+	harness := newLocalServerMonitor(t, "easyproxy", "secret", 1)
+	response := performAuthedJSON(t, harness.server, http.MethodPut, "/api/local-server/config", map[string]any{
+		"enabled": false,
+	})
+	if response.Code != http.StatusOK || response.Body["need_reload"] != true {
+		t.Fatalf("pending disable = %#v", response)
+	}
+	settings := performAuthedJSON(t, harness.server, http.MethodGet, "/api/settings", nil)
+	encoded, _ := json.Marshal(settings.Body)
+	if settings.Code != http.StatusOK || bytes.Contains(encoded, []byte("listener_password")) || bytes.Contains(encoded, []byte("management_password")) || bytes.Contains(encoded, []byte("multi_port_password")) {
+		t.Fatalf("pending disable leaked legacy passwords: %s", encoded)
 	}
 }
 
@@ -1700,6 +1778,84 @@ func TestProxyCompatCheckoutLifecycle(t *testing.T) {
 	}
 	if postReleaseResp.Lease.Status != "released" {
 		t.Fatalf("expected released lease, got %s", postReleaseResp.Lease.Status)
+	}
+}
+
+func TestProxyCompatCheckoutUsesCanonicalDeviceCredentialsInLocalServerMode(t *testing.T) {
+	harness := newLocalServerMonitor(t, "easyproxy", "secret", 1)
+	entry := harness.server.mgr.Register(NodeInfo{
+		Tag:           "local-node",
+		Name:          "Local Node",
+		ListenAddress: "127.0.0.1",
+		Port:          34001,
+	})
+	entry.MarkInitialCheckDone(true)
+
+	body, err := json.Marshal(proxyCompatCheckoutRequest{
+		HostID:        "Laptop-Work",
+		ProvisionMode: "reuse-only",
+		BindingMode:   "shared-instance",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/proxy/leases/checkout", bytes.NewReader(body))
+	req.Host = "easy-proxy.local:29888"
+	recorder := httptest.NewRecorder()
+	harness.server.handleProxyCheckout(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("checkout status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		Result proxyCompatCheckoutResult `json:"result"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Result.Lease.Username != "easyproxy+dev=laptop-work" || response.Result.Lease.Password != "secret" {
+		t.Fatalf("lease credentials = %q/%q", response.Result.Lease.Username, response.Result.Lease.Password)
+	}
+}
+
+func TestProxyCompatCheckoutKeepsActiveCredentialsDuringPendingEnable(t *testing.T) {
+	harness := newLocalServerMonitorWithEnabled(t, "easyproxy", "old-secret", 1, false)
+	headers := make(http.Header)
+	headers.Set("Authorization", "Bearer old-secret")
+	update := performJSONRequest(t, harness.server, http.MethodPut, "/api/local-server/config", map[string]any{
+		"enabled":       true,
+		"auth_username": "new-user",
+		"auth_password": "new-secret",
+	}, headers)
+	if update.Code != http.StatusOK || update.Body["need_reload"] != true {
+		t.Fatalf("pending enable = %#v", update)
+	}
+	entry := harness.server.mgr.Register(NodeInfo{
+		Tag:           "legacy-node",
+		Name:          "Legacy Node",
+		ListenAddress: "127.0.0.1",
+		Port:          34001,
+	})
+	entry.MarkInitialCheckDone(true)
+
+	body, err := json.Marshal(proxyCompatCheckoutRequest{HostID: "Laptop-Work", ProvisionMode: "reuse-only", BindingMode: "shared-instance"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/proxy/leases/checkout", bytes.NewReader(body))
+	req.Host = "easy-proxy.local:29888"
+	recorder := httptest.NewRecorder()
+	harness.server.handleProxyCheckout(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("checkout status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		Result proxyCompatCheckoutResult `json:"result"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Result.Lease.Username != "easyproxy" || response.Result.Lease.Password != "old-secret" {
+		t.Fatalf("pending lease credentials = %q/%q", response.Result.Lease.Username, response.Result.Lease.Password)
 	}
 }
 

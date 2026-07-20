@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"easy_proxies/internal/profile"
 )
 
 type proxyCompatCatalog struct {
@@ -1480,6 +1482,9 @@ func (s *Server) resolveProxyCompatCandidate(r *http.Request, request proxyCompa
 			username = runtimeCfg.SharedUsername
 			password = runtimeCfg.SharedPassword
 		}
+		if s.localServerCompatEnabled() {
+			username = proxyUsernameForHost(username, request.HostID)
+		}
 		servicePenalty, serviceCooling := s.compatState().serviceFeedbackAggregateForSnapshot(feedbackSubjectKeys, snap)
 		usageStats := proxyCompatUsageStats{}
 		if preferHistoricalStats {
@@ -1996,6 +2001,38 @@ func buildProxyCompatURL(protocol, host string, port int, username, password str
 	return fmt.Sprintf("%s://%s:%d", scheme, host, port)
 }
 
+func proxyUsernameForHost(base, hostID string) string {
+	base = strings.TrimSpace(base)
+	if base == "" {
+		return base
+	}
+	normalized, err := profile.NormalizeDeviceID(hostID)
+	if err != nil || normalized == "" {
+		return base
+	}
+	return base + "+dev=" + normalized
+}
+
+func (s *Server) localServerCompatEnabled() bool {
+	if manager := s.profileManagerSnapshot(); manager != nil {
+		return manager.LocalServerEnabled()
+	}
+	return s.localServerConfigured()
+}
+
+func (s *Server) localServerConfigured() bool {
+	s.cfgMu.RLock()
+	cfg := s.cfgSrc
+	s.cfgMu.RUnlock()
+	if cfg == nil {
+		return false
+	}
+	cfg.RLock()
+	enabled := cfg.LocalServer.Enabled
+	cfg.RUnlock()
+	return enabled
+}
+
 func mustGenerateCompatID(prefix string) string {
 	raw := make([]byte, 8)
 	if _, err := rand.Read(raw); err != nil {
@@ -2049,6 +2086,18 @@ func (s *Server) resolveProxyCompatRuntime(r *http.Request) proxyCompatRuntime {
 			nodePassword = listenerPassword
 		}
 		cfgSrc.RUnlock()
+	}
+	if s.localServerCompatEnabled() {
+		credentials := s.credentialSnapshot()
+		listenerUsername = credentials.Username
+		listenerPassword = credentials.Password
+		nodeUsername = listenerUsername
+		nodePassword = listenerPassword
+	} else if runtimeCfg.ProxyUsername != "" || runtimeCfg.ProxyPassword != "" {
+		listenerUsername = runtimeCfg.ProxyUsername
+		listenerPassword = runtimeCfg.ProxyPassword
+		nodeUsername = listenerUsername
+		nodePassword = listenerPassword
 	}
 
 	if nodeProtocol == "" {

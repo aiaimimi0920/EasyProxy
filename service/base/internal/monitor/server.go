@@ -1046,6 +1046,26 @@ func (s *Server) getAllSettings() allSettingsResponse {
 	}
 }
 
+func (s *Server) getLocalServerSettings() map[string]any {
+	legacy := s.getAllSettings()
+	encoded, err := json.Marshal(legacy)
+	if err != nil {
+		return map[string]any{}
+	}
+	response := make(map[string]any)
+	if err := json.Unmarshal(encoded, &response); err != nil {
+		return map[string]any{}
+	}
+	delete(response, "listener_password")
+	delete(response, "management_password")
+	delete(response, "multi_port_password")
+	view := s.getLocalServerConfig()
+	response["local_server_enabled"] = view.Enabled
+	response["local_server_auth_username"] = view.AuthUsername
+	response["local_server_password_set"] = view.PasswordSet
+	return response
+}
+
 func applyAllSettingsRequest(c *config.Config, req allSettingsRequest) {
 	if c == nil {
 		return
@@ -1186,9 +1206,19 @@ func (s *Server) updateAllSettingsWithReload(req allSettingsRequest) (bool, erro
 	// SaveSettings can fail (read-only/missing path); committing only afterward
 	// keeps the in-memory source, monitor runtime, and YAML in one state.
 	c.Lock()
-	needReload := settingsChangeRequiresReload(c, req)
+	effectiveReq := req
+	preserveLocalServerCredentials := c.LocalServer.Enabled
+	if profiles := s.profileManagerSnapshot(); profiles != nil && profiles.LocalServerEnabled() {
+		preserveLocalServerCredentials = true
+	}
+	if preserveLocalServerCredentials {
+		effectiveReq.ListenerUsername = c.LocalServer.Auth.Username
+		effectiveReq.ListenerPassword = c.LocalServer.Auth.Password
+		effectiveReq.ManagementPassword = c.LocalServer.Auth.Password
+	}
+	needReload := settingsChangeRequiresReload(c, effectiveReq)
 	candidate := c.Clone()
-	applyAllSettingsRequest(candidate, req)
+	applyAllSettingsRequest(candidate, effectiveReq)
 	candidate.Lock()
 	err := candidate.SaveSettings()
 	candidate.Unlock()
@@ -2120,14 +2150,39 @@ func truncateStr(s string, maxLen int) string {
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
+		if s.localServerSettingsMode() {
+			writeJSON(w, s.getLocalServerSettings())
+			return
+		}
 		resp := s.getAllSettings()
 		writeJSON(w, resp)
 	case http.MethodPut:
-		var req allSettingsRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		body, err := io.ReadAll(io.LimitReader(r.Body, 10<<20))
+		if err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			writeJSON(w, map[string]any{"error": "请求格式错误"})
 			return
+		}
+		var req allSettingsRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			writeJSON(w, map[string]any{"error": "请求格式错误"})
+			return
+		}
+		if s.localServerSettingsMode() {
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(body, &fields); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				writeJSON(w, map[string]any{"error": "请求格式错误"})
+				return
+			}
+			if nonEmptyJSONField(fields, "listener_password") ||
+				nonEmptyJSONField(fields, "management_password") ||
+				nonEmptyJSONField(fields, "multi_port_password") {
+				w.WriteHeader(http.StatusConflict)
+				writeJSON(w, map[string]any{"error": "credential_source_conflict"})
+				return
+			}
 		}
 
 		needReload, err := s.updateAllSettingsWithReload(req)
@@ -2149,6 +2204,22 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
+}
+
+func nonEmptyJSONField(fields map[string]json.RawMessage, key string) bool {
+	raw, ok := fields[key]
+	if !ok {
+		return false
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return true
+	}
+	return strings.TrimSpace(value) != ""
+}
+
+func (s *Server) localServerSettingsMode() bool {
+	return s.localServerConfigured() || s.localServerCompatEnabled()
 }
 
 type localServerConfigUpdate struct {

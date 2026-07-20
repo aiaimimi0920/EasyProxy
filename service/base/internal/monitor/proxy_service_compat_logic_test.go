@@ -2,6 +2,25 @@ package monitor
 
 import "testing"
 
+func TestProxyUsernameForHostEncodesCanonicalDeviceID(t *testing.T) {
+	if got := proxyUsernameForHost("easyproxy", "Laptop-Work"); got != "easyproxy+dev=laptop-work" {
+		t.Fatalf("username = %q", got)
+	}
+	if got := proxyUsernameForHost("easyproxy", "bad device"); got != "easyproxy" {
+		t.Fatalf("invalid host username = %q", got)
+	}
+}
+
+func TestProxyCompatModeWaitsForLocalServerReloadPublication(t *testing.T) {
+	harness := newLocalServerMonitorWithEnabled(t, "easyproxy", "secret", 1, false)
+	harness.config.Lock()
+	harness.config.LocalServer.Enabled = true
+	harness.config.Unlock()
+	if harness.server.localServerCompatEnabled() {
+		t.Fatal("compat mode became active before ProfileManager reload publication")
+	}
+}
+
 func TestProxyCompatRegistrationServiceRecognition(t *testing.T) {
 	cases := []struct {
 		name       string
