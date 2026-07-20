@@ -16,6 +16,7 @@ import (
 	"easy_proxies/internal/geoip"
 	"easy_proxies/internal/monitor"
 	"easy_proxies/internal/outbound/pool"
+	"easy_proxies/internal/profile"
 	"easy_proxies/internal/routerule"
 )
 
@@ -34,6 +35,7 @@ type RoutingController struct {
 	ctx        context.Context
 	boxMgr     routingBoxManager
 	managerRef *boxmgr.Manager
+	profiles   ProfileRuntime
 
 	// operationMu makes Start/ApplyHot/Stop and reload hooks linearizable while
 	// still allowing cross-component monitor updates to run outside rc.mu.
@@ -76,9 +78,29 @@ type routingBoxManager interface {
 	RecordAppliedConfig(cfg *config.Config)
 }
 
+type RoutingControllerOption func(*RoutingController)
+
+type ProfileRuntime interface {
+	dispatch.ProfileResolver
+	PrepareConfig(*config.Config) error
+}
+
+func WithProfileRuntime(runtime ProfileRuntime) RoutingControllerOption {
+	return func(rc *RoutingController) { rc.profiles = runtime }
+}
+
 // NewRoutingController creates a controller bound to a context and box manager.
-func NewRoutingController(ctx context.Context, boxMgr *boxmgr.Manager) *RoutingController {
-	return &RoutingController{ctx: ctx, boxMgr: boxMgr, managerRef: boxMgr}
+func NewRoutingController(ctx context.Context, boxMgr routingBoxManager, opts ...RoutingControllerOption) *RoutingController {
+	rc := &RoutingController{ctx: ctx, boxMgr: boxMgr}
+	if concrete, ok := boxMgr.(*boxmgr.Manager); ok {
+		rc.managerRef = concrete
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(rc)
+		}
+	}
+	return rc
 }
 
 // Start builds and starts the dispatch entry if routing is enabled in cfg. It is
@@ -86,9 +108,22 @@ func NewRoutingController(ctx context.Context, boxMgr *boxmgr.Manager) *RoutingC
 // startup.
 func (rc *RoutingController) Start(cfg *config.Config) error {
 	state := boxmgr.ReloadState{Config: cloneConfigSnapshot(cfg)}
+	return rc.StartState(state)
+}
+
+func (rc *RoutingController) StartState(state boxmgr.ReloadState) error {
 	rc.operationMu.Lock()
 	defer rc.operationMu.Unlock()
 	return rc.startStateOperationLocked(state)
+}
+
+func (rc *RoutingController) Running() bool {
+	if rc == nil {
+		return false
+	}
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	return rc.running
 }
 
 // startStateOperationLocked initializes one applied routing state. Caller holds
@@ -117,6 +152,34 @@ func (rc *RoutingController) startStateOperationLocked(state boxmgr.ReloadState)
 // startLocked builds the engine + dispatcher and starts serving. Caller holds
 // rc.mu. Any setup failure leaves no routing resources behind.
 func (rc *RoutingController) startLocked(cfg *config.Config) error {
+	if cfg.LocalServer.Enabled {
+		if rc.profiles == nil {
+			return errors.New("Local Server profile runtime is unavailable")
+		}
+		listen := cfg.DispatchListen()
+		username := cfg.LocalServer.Auth.Username
+		password := cfg.LocalServer.Auth.Password
+		if username == "" {
+			username = cfg.Listener.Username
+		}
+		if password == "" {
+			password = cfg.Listener.Password
+		}
+		srv := dispatch.NewServer(dispatch.Config{
+			Listen:          listen,
+			Username:        username,
+			Password:        password,
+			DefaultStrategy: pool.NormalizeStrategy(cfg.Routing.DefaultStrategy),
+			LocalServer:     true,
+			Profiles:        rc.profiles,
+		}, rc.boxMgr, nil, dispatchLogger{})
+		if err := srv.Start(rc.ctx); err != nil {
+			return fmt.Errorf("start Local Server dispatch entry on %s: %w", listen, err)
+		}
+		rc.server = srv
+		rc.running = true
+		return nil
+	}
 	if err := validateRuleProviders(cfg.Routing.RuleProviders); err != nil {
 		return err
 	}
@@ -187,14 +250,20 @@ func (rc *RoutingController) ApplyHot(cfg *config.Config) bool {
 	}
 
 	if routingEnabled(target) {
-		if !rc.running || rc.server == nil || rc.engine == nil {
+		if !rc.running || rc.server == nil {
 			rc.mu.Unlock()
 			return false
 		}
-		if err := rc.applyRuntimeConfigLocked(rc.cfg, cfg); err != nil {
-			log.Printf("⚠️ routing hot apply rejected: %v", err)
-			rc.mu.Unlock()
-			return false
+		if !cfg.LocalServer.Enabled {
+			if rc.engine == nil {
+				rc.mu.Unlock()
+				return false
+			}
+			if err := rc.applyRuntimeConfigLocked(rc.cfg, cfg); err != nil {
+				log.Printf("⚠️ routing hot apply rejected: %v", err)
+				rc.mu.Unlock()
+				return false
+			}
 		}
 	} else if rc.running || rc.server != nil {
 		rc.mu.Unlock()
@@ -270,6 +339,11 @@ func (rc *RoutingController) EndReloadIntent(_ context.Context) {
 func (rc *RoutingController) PrepareReload(_ context.Context, from, to boxmgr.ReloadState) error {
 	from = cloneRoutingState(from)
 	to = cloneRoutingState(to)
+	if rc.profiles != nil && to.Config != nil && to.Config.LocalServer.Enabled {
+		if err := rc.profiles.PrepareConfig(to.Config); err != nil {
+			return err
+		}
+	}
 	rc.operationMu.Lock()
 	defer rc.operationMu.Unlock()
 
@@ -322,14 +396,14 @@ func (rc *RoutingController) CompleteReload(_ context.Context, from, to boxmgr.R
 			rc.pendingRuntimeMutated = true
 		}
 		rc.stopRuntimeLocked()
-	} else if topologyChanged || !rc.running || rc.server == nil || rc.engine == nil {
+	} else if topologyChanged || !rc.running || rc.server == nil || (!to.Config.LocalServer.Enabled && rc.engine == nil) {
 		rc.pendingRuntimeMutated = true
 		rc.stopRuntimeLocked()
 		if err := rc.startLocked(to.Config); err != nil {
 			rc.mu.Unlock()
 			return err
 		}
-	} else if routingRuntimeChanged(from.Config, to.Config) {
+	} else if !to.Config.LocalServer.Enabled && routingRuntimeChanged(from.Config, to.Config) {
 		rc.pendingRuntimeMutated = true
 		if err := rc.applyRuntimeConfigLocked(from.Config, to.Config); err != nil {
 			rc.mu.Unlock()
@@ -372,11 +446,22 @@ func (rc *RoutingController) FailedReload(_ context.Context, from, _ boxmgr.Relo
 	}
 	rc.stopRuntimeLocked()
 	if !restored {
+		if from.Config != nil && from.Config.LocalServer.Enabled && routingEnabled(from) {
+			if err := rc.startLocked(from.Config); err != nil {
+				rc.setAppliedStateLocked(from)
+				rc.hasPending = false
+				rc.pendingRuntimeMutated = false
+				rc.mu.Unlock()
+				return fmt.Errorf("restore Local Server dispatch after failed box rollback: %w", err)
+			}
+		}
 		rc.setAppliedStateLocked(from)
 		rc.hasPending = false
 		rc.pendingRuntimeMutated = false
 		rc.mu.Unlock()
-		log.Printf("⚠️ routing remains disabled after failed box reload: %v", cause)
+		if from.Config == nil || !from.Config.LocalServer.Enabled {
+			log.Printf("⚠️ routing remains disabled after failed box reload: %v", cause)
+		}
 		return nil
 	}
 
@@ -437,14 +522,21 @@ func cloneRoutingState(state boxmgr.ReloadState) boxmgr.ReloadState {
 }
 
 type routingTopology struct {
-	enabled  bool
-	listen   string
-	username string
-	password string
+	enabled     bool
+	localServer bool
+	listen      string
+	username    string
+	password    string
 }
 
 func routingEnabled(state boxmgr.ReloadState) bool {
-	return state.Config != nil && state.Config.Routing.Enabled && !state.Idle
+	if state.Config == nil {
+		return false
+	}
+	if state.Config.LocalServer.Enabled {
+		return true
+	}
+	return state.Config.Routing.Enabled && !state.Idle
 }
 
 func routingTopologyFor(state boxmgr.ReloadState) routingTopology {
@@ -453,6 +545,10 @@ func routingTopologyFor(state boxmgr.ReloadState) routingTopology {
 		return topology
 	}
 	topology.listen = state.Config.DispatchListen()
+	if state.Config.LocalServer.Enabled {
+		topology.localServer = true
+		return topology
+	}
 	topology.username = state.Config.Listener.Username
 	topology.password = state.Config.Listener.Password
 	return topology
@@ -479,6 +575,17 @@ func routingHotApplyCompatible(from, to *config.Config) bool {
 func clearHotRoutingFields(cfg *config.Config) {
 	if cfg == nil {
 		return
+	}
+	if cfg.LocalServer.Enabled {
+		cfg.Routing.Enabled = false
+		cfg.Routing.Session = config.SessionConfig{}
+		cfg.Routing.NodeFilter = config.RoutingNodeFilterConfig{}
+		cfg.LocalServer.Auth = config.LocalServerAuthConfig{}
+		cfg.LocalServer.SharedRevision = 0
+		cfg.LocalServer.CredentialGeneration = 0
+		cfg.Listener.Username = ""
+		cfg.Listener.Password = ""
+		cfg.Management.Password = ""
 	}
 	cfg.Routing.DefaultStrategy = ""
 	cfg.Routing.UseDefaultRules = nil
@@ -709,17 +816,44 @@ func (rc *RoutingController) closeGeoLocked() {
 func (rc *RoutingController) RoutingStatus() monitor.RoutingStatus {
 	rc.mu.Lock()
 	srv := rc.server
+	running := rc.running
+	cfg := cloneConfigSnapshot(rc.cfg)
+	profiles := rc.profiles
 	rc.mu.Unlock()
 
-	st := monitor.RoutingStatus{Enabled: false}
+	st := monitor.RoutingStatus{Enabled: running, DispatcherReady: running && srv != nil}
+	if cfg != nil {
+		st.SharedEnabled = cfg.Routing.Enabled
+		st.ProfileScope = "shared"
+		st.SharedRevision = cfg.LocalServer.SharedRevision
+		if cfg.LocalServer.Enabled {
+			st.Enabled = cfg.Routing.Enabled
+			st.DefaultStrategy = cfg.Routing.DefaultStrategy
+			st.FinalPolicy = cfg.Routing.FinalPolicy
+			st.RuleCount = len(cfg.Routing.Rules)
+		}
+	}
+	if provider, ok := profiles.(interface {
+		SharedProfile() *profile.CompiledProfile
+	}); ok {
+		if shared := provider.SharedProfile(); shared != nil {
+			st.SharedEnabled = shared.Enabled()
+			st.Enabled = shared.Enabled()
+			st.SharedRevision = shared.Revision()
+			st.DefaultStrategy = shared.Selection().DefaultStrategy
+			st.FinalPolicy = string(shared.FinalPolicy())
+			st.RuleCount = shared.RuleCount()
+		}
+	}
 	if srv == nil {
 		return st
 	}
-	st.Enabled = true
 	st.Listen = srv.Listen()
-	st.DefaultStrategy = string(srv.DefaultStrategy())
-	st.FinalPolicy = srv.FinalPolicy()
-	st.RuleCount = srv.RuleCount()
+	if cfg == nil || !cfg.LocalServer.Enabled {
+		st.DefaultStrategy = string(srv.DefaultStrategy())
+		st.FinalPolicy = srv.FinalPolicy()
+		st.RuleCount = srv.RuleCount()
+	}
 	if rc.boxMgr != nil {
 		if snap, ok := rc.boxMgr.StickySnapshot(); ok {
 			st.StickyBuckets = snap.Buckets

@@ -191,7 +191,7 @@ func (m *Manager) Start(ctx context.Context) error {
 		m.mu.Unlock()
 		return errors.New("box manager requires config")
 	}
-	if m.currentBox != nil {
+	if m.currentBox != nil || m.idle {
 		m.mu.Unlock()
 		return errors.New("sing-box already running")
 	}
@@ -208,6 +208,29 @@ func (m *Manager) Start(ctx context.Context) error {
 	m.mu.Unlock()
 	if err := m.ensureMonitor(ctx); err != nil {
 		return err
+	}
+
+	// Local Server owns the dispatcher even before the shared pool has any
+	// nodes. Keep the manager in an explicit idle state so the dispatcher can
+	// serve DIRECT traffic and a later reload can activate the pool without a
+	// process restart.
+	if cfg.LocalServer.Enabled && len(cfg.Nodes) == 0 {
+		m.mu.Lock()
+		m.currentBox = nil
+		m.cfg = cfg
+		m.idle = true
+		m.lastAppliedCfg = snapshotConfig(cfg)
+		m.lastAppliedIdle = true
+		m.lastAppliedMode = cfg.Mode
+		m.lastAppliedBasePort = cfg.MultiPort.BasePort
+		monitorServer := m.monitorServer
+		m.mu.Unlock()
+		if monitorServer != nil {
+			monitorServer.SetConfig(cfg)
+		}
+		m.startPeriodicHealthCheck(cfg)
+		m.logger.Infof("Local Server started in idle mode with no proxy nodes")
+		return nil
 	}
 
 	// Try to start, with automatic port conflict resolution
@@ -251,14 +274,8 @@ func (m *Manager) Start(ctx context.Context) error {
 		monitorServer.SetConfig(cfg)
 	}
 
-	// Start periodic health check after nodes are registered
-	m.mu.Lock()
-	if m.monitorMgr != nil && !m.healthCheckStarted {
-		interval := cfg.Management.HealthCheckInterval
-		m.monitorMgr.StartPeriodicHealthCheck(interval, periodicHealthTimeout)
-		m.healthCheckStarted = true
-	}
-	m.mu.Unlock()
+	// Start periodic health check after nodes are registered.
+	m.startPeriodicHealthCheck(cfg)
 
 	// Wait for initial health check if min nodes configured
 	if cfg.SubscriptionRefresh.MinAvailableNodes > 0 {
@@ -732,6 +749,39 @@ func (m *Manager) notifyConfigListeners(cfg *config.Config) {
 	for _, listener := range listeners {
 		listener.OnConfigUpdate(cfg)
 	}
+}
+
+// CurrentReloadState returns the last successfully applied immutable runtime
+// snapshot. It is safe to call before Start and preserves the committed idle
+// bit so lifecycle consumers do not infer state from currentBox alone.
+func (m *Manager) CurrentReloadState() ReloadState {
+	if m == nil {
+		return ReloadState{}
+	}
+	m.mu.RLock()
+	cfg := snapshotConfig(m.lastAppliedCfg)
+	if cfg == nil {
+		cfg = snapshotConfig(m.cfg)
+	}
+	idle := m.lastAppliedIdle
+	m.mu.RUnlock()
+	return ReloadState{Config: cfg, Idle: idle}
+}
+
+func (m *Manager) startPeriodicHealthCheck(cfg *config.Config) {
+	if m == nil || cfg == nil {
+		return
+	}
+	m.mu.Lock()
+	if m.monitorMgr == nil || m.healthCheckStarted {
+		m.mu.Unlock()
+		return
+	}
+	monitorMgr := m.monitorMgr
+	interval := cfg.Management.HealthCheckInterval
+	m.healthCheckStarted = true
+	m.mu.Unlock()
+	monitorMgr.StartPeriodicHealthCheck(interval, periodicHealthTimeout)
 }
 
 func (m *Manager) activeConfig() *config.Config {

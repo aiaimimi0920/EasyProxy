@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -20,6 +21,7 @@ import (
 	"easy_proxies/internal/dispatch"
 	"easy_proxies/internal/monitor"
 	"easy_proxies/internal/outbound/pool"
+	"easy_proxies/internal/profile"
 	"easy_proxies/internal/routerule"
 
 	"github.com/sagernet/sing-box/adapter"
@@ -41,6 +43,75 @@ type blockingRoutingBoxManager struct {
 type recordingAppliedConfigBoxManager struct {
 	mu       sync.Mutex
 	recorded *config.Config
+}
+
+type routingBoxManagerStub struct{}
+
+func (*routingBoxManagerStub) PoolOutbound() (adapter.Outbound, bool) { return nil, false }
+func (*routingBoxManagerStub) StickySnapshot() (pool.StickySnapshot, bool) {
+	return pool.StickySnapshot{}, false
+}
+func (*routingBoxManagerStub) SetLongLivedThresholds(time.Duration, float64) {}
+func (*routingBoxManagerStub) RecordAppliedConfig(*config.Config)            {}
+
+type profileRuntimeStub struct {
+	shared *profile.CompiledProfile
+}
+
+func (r *profileRuntimeStub) Credentials() profile.CredentialSnapshot {
+	return profile.CredentialSnapshot{Username: "easyproxy", Password: "secret", Generation: 1}
+}
+func (r *profileRuntimeStub) Resolve(profile.RequestIdentity) profile.Resolution {
+	return profile.Resolution{
+		Source:          profile.IdentitySharedFallback,
+		ProfileID:       r.shared.ID(),
+		ProfileRevision: r.shared.Revision(),
+		Profile:         r.shared,
+	}
+}
+func (*profileRuntimeStub) Observe(profile.Resolution, netip.Addr, time.Time) {}
+func (*profileRuntimeStub) PrepareConfig(*config.Config) error                { return nil }
+
+func disabledSharedProfile(t *testing.T) *profile.CompiledProfile {
+	t.Helper()
+	compiled, err := profile.Compile("shared", profile.KindShared, 1, profile.Definition{
+		SchemaVersion: 1,
+		Enabled:       false,
+		FinalPolicy:   "DIRECT",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return compiled
+}
+
+func enabledSharedProfile(t *testing.T) *profile.CompiledProfile {
+	t.Helper()
+	compiled, err := profile.Compile("shared", profile.KindShared, 1, profile.Definition{
+		SchemaVersion: 1,
+		Enabled:       true,
+		FinalPolicy:   "PROXY",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return compiled
+}
+
+func localServerConfigForTest(t *testing.T) *config.Config {
+	t.Helper()
+	return &config.Config{
+		Mode:     "pool",
+		Listener: config.ListenerConfig{Address: "127.0.0.1", Port: 22323, Protocol: config.InboundProtocolMixed},
+		Routing:  config.RoutingConfig{Enabled: false, FinalPolicy: "PROXY"},
+		LocalServer: config.LocalServerConfig{
+			Enabled:              true,
+			Listen:               freeRoutingListen(t),
+			Auth:                 config.LocalServerAuthConfig{Username: "easyproxy", Password: "secret"},
+			SharedRevision:       1,
+			CredentialGeneration: 1,
+		},
+	}
 }
 
 func (m *recordingAppliedConfigBoxManager) PoolOutbound() (adapter.Outbound, bool) {
@@ -110,6 +181,138 @@ func TestBuildEngineFinalPolicy(t *testing.T) {
 	}
 	if got := engine.Final(); got != routerule.PolicyDirect {
 		t.Fatalf("configured final policy should override legacy FINAL rules: got %s, want %s", got, routerule.PolicyDirect)
+	}
+}
+
+func TestLocalServerStartsWhileSharedDisabledAndBoxIdle(t *testing.T) {
+	cfg := localServerConfigForTest(t)
+	box := &routingBoxManagerStub{}
+	profiles := &profileRuntimeStub{shared: disabledSharedProfile(t)}
+	controller := NewRoutingController(context.Background(), box, WithProfileRuntime(profiles))
+	defer controller.Stop()
+	if err := controller.StartState(boxmgr.ReloadState{Config: cfg, Idle: true}); err != nil {
+		t.Fatal(err)
+	}
+	if !controller.Running() {
+		t.Fatal("Local Server dispatcher did not start")
+	}
+	status := controller.RoutingStatus()
+	if status.Enabled || !status.DispatcherReady || status.SharedEnabled {
+		t.Fatalf("Local Server status = %+v", status)
+	}
+}
+
+func TestLocalServerStaysRunningAcrossIdleTransitions(t *testing.T) {
+	cfg := localServerConfigForTest(t)
+	cfg.Routing.Enabled = true
+	controller := NewRoutingController(context.Background(), &routingBoxManagerStub{}, WithProfileRuntime(&profileRuntimeStub{shared: enabledSharedProfile(t)}))
+	defer controller.Stop()
+	if err := controller.StartState(boxmgr.ReloadState{Config: cfg, Idle: false}); err != nil {
+		t.Fatal(err)
+	}
+	controller.mu.Lock()
+	initial := controller.server
+	controller.mu.Unlock()
+
+	idleCfg := cloneConfigSnapshot(cfg)
+	if err := controller.PrepareReload(context.Background(), boxmgr.ReloadState{Config: cfg}, boxmgr.ReloadState{Config: idleCfg, Idle: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.CompleteReload(context.Background(), boxmgr.ReloadState{Config: cfg}, boxmgr.ReloadState{Config: idleCfg, Idle: true}); err != nil {
+		t.Fatal(err)
+	}
+	if !controller.Running() {
+		t.Fatal("Local Server stopped during running-to-idle transition")
+	}
+
+	if err := controller.PrepareReload(context.Background(), boxmgr.ReloadState{Config: idleCfg, Idle: true}, boxmgr.ReloadState{Config: cfg, Idle: false}); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.CompleteReload(context.Background(), boxmgr.ReloadState{Config: idleCfg, Idle: true}, boxmgr.ReloadState{Config: cfg, Idle: false}); err != nil {
+		t.Fatal(err)
+	}
+	controller.mu.Lock()
+	final := controller.server
+	controller.mu.Unlock()
+	if final != initial {
+		t.Fatal("Local Server listener was replaced across idle transitions")
+	}
+}
+
+func TestLocalServerHotAppliesCredentialAndSessionChangesWithoutRestart(t *testing.T) {
+	cfg := localServerConfigForTest(t)
+	cfg.Routing.Enabled = true
+	controller := NewRoutingController(context.Background(), &routingBoxManagerStub{}, WithProfileRuntime(&profileRuntimeStub{shared: enabledSharedProfile(t)}))
+	defer controller.Stop()
+	if err := controller.Start(cfg); err != nil {
+		t.Fatal(err)
+	}
+	controller.mu.Lock()
+	initial := controller.server
+	controller.mu.Unlock()
+
+	hot := cloneConfigSnapshot(cfg)
+	hot.LocalServer.Auth.Password = "rotated-secret"
+	hot.Listener.Password = "rotated-secret"
+	hot.Management.Password = "rotated-secret"
+	hot.Routing.Session.TTL = 5 * time.Minute
+	if !controller.ApplyHot(hot) {
+		t.Fatal("Local Server credential/session change was not hot-applied")
+	}
+	controller.mu.Lock()
+	final := controller.server
+	controller.mu.Unlock()
+	if final != initial {
+		t.Fatal("Local Server hot apply replaced the listener")
+	}
+}
+
+func TestLocalServerReloadChangesListenTransactionally(t *testing.T) {
+	cfg := localServerConfigForTest(t)
+	cfg.Routing.Enabled = true
+	controller := NewRoutingController(context.Background(), &routingBoxManagerStub{}, WithProfileRuntime(&profileRuntimeStub{shared: enabledSharedProfile(t)}))
+	defer controller.Stop()
+	if err := controller.Start(cfg); err != nil {
+		t.Fatal(err)
+	}
+	newCfg := cloneConfigSnapshot(cfg)
+	newCfg.LocalServer.Listen = freeRoutingListen(t)
+	from := boxmgr.ReloadState{Config: cfg}
+	to := boxmgr.ReloadState{Config: newCfg}
+	if err := controller.PrepareReload(context.Background(), from, to); err != nil {
+		t.Fatal(err)
+	}
+	if controller.Running() {
+		t.Fatal("Local Server listener remained active during listen transition prepare")
+	}
+	if err := controller.CompleteReload(context.Background(), from, to); err != nil {
+		t.Fatal(err)
+	}
+	if !controller.Running() || controller.RoutingStatus().Listen != newCfg.LocalServer.Listen {
+		t.Fatalf("Local Server listen transition status = %+v", controller.RoutingStatus())
+	}
+}
+
+func TestLocalServerRollbackFailureRestoresDirectDispatcher(t *testing.T) {
+	cfg := localServerConfigForTest(t)
+	cfg.Routing.Enabled = true
+	controller := NewRoutingController(context.Background(), &routingBoxManagerStub{}, WithProfileRuntime(&profileRuntimeStub{shared: enabledSharedProfile(t)}))
+	defer controller.Stop()
+	if err := controller.Start(cfg); err != nil {
+		t.Fatal(err)
+	}
+	newCfg := cloneConfigSnapshot(cfg)
+	newCfg.LocalServer.Listen = freeRoutingListen(t)
+	from := boxmgr.ReloadState{Config: cfg}
+	to := boxmgr.ReloadState{Config: newCfg}
+	if err := controller.PrepareReload(context.Background(), from, to); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.FailedReload(context.Background(), from, to, errors.New("pool rollback failed"), false); err != nil {
+		t.Fatal(err)
+	}
+	if !controller.Running() || controller.RoutingStatus().Listen != cfg.LocalServer.Listen {
+		t.Fatalf("Local Server rollback status = %+v", controller.RoutingStatus())
 	}
 }
 

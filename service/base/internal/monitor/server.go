@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"easy_proxies/internal/config"
+	"easy_proxies/internal/profile"
 	"easy_proxies/internal/store"
 
 	"golang.org/x/sync/semaphore"
@@ -88,6 +89,10 @@ type RoutingController interface {
 // RoutingStatus is the observability view of the smart dispatch entry.
 type RoutingStatus struct {
 	Enabled         bool              `json:"enabled"`
+	DispatcherReady bool              `json:"dispatcher_ready"`
+	SharedEnabled   bool              `json:"shared_enabled"`
+	SharedRevision  int64             `json:"shared_revision,omitempty"`
+	ProfileScope    string            `json:"profile_scope,omitempty"`
 	Listen          string            `json:"listen,omitempty"`
 	DefaultStrategy string            `json:"default_strategy,omitempty"`
 	FinalPolicy     string            `json:"final_policy,omitempty"`
@@ -128,8 +133,9 @@ type Server struct {
 	doneOnce    sync.Once
 	logger      *log.Logger
 
-	depsMu sync.RWMutex
-	store  store.Store // 数据存储
+	depsMu   sync.RWMutex
+	store    store.Store // 数据存储
+	profiles *profile.Manager
 
 	// Session management
 	sessionMu  sync.RWMutex
@@ -561,6 +567,26 @@ func (s *Server) SetStore(st store.Store) {
 		s.store = st
 		s.depsMu.Unlock()
 	}
+}
+
+// SetProfileManager publishes the Local Server profile/auth dependency used by
+// management authentication and profile APIs.
+func (s *Server) SetProfileManager(manager *profile.Manager) {
+	if s == nil {
+		return
+	}
+	s.depsMu.Lock()
+	s.profiles = manager
+	s.depsMu.Unlock()
+}
+
+func (s *Server) profileManagerSnapshot() *profile.Manager {
+	if s == nil {
+		return nil
+	}
+	s.depsMu.RLock()
+	defer s.depsMu.RUnlock()
+	return s.profiles
 }
 
 func (s *Server) subscriptionRefresherSnapshot() SubscriptionRefresher {

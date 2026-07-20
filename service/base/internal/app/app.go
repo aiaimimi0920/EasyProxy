@@ -14,6 +14,7 @@ import (
 	"easy_proxies/internal/boxmgr"
 	"easy_proxies/internal/config"
 	"easy_proxies/internal/monitor"
+	"easy_proxies/internal/profile"
 	"easy_proxies/internal/store"
 	"easy_proxies/internal/subscription"
 )
@@ -77,6 +78,12 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		}
 	}
 
+	profileMgr, err := profile.NewManager(ctx, cfg, dataStore)
+	if err != nil {
+		return fmt.Errorf("start profile manager: %w", err)
+	}
+	defer profileMgr.Close()
+
 	// ── 5. Create and start BoxManager ──
 	boxMgr := boxmgr.New(cfg, monitorCfg, boxmgr.WithStore(dataStore))
 	boxMgr.SetEphemeralNodes(filterEphemeralNodes(cfg.Nodes))
@@ -93,12 +100,14 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		server.SetSubscriptionRefresher(subMgr)
 		server.SetSourceSyncReporter(subMgr)
 		server.SetConnectorManager(subMgr)
+		server.SetProfileManager(profileMgr)
 	}
 
 	// Attach the subscription manager now so any later refresh uses the live
 	// box manager, but keep the actual background loop start until after the
 	// initial sing-box instance is running.
 	subMgr.SetBoxManager(boxMgr)
+	boxMgr.AddConfigListener(profileMgr)
 	boxMgr.AddConfigListener(subMgr)
 
 	if err := boxMgr.Start(ctx); err != nil {
@@ -119,14 +128,14 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// while sharing the same underlying pool. The controller also lets the
 	// management API hot-apply rule/strategy edits and coordinates dispatcher
 	// topology transactionally around future box reloads.
-	routingCtl := NewRoutingController(ctx, boxMgr)
+	routingCtl := NewRoutingController(ctx, boxMgr, WithProfileRuntime(profileMgr))
 	defer routingCtl.Stop()
 	boxMgr.AddReloadLifecycleListener(routingCtl)
 	boxMgr.AddConfigListener(routingCtl)
 	if server := boxMgr.MonitorServer(); server != nil {
 		server.SetRoutingController(routingCtl)
 	}
-	if err := routingCtl.Start(cfg); err != nil {
+	if err := routingCtl.StartState(boxMgr.CurrentReloadState()); err != nil {
 		return fmt.Errorf("start smart routing controller: %w", err)
 	}
 

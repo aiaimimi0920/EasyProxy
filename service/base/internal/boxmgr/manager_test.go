@@ -227,6 +227,56 @@ func TestReloadIntentTokensAreNestableAndIdempotent(t *testing.T) {
 	}
 }
 
+func TestStartWithoutNodesEntersInitialIdle(t *testing.T) {
+	manager := newInitialIdleTestManager(t)
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	state := manager.CurrentReloadState()
+	if !state.Idle || state.Config == nil || manager.currentBox != nil {
+		t.Fatalf("state=%#v box=%v", state, manager.currentBox)
+	}
+}
+
+func TestInitialIdleCanReloadWhenNodesAppear(t *testing.T) {
+	manager := newInitialIdleTestManager(t)
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	withNode := manager.CurrentReloadState().Config.Clone()
+	withNode.Nodes = []config.NodeConfig{{Name: "node", URI: "http://127.0.0.1:18080"}}
+	if err := manager.Reload(withNode); err != nil {
+		t.Fatal(err)
+	}
+	if manager.CurrentReloadState().Idle {
+		t.Fatal("manager remained idle after nodes appeared")
+	}
+}
+
+func newInitialIdleTestManager(t *testing.T) *Manager {
+	t.Helper()
+	manager := New(&config.Config{
+		Mode:     "pool",
+		Listener: config.ListenerConfig{Address: "127.0.0.1", Port: 22323, Protocol: config.InboundProtocolMixed},
+		Management: config.ManagementConfig{
+			Enabled: boolPtr(false),
+		},
+		LocalServer: config.LocalServerConfig{
+			Enabled:              true,
+			Auth:                 config.LocalServerAuthConfig{Username: "easyproxy", Password: "secret"},
+			SharedRevision:       1,
+			CredentialGeneration: 1,
+		},
+	}, monitor.Config{Enabled: false})
+	manager.boxFactory = func(context.Context, *config.Config) (managedBox, error) {
+		return &fakeManagedBox{name: "recovered"}, nil
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+	return manager
+}
+
+func boolPtr(value bool) *bool { return &value }
+
 func TestReloadIntentBlocksNodeMutationBeforeReloadLock(t *testing.T) {
 	manager := &Manager{
 		cfg:    &config.Config{Mode: "pool"},
