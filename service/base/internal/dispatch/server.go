@@ -103,6 +103,20 @@ func NewServer(cfg Config, provider PoolProvider, engine *routerule.Engine, logg
 	return s
 }
 
+// TransparentRouter returns a data-plane router that shares this server's
+// current pool provider, routing engine, logger, and dial timeout. The router
+// is intentionally a separate listener path so explicit HTTP/SOCKS clients
+// remain unchanged.
+func (s *Server) TransparentRouter(noAvailableProxyPolicy routerule.Policy) *TransparentRouter {
+	if s == nil {
+		return nil
+	}
+	return NewTransparentRouter(TransparentRouterConfig{
+		DialTimeout:            s.cfg.DialTimeout,
+		NoAvailableProxyPolicy: noAvailableProxyPolicy,
+	}, s.provider, s.currentEngine(), s.logger)
+}
+
 // SetEngine swaps the routing engine (live reload of rules).
 func (s *Server) SetEngine(engine *routerule.Engine) {
 	s.mu.Lock()
