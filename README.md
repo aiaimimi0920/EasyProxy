@@ -69,6 +69,22 @@ saved through the WebUI persist there, but the next root render/deploy can
 replace them with `serviceBase.runtime` from the root config. Promote durable
 WebUI changes back into the root config before redeploying.
 
+### Local Server Device Profiles
+
+Local Server is the standard trusted-LAN entry for multiple devices. It uses
+one mixed proxy listener, one canonical username/password shared by proxy and
+management access, a shared forwarding Profile, and optional independent
+per-device Profiles. Clients use normal HTTP/CONNECT/SOCKS5 settings; no
+standalone device client is required.
+
+Enable it with `serviceBase.runtime.mode: pool`,
+`listener.protocol: mixed`, and `local_server.enabled: true`. The root renderer
+derives the listener and management credentials from `local_server.auth`.
+Local Server is intentionally incompatible with legacy multi-port, hybrid, and
+extra-listener topologies. See [`docs/local-server.md`](docs/local-server.md)
+for configuration, device identity, API/CAS, firewall, and troubleshooting
+guidance.
+
 ### Smart Routing Docker Entry
 
 Smart routing is disabled in the example config. To enable the default Docker
@@ -241,6 +257,7 @@ Read the module-specific deployment notes:
 ## Documentation
 
 - `docs/architecture.md`
+- `docs/local-server.md`
 - `docs/smart-routing.md`
 - `docs/quickstart.md`
 - `docs/release-checklist.md`
@@ -559,6 +576,7 @@ go test -count=1 ./...
 # Embedded service/base frontend
 Set-Location frontend
 npm ci
+npm run test
 npm run lint
 npm run build
 ```
@@ -596,12 +614,13 @@ for the current secret matrix covering:
 Before publishing a public release:
 
 1. Confirm `config.example.yaml` still contains placeholders only, and no real secrets were introduced.
-2. Run the local validation matrix or confirm `.github/workflows/validate.yml` passed on the target commit.
-3. Confirm the embedded frontend assets in `service/base/internal/monitor/assets` match the current frontend source when WebUI code changed.
-4. Confirm GHCR owner/image names are correct for the target repository or organization.
-5. If `upstreams/*` changed, note whether each change is an upstream sync import or a local carried patch.
-6. If deploy behavior changed, update the corresponding `deploy/*/README.md` notes.
-7. Publish via tag push or GitHub Actions only after validation is green.
+2. If Local Server is enabled, confirm `mode: pool`, `listener.protocol: mixed`, one non-placeholder canonical credential, and trusted-LAN firewall restrictions for `22323/29888`.
+3. Run the local validation matrix or confirm `.github/workflows/validate.yml` passed on the target commit.
+4. Confirm the embedded frontend assets in `service/base/internal/monitor/assets` match the current frontend source when WebUI code changed.
+5. Confirm GHCR owner/image names are correct for the target repository or organization.
+6. If `upstreams/*` changed, note whether each change is an upstream sync import or a local carried patch.
+7. If deploy behavior changed, update the corresponding `deploy/*/README.md` notes.
+8. Publish via tag push or GitHub Actions only after validation is green.
 
 For release body drafting, start from
 [release-notes-template.md](/C:/Users/Public/nas_home/AI/GameEditor/EasyProxy/docs/release-notes-template.md).

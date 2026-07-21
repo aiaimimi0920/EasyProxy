@@ -21,6 +21,7 @@ EasyProxy 是一个轻量级、高性能的代理池与订阅管理工具，底�
 - 节点订阅与自动刷新
 - 代理池智能调度与故障隔离
 - GeoIP 分区路由（可选）
+- Local Server 局域网统一入口与共享/独立设备 Profile
 - SQLite 持久化存储运行状态与统计数据
 
 ## 🖼️ 项目预览
@@ -111,6 +112,13 @@ cp ./config.example.yaml ./config.yaml
 - `connectors[]` / manifest `connector`: 也支持 `connector_type = zenproxy_client`，运行时会请求 ZenProxy `/api/client/fetch` 并把返回的 sing-box outbound 转成临时节点
 - 纯 `source_sync` / 纯 connector 场景现在也可直接启动，不再需要本地占位节点
 - `routing.*`: 智能分流入口（默认关闭）。开启后接管 `listener` 端口，HTTP/HTTPS 与 SOCKS5 同端口共存，提供「规则分流（直连/代理）+ 选节点策略（stable/session/auto）+ 节点属性筛选（国家/地区/长效）」三层能力。默认入口（系统代理、无参数）走「中国直连 + 其余 stable 长效稳定」；API 调用可用路径前缀 / `X-Proxy-*` 头 / SOCKS5 username 令牌覆盖。详见 [`docs/smart-routing.md`](../../docs/smart-routing.md)
+- `local_server.*`: 局域网 Local Server（默认关闭）。开启后要求 `mode: pool`、`listener.protocol: mixed`，由一套 canonical 用户名/密码同时保护 Web、管理 API、HTTP/CONNECT 和 SOCKS5；支持 shared Profile、完全独立的设备 Profile，以及显式 `+dev=<device_id>` / IP-CIDR 映射选择。设备无需安装独立客户端。详见 [`docs/local-server.md`](../../docs/local-server.md)
+
+Local Server 的 IP 映射只读取实际 TCP peer address。Docker bridge、端口
+映射和 NAT 可能让多个设备显示为同一个网关 IP，因此稳定设备选择应优先
+使用显式 `easyproxy+dev=<device_id>`。部署时必须在路由器和宿主机防火墙上
+阻止 WAN、Guest VLAN 和其他不可信网络访问 `22323/29888`；跨不可信网络
+请先使用 VPN，或配置带明确访问策略的 TLS 入口。
 
 管理 API 的可观测性补充：
 
@@ -128,6 +136,12 @@ cp ./config.example.yaml ./config.yaml
 - `GET /api/routing/status`
   - 仅在 `routing.enabled` 时有意义，返回智能分流入口的监听地址、默认策略、
     规则数、兜底策略，以及当前 stable 桶 / session 会话的粘性绑定快照
+- `GET /api/local-server/status`
+  - 返回 Local Server listener/dispatcher、Registry revision、Profile/mapping
+    数量，以及 Docker/NAT source-IP 风险提示
+- `GET /api/local-server/devices`
+  - 返回设备的 shared/independent 模式、有效启用状态、revision、last-seen
+    和 mapping 数量；完整 CRUD 与 CAS 说明见 Local Server 文档
 
 ---
 

@@ -38,6 +38,12 @@ The manifest records:
 That manifest is the stable lookup point used by both bootstrap JSON and import
 codes.
 
+When Local Server is enabled, the rendered runtime config also contains the
+canonical `local_server.auth` credential. The renderer normalizes that same
+credential into the listener and management compatibility fields. Do not edit
+those derived copies independently, and do not distribute a rendered Local
+Server config to hosts that are outside the intended trusted-LAN boundary.
+
 ## GitHub Workflow
 
 Primary workflow:
@@ -158,6 +164,11 @@ At startup the image will:
 After startup a sync loop continues to watch the manifest fingerprint and
 refreshes the runtime config if a newer release is published.
 
+For Local Server, root `config.yaml` remains the durable authority. Web Console
+Profile changes saved into a mounted rendered config can be replaced by a later
+R2/root render. Promote intended shared Profile and canonical Local Server
+changes back into the root config before publishing the next distribution.
+
 ## Security Notes
 
 - The bucket is private. Access is controlled by purpose-built R2 tokens.
@@ -168,3 +179,10 @@ refreshes the runtime config if a newer release is published.
   ignored by Git.
 - If you rotate read credentials, regenerate import codes / bootstrap JSON and
   republish the config distribution.
+- An R2 reader that can download the rendered config can also read the
+  canonical Local Server credential. Scope read credentials to the required
+  object prefix/host set, rotate them after suspected exposure, and treat an
+  import code or bootstrap JSON as sensitive operator material.
+- Config distribution does not create a network security boundary. Restrict
+  runtime ports `22323/29888` to trusted LAN subnets; use VPN/TLS for access
+  across untrusted networks. See [`local-server.md`](./local-server.md).

@@ -39,6 +39,30 @@ These defaults are encoded in:
 - `scripts/smoke-easy-proxy-docker-api.ps1`
 - `scripts/validate-easy-proxy-runtime.ps1`
 
+## Local Server Deployment
+
+Local Server provides one trusted-LAN mixed proxy entry on `22323` and the
+embedded management console on `29888`. Devices use standard HTTP/CONNECT or
+SOCKS5 settings with the canonical `local_server.auth` credential; no separate
+device-side EasyProxy service is required.
+
+The enabled topology requires `mode: pool`, `listener.protocol: mixed`, no
+`extra_listeners`, and no conflicting `local_server.listen` /
+`routing.listen`. The root renderer derives listener and management credentials
+from the canonical Local Server credential. Legacy `multi-port` and `hybrid`
+deployments require `local_server.enabled: false`.
+
+Docker published ports may collapse multiple LAN clients to the same observed
+gateway address. Prefer explicit proxy usernames such as
+`easyproxy+dev=laptop`; treat IP/CIDR mappings as best-effort unless the network
+mode is proven to preserve client source IPs.
+
+Only trusted LAN subnets should reach `22323/29888`. Block WAN, guest VLAN, and
+other untrusted segments at both the router and host firewall. Use a VPN or TLS
+with an explicit access policy for untrusted-network access. See
+[`docs/local-server.md`](../../../docs/local-server.md) for the complete operator
+contract.
+
 ## Files
 
 - `config.template.yaml`
@@ -65,6 +89,10 @@ These defaults are encoded in:
 - `scripts/validate-easy-proxy-runtime.ps1`
   - full live validation script for local subscription, direct proxy, manifest,
     fallback, local connector, and manifest connector paths
+- `scripts/validate-local-server-device-profiles.ps1`
+  - isolated, label-scoped Local Server E2E covering credentials, Profile
+    selection, HTTP/CONNECT/SOCKS5, CAS conflicts, embedded assets, and legacy
+    container invariants
 
 ## Unified Source Notes
 
@@ -227,6 +255,8 @@ Historical published GHCR release from the source workspace:
    keep it only under `source_sync.fallback_subscriptions`.
 4. Run `docker compose up -d` from this directory.
 5. Validate the management API on `29888` and the proxy listener on `22323`.
+6. For Local Server deployments, verify trusted-LAN firewall scope and test an
+   explicit `+dev=<device_id>` client before relying on IP mappings.
 
 The current container path contract is:
 

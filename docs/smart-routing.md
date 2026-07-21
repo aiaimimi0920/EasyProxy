@@ -1,5 +1,9 @@
 # Smart Routing (智能分流入口)
 
+> Local Server adds shared and independent per-device Profiles on top of this
+> routing engine. For the canonical LAN topology, identity grammar, Profile
+> matrix, and device APIs, see [`local-server.md`](./local-server.md).
+
 ## Goal
 
 Turn the EasyProxy entry from a plain pool inbound into a *smart proxy entry*
@@ -11,6 +15,13 @@ The feature is opt-in. With `routing.enabled: false` (the default) the runtime
 behaves exactly as before: the sing-box pool inbound serves all traffic with no
 splitting. With `routing.enabled: true` the smart dispatch entry takes over the
 listener host:port and serves both HTTP/HTTPS CONNECT and SOCKS5 on one port.
+
+When `local_server.enabled: true`, the `routing` block is the shared Profile and
+the dispatcher is enabled even when that shared Profile is disabled. A disabled
+selected Profile always routes `DIRECT`; an independent enabled Profile can
+still use its own rules while the shared Profile is disabled. The preferred
+device-aware API is `/api/local-server/*`; `/api/routing/config` and
+`/api/routing/status` remain shared-Profile compatibility aliases.
 
 ## Three Orthogonal Layers
 
@@ -192,6 +203,10 @@ When routing is enabled in pure `multi-port` mode, the builder still creates the
 global `proxy-pool` outbound for the dispatcher, while leaving the per-node
 listeners unchanged and omitting the ordinary global pool inbound.
 
+That legacy behavior applies only while Local Server is disabled. Enabling
+Local Server requires `mode: pool`, `listener.protocol: mixed`, and no
+`extra_listeners`, so a second listener cannot bypass device Profile selection.
+
 For Docker deployments, an empty `routing.listen` uses route A and the existing
 published listener port. A different route-B port must also be explicitly
 published by Docker/Compose; changing YAML alone cannot expose a container port.
@@ -217,3 +232,6 @@ published by Docker/Compose; changing YAML alone cannot expose a container port.
   goal), which concentrates concurrency/bandwidth on that node by design.
 - All new behaviour is gated by `routing.enabled` and the presence of a ctx
   directive; disabled = current behaviour, unchanged.
+- Under Local Server, `routing.enabled` is the shared Profile's enabled state,
+  not the dispatcher lifecycle switch. See the companion Local Server document
+  before applying legacy multi-port or route-B guidance.

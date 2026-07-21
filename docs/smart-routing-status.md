@@ -9,6 +9,10 @@
 > reference (concepts, request-param grammar, config schema). This doc is the
 > *status / handoff*. When they disagree, trust the code.
 >
+> **Local Server companion**: [`local-server.md`](./local-server.md) documents
+> the later canonical LAN topology and shared/independent device Profiles. This
+> historical Smart Routing evidence remains scoped to the branch and runs below.
+>
 > **Last updated**: 2026-07-19
 > **Branch**: `feat/smart-routing-dispatch`
 > **Baseline commits**: `0903b1e` (backend) + `4c6f241` (UI + hot config API)
