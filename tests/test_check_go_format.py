@@ -1,3 +1,4 @@
+import os
 import subprocess
 import sys
 import tempfile
@@ -37,7 +38,8 @@ class CheckGoFormatTests(unittest.TestCase):
             result = self.run_checker(source)
 
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn(str(source), result.stdout)
+            reported_path = Path(result.stdout.strip().splitlines()[-1])
+            self.assertTrue(os.path.samefile(source, reported_path), msg=result.stdout)
 
 
 if __name__ == "__main__":

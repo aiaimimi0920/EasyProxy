@@ -164,6 +164,36 @@ class UpdateEchPreferredIpsTests(unittest.TestCase):
             self.assertEqual(summary["worker_url"], "https://worker.example.test:443")
             self.assertEqual(summary["worker_url_source"], "root_config")
 
+    def test_reused_csv_parsing_does_not_depend_on_header_encoding(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path, result_csv = self.write_fixture(temp_dir)
+            result_csv.write_text(
+                "column_1,column_2,column_3,column_4,column_5\n"
+                "203.0.113.10,20,0,2.5,TEST\n",
+                encoding="utf-8",
+            )
+            artifact_root = Path(temp_dir) / "artifacts"
+
+            result = self.run_script(
+                [
+                    "-ConfigPath",
+                    str(config_path),
+                    "-ReuseResultCsvPath",
+                    str(result_csv),
+                    "-ArtifactRoot",
+                    str(artifact_root),
+                    "-TopCount",
+                    "1",
+                ]
+            )
+
+            self.assertEqual(result.returncode, 0, msg=result.stderr or result.stdout)
+            summary = json.loads(result.stdout)
+            selected = json.loads(
+                (Path(summary["artifact_dir"]) / "selected-sources.json").read_text(encoding="utf-8-sig")
+            )
+            self.assertEqual(selected[0]["connector_config"]["server_ip"], "203.0.113.10")
+
 
 if __name__ == "__main__":
     unittest.main()

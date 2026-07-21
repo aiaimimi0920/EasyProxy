@@ -129,15 +129,20 @@ function Normalize-SelectedRows {
     )
 
     $normalized = foreach ($row in $Rows) {
-        $ip = [string](Get-ObjectPropertyValue -Object $row -Name "IP 地址" -Default "")
+        $properties = @($row.psobject.Properties)
+        if ($properties.Count -lt 4) {
+            continue
+        }
+
+        $ip = [string]$properties[0].Value
         if ([string]::IsNullOrWhiteSpace($ip)) {
             continue
         }
 
-        $latencyText = [string](Get-ObjectPropertyValue -Object $row -Name "平均延迟" -Default "99999")
-        $lossText = [string](Get-ObjectPropertyValue -Object $row -Name "丢包率" -Default "1")
-        $speedText = [string](Get-ObjectPropertyValue -Object $row -Name "下载速度(MB/s)" -Default "0")
-        $coloText = [string](Get-ObjectPropertyValue -Object $row -Name "地区码" -Default "")
+        $latencyText = [string]$properties[1].Value
+        $lossText = [string]$properties[2].Value
+        $speedText = [string]$properties[3].Value
+        $coloText = if ($properties.Count -ge 5) { [string]$properties[4].Value } else { "" }
 
         [pscustomobject]@{
             ip                 = $ip.Trim()
