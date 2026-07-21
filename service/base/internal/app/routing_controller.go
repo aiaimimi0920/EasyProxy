@@ -126,6 +126,22 @@ func (rc *RoutingController) Running() bool {
 	return rc.running
 }
 
+// TransparentRouter returns a transparent data-plane router backed by the
+// controller's current engine and pool. It returns nil while smart routing is
+// disabled; callers may then construct a pool-only router for fail-open use.
+func (rc *RoutingController) TransparentRouter(noAvailableProxyPolicy routerule.Policy) *dispatch.TransparentRouter {
+	if rc == nil {
+		return nil
+	}
+	rc.mu.Lock()
+	server := rc.server
+	rc.mu.Unlock()
+	if server == nil {
+		return nil
+	}
+	return server.TransparentRouter(noAvailableProxyPolicy)
+}
+
 // startStateOperationLocked initializes one applied routing state. Caller holds
 // operationMu; threshold propagation intentionally happens outside rc.mu.
 func (rc *RoutingController) startStateOperationLocked(state boxmgr.ReloadState) error {

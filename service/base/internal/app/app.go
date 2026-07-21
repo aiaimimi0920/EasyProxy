@@ -13,8 +13,11 @@ import (
 
 	"easy_proxies/internal/boxmgr"
 	"easy_proxies/internal/config"
+	"easy_proxies/internal/dispatch"
+	"easy_proxies/internal/gateway"
 	"easy_proxies/internal/monitor"
 	"easy_proxies/internal/profile"
+	"easy_proxies/internal/routerule"
 	"easy_proxies/internal/store"
 	"easy_proxies/internal/subscription"
 )
@@ -138,6 +141,24 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	if err := routingCtl.StartState(boxMgr.CurrentReloadState()); err != nil {
 		return fmt.Errorf("start smart routing controller: %w", err)
 	}
+
+	// Transparent gateway is a separate ingress. It reuses the routing
+	// controller when enabled and falls back to the pool-only router otherwise.
+	gatewayMgr := gateway.NewManager(nil, nil, func(gatewayCfg config.GatewayConfig) *dispatch.TransparentRouter {
+		fallback := routerule.NormalizePolicy(gatewayCfg.Routing.NoAvailableProxyPolicy)
+		if router := routingCtl.TransparentRouter(fallback); router != nil {
+			return router
+		}
+		return dispatch.NewTransparentRouter(dispatch.TransparentRouterConfig{
+			DialTimeout:            30 * time.Second,
+			NoAvailableProxyPolicy: fallback,
+		}, boxMgr, nil, dispatchLogger{})
+	})
+	boxMgr.AddReloadLifecycleListener(gatewayMgr)
+	if err := gatewayMgr.Start(ctx, cfg.Gateway); err != nil {
+		return fmt.Errorf("start transparent gateway: %w", err)
+	}
+	defer gatewayMgr.Stop()
 
 	// ── 7. Start periodic stats flush ──
 	statsCtx, statsCancel := context.WithCancel(ctx)
