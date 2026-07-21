@@ -9,6 +9,7 @@ import {
 
 // ---- Merged node type ----
 interface MergedNode extends ConfigNodeConfig {
+  configManaged: boolean
   // Runtime state from monitor
   runtimeStatus: 'normal' | 'unavailable' | 'blacklisted' | 'pending' | 'disabled'
   latency_ms: number
@@ -35,6 +36,12 @@ function statusOrder(s: MergedNode['runtimeStatus']): number {
     case 'disabled': return 4
     default: return 5
   }
+}
+
+function snapshotStatus(snap: NodeSnapshot): MergedNode['runtimeStatus'] {
+  if (snap.blacklisted) return 'blacklisted'
+  if (!snap.initial_check_done) return 'pending'
+  return snap.available ? 'normal' : 'unavailable'
 }
 
 function compareManageNodes(a: MergedNode, b: MergedNode, key: ManageSortKey, dir: SortDir): number {
@@ -215,12 +222,14 @@ export default function ManagePanel() {
       snapMap.set(s.name, s)
     }
 
-    return configNodes.map((cfg): MergedNode => {
+    const configNames = new Set(configNodes.map(node => node.name))
+    const configured = configNodes.map((cfg): MergedNode => {
       const snap = snapMap.get(cfg.name)
 
       if (cfg.disabled) {
         return {
           ...cfg,
+          configManaged: true,
           runtimeStatus: 'disabled',
           latency_ms: -1,
           region: undefined,
@@ -235,6 +244,7 @@ export default function ManagePanel() {
       if (!snap) {
         return {
           ...cfg,
+          configManaged: true,
           runtimeStatus: 'pending',
           latency_ms: -1,
           region: undefined,
@@ -246,20 +256,10 @@ export default function ManagePanel() {
         }
       }
 
-      let runtimeStatus: MergedNode['runtimeStatus'] = 'pending'
-      if (snap.blacklisted) {
-        runtimeStatus = 'blacklisted'
-      } else if (!snap.initial_check_done) {
-        runtimeStatus = 'pending'
-      } else if (snap.available) {
-        runtimeStatus = 'normal'
-      } else {
-        runtimeStatus = 'unavailable'
-      }
-
       return {
         ...cfg,
-        runtimeStatus,
+        configManaged: true,
+        runtimeStatus: snapshotStatus(snap),
         latency_ms: snap.last_latency_ms,
         region: snap.region,
         country: snap.country,
@@ -269,6 +269,29 @@ export default function ManagePanel() {
         tag: snap.tag,
       }
     })
+
+    const runtimeOnly = snapshots
+      .filter(snap => !configNames.has(snap.name))
+      .map((snap): MergedNode => ({
+        name: snap.name,
+        uri: snap.uri,
+        port: snap.port || 0,
+        username: '',
+        password: '',
+        source: snap.source_kind || 'runtime',
+        disabled: false,
+        configManaged: false,
+        runtimeStatus: snapshotStatus(snap),
+        latency_ms: snap.last_latency_ms,
+        region: snap.region,
+        country: snap.country,
+        active_connections: snap.active_connections,
+        success_count: typeof snap.success_count === 'number' ? snap.success_count : 0,
+        failure_count: snap.failure_count,
+        tag: snap.tag,
+      }))
+
+    return [...configured, ...runtimeOnly]
   }, [configNodes, monitorData])
 
   // ---- Filtering ----
@@ -310,6 +333,11 @@ export default function ManagePanel() {
   const sortedNodes = useMemo(() => {
     return [...filteredNodes].sort((a, b) => compareManageNodes(a, b, sortKey, sortDir))
   }, [filteredNodes, sortKey, sortDir])
+
+  const selectedConfigNodes = useMemo(
+    () => mergedNodes.filter(node => node.configManaged && selectedNodes.has(node.uri)),
+    [mergedNodes, selectedNodes],
+  )
 
   // ---- Handlers ----
 
@@ -442,10 +470,10 @@ export default function ManagePanel() {
   }
 
   const handleBatchToggle = async (enabled: boolean) => {
-    if (selectedNodes.size === 0) return
+    if (selectedConfigNodes.length === 0) return
     setBatchProcessing(true)
     try {
-      const res = await batchToggleConfigNodes(Array.from(selectedNodes), enabled)
+      const res = await batchToggleConfigNodes(selectedConfigNodes.map(node => node.uri), enabled)
       setSuccess(res.message || '批量操作完成')
       setSelectedNodes(new Set())
       await loadData()
@@ -495,11 +523,11 @@ export default function ManagePanel() {
   }
 
   const handleBatchDelete = async () => {
-    if (selectedNodes.size === 0) return
+    if (selectedConfigNodes.length === 0) return
     setBatchProcessing(true)
     setBatchDeleteConfirm(false)
     try {
-      const res = await batchDeleteConfigNodes(Array.from(selectedNodes))
+      const res = await batchDeleteConfigNodes(selectedConfigNodes.map(node => node.uri))
       setSuccess(res.message || '批量删除完成')
       setSelectedNodes(new Set())
       await loadData()
@@ -740,21 +768,21 @@ export default function ManagePanel() {
               <button
                 className="btn btn-sm btn-success border-none bg-success/15 text-success hover:bg-success hover:text-success-content"
                 onClick={() => handleBatchToggle(true)}
-                disabled={batchProcessing}
+                disabled={batchProcessing || selectedConfigNodes.length === 0}
               >
                 启用
               </button>
               <button
                 className="btn btn-sm btn-warning border-none bg-warning/15 text-warning-content hover:bg-warning hover:text-warning-content"
                 onClick={() => handleBatchToggle(false)}
-                disabled={batchProcessing}
+                disabled={batchProcessing || selectedConfigNodes.length === 0}
               >
                 禁用
               </button>
               <button
                 className="btn btn-sm btn-error border-none bg-error/15 text-error hover:bg-error hover:text-error-content"
                 onClick={() => setBatchDeleteConfirm(true)}
-                disabled={batchProcessing}
+                disabled={batchProcessing || selectedConfigNodes.length === 0}
               >
                 删除
               </button>
@@ -829,7 +857,7 @@ export default function ManagePanel() {
                       <p className="text-base font-medium text-base-content">
                         {filter || statusFilter || regionFilter || sourceFilter
                           ? '未找到匹配的节点数据'
-                          : '暂无配置节点'}
+                          : '暂无节点'}
                       </p>
                       {!(filter || statusFilter || regionFilter || sourceFilter) && (
                         <p className="text-sm text-base-content/50 mt-1">请点击右上角「添加节点」或导入配置以开始</p>
@@ -900,36 +928,40 @@ export default function ManagePanel() {
                             <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z" /></svg>
                           </button>
                         )}
-                        {/* Toggle enable/disable */}
-                        <button
-                          className={`btn btn-sm btn-square btn-ghost ${node.disabled ? 'text-success hover:bg-success/10' : 'text-warning hover:bg-warning/10'}`}
-                          onClick={() => handleToggle(node)}
-                          disabled={toggling === node.uri}
-                          title={node.disabled ? '启用该节点' : '禁用该节点'}
-                        >
-                          {toggling === node.uri
-                            ? <span className="loading loading-spinner loading-xs"></span>
-                            : node.disabled
-                                ? <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" /></svg>
-                                : <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" /></svg>
-                          }
-                        </button>
-                        {/* Edit */}
-                        <button
-                          className="btn btn-sm btn-square btn-ghost text-info hover:bg-info/10"
-                          onClick={() => openEditModal(node)}
-                          title="编辑节点配置"
-                        >
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
-                        </button>
-                        {/* Delete */}
-                        <button
-                          className="btn btn-sm btn-square btn-ghost text-error hover:bg-error/10"
-                            onClick={() => { setDeleteTarget(node.uri); setDeleteTargetLabel(node.name); }}
-                            title="删除节点"
-                          >
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                        </button>
+                        {node.configManaged && (
+                          <>
+                            {/* Toggle enable/disable */}
+                            <button
+                              className={`btn btn-sm btn-square btn-ghost ${node.disabled ? 'text-success hover:bg-success/10' : 'text-warning hover:bg-warning/10'}`}
+                              onClick={() => handleToggle(node)}
+                              disabled={toggling === node.uri}
+                              title={node.disabled ? '启用该节点' : '禁用该节点'}
+                            >
+                              {toggling === node.uri
+                                ? <span className="loading loading-spinner loading-xs"></span>
+                                : node.disabled
+                                    ? <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" /></svg>
+                                    : <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" /></svg>
+                              }
+                            </button>
+                            {/* Edit */}
+                            <button
+                              className="btn btn-sm btn-square btn-ghost text-info hover:bg-info/10"
+                              onClick={() => openEditModal(node)}
+                              title="编辑节点配置"
+                            >
+                              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                            </button>
+                            {/* Delete */}
+                            <button
+                              className="btn btn-sm btn-square btn-ghost text-error hover:bg-error/10"
+                              onClick={() => { setDeleteTarget(node.uri); setDeleteTargetLabel(node.name); }}
+                              title="删除节点"
+                            >
+                              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                            </button>
+                          </>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -1102,12 +1134,12 @@ export default function ManagePanel() {
           <div className="modal-box max-w-sm">
             <h3 className="font-bold text-lg mb-2">确认批量删除</h3>
             <p className="text-base-content/70">
-              确定要删除选中的 <strong>{selectedNodes.size}</strong> 个节点吗？此操作不可撤销。
+              确定要删除选中的 <strong>{selectedConfigNodes.length}</strong> 个配置节点吗？此操作不可撤销。
             </p>
             <div className="modal-action">
               <button className="btn btn-ghost" onClick={() => setBatchDeleteConfirm(false)} disabled={batchProcessing}>取消</button>
               <button className="btn btn-error" onClick={handleBatchDelete} disabled={batchProcessing}>
-                {batchProcessing ? <span className="loading loading-spinner loading-xs"></span> : `删除 ${selectedNodes.size} 个节点`}
+                {batchProcessing ? <span className="loading loading-spinner loading-xs"></span> : `删除 ${selectedConfigNodes.length} 个节点`}
               </button>
             </div>
           </div>

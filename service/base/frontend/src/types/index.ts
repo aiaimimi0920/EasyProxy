@@ -9,6 +9,9 @@ export interface NodeInfo {
   port?: number
   region?: string
   country?: string
+  source_kind?: string
+  source_name?: string
+  source_ref?: string
 }
 
 export interface TimelineEvent {
