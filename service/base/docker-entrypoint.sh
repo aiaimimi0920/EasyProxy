@@ -52,6 +52,13 @@ if [ "$(id -u)" = "0" ]; then
     chown easy:easy /etc/easy-proxy/config.yaml 2>/dev/null || true
     chown easy:easy /etc/easy-proxy/nodes.txt 2>/dev/null || true
 
+    # Transparent gateway mode needs CAP_NET_ADMIN for IP_TRANSPARENT and the
+    # nftables/ip supervisor. It is an explicit deployment opt-in; normal
+    # proxy deployments continue to run as the unprivileged easy user.
+    if [ "${EASY_PROXY_RUN_AS_ROOT:-0}" = "1" ]; then
+        exec /usr/local/bin/easy-proxy "$@"
+    fi
+
     # Drop privileges and exec as 'easy' user
     exec gosu easy /usr/local/bin/easy-proxy "$@"
 fi

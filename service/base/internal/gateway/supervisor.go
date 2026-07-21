@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -113,27 +115,58 @@ func isIdempotentNetworkError(err error) bool {
 }
 
 func buildGatewayCommands(cfg config.GatewayConfig) []gatewayCommand {
+	port := gatewayPort(cfg.Listen)
 	commands := []gatewayCommand{
 		{name: "ip", args: []string{"rule", "add", "fwmark", "0x1/0x1", "lookup", "100"}},
 		{name: "ip", args: []string{"route", "add", "local", "0.0.0.0/0", "dev", "lo", "table", "100"}},
 		{name: "nft", args: []string{"add", "table", "inet", "easyproxy_gateway"}},
 		{name: "nft", args: []string{"add", "chain", "inet", "easyproxy_gateway", "prerouting", "{", "type", "filter", "hook", "prerouting", "priority", "mangle;", "policy", "accept;", "}"}},
+		{name: "nft", args: []string{"add", "rule", "inet", "easyproxy_gateway", "prerouting", "meta", "mark", "0x1", "return"}},
+	}
+	commands = append(commands, gatewayCommand{
+		name: "nft",
+		args: []string{"add", "rule", "inet", "easyproxy_gateway", "prerouting", "tcp", "dport", "{", port, "22323", "29888", "}", "return"},
+	})
+	for _, privateCIDR := range []string{"127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10"} {
+		commands = append(commands, gatewayCommand{
+			name: "nft",
+			args: []string{"add", "rule", "inet", "easyproxy_gateway", "prerouting", "ip", "daddr", privateCIDR, "return"},
+		})
 	}
 	for _, iface := range cfg.Ingress.Interfaces {
 		for _, cidr := range cfg.Ingress.TrustedCIDRs {
-			commands = append(commands, gatewayCommand{
-				name: "nft",
-				args: []string{"add", "rule", "inet", "easyproxy_gateway", "prerouting", "iifname", iface, "ip", "saddr", cidr, "meta", "mark", "set", "0x1", "tproxy", "to", ":15001"},
-			})
+			commands = appendCaptureRule(commands, "iifname", iface, cidr, port)
+		}
+	}
+	for _, pattern := range cfg.Ingress.InterfacePatterns {
+		for _, cidr := range cfg.Ingress.TrustedCIDRs {
+			commands = appendCaptureRule(commands, "iifname", pattern, cidr, port)
 		}
 	}
 	for _, cidr := range cfg.Ingress.TrustedCIDRs {
-		commands = append(commands, gatewayCommand{
-			name: "nft",
-			args: []string{"add", "rule", "inet", "easyproxy_gateway", "prerouting", "ip", "saddr", cidr, "meta", "mark", "set", "0x1", "tproxy", "to", ":15001"},
-		})
+		commands = appendCaptureRule(commands, "", "", cidr, port)
 	}
 	return commands
+}
+
+func appendCaptureRule(commands []gatewayCommand, qualifier, value, cidr, port string) []gatewayCommand {
+	args := []string{"add", "rule", "inet", "easyproxy_gateway", "prerouting"}
+	if qualifier != "" {
+		args = append(args, qualifier, value)
+	}
+	args = append(args, "ip", "saddr", cidr, "tcp", "meta", "mark", "set", "0x1", "tproxy", "to", ":"+port)
+	return append(commands, gatewayCommand{name: "nft", args: args})
+}
+
+func gatewayPort(listen string) string {
+	_, port, err := net.SplitHostPort(strings.TrimSpace(listen))
+	if err != nil {
+		return "15001"
+	}
+	if value, err := strconv.Atoi(port); err == nil && value > 0 && value <= 65535 {
+		return strconv.Itoa(value)
+	}
+	return "15001"
 }
 
 func buildGatewayCleanup(commands []gatewayCommand) []gatewayCommand {

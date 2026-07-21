@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"easy_proxies/internal/outbound/pool"
@@ -24,11 +25,20 @@ type TransparentRouterConfig struct {
 // listener. The accepted socket's local address is the original destination;
 // its remote address remains the client identity used for session routing.
 type TransparentRouter struct {
-	cfg      TransparentRouterConfig
-	provider PoolProvider
-	engine   *routerule.Engine
-	logger   Logger
-	direct   *net.Dialer
+	cfg               TransparentRouterConfig
+	provider          PoolProvider
+	engine            *routerule.Engine
+	logger            Logger
+	direct            *net.Dialer
+	directConnections atomic.Uint64
+	proxyConnections  atomic.Uint64
+	directFallbacks   atomic.Uint64
+}
+
+type TransparentStats struct {
+	DirectConnections uint64
+	ProxyConnections  uint64
+	DirectFallbacks   uint64
 }
 
 func NewTransparentRouter(cfg TransparentRouterConfig, provider PoolProvider, engine *routerule.Engine, logger Logger) *TransparentRouter {
@@ -66,16 +76,37 @@ func (r *TransparentRouter) ServeConn(ctx context.Context, conn net.Conn) {
 	}
 
 	upstream, dialErr := r.dial(ctx, host, port, policy)
+	usedFallback := false
 	if dialErr != nil && policy == routerule.PolicyProxy && r.cfg.NoAvailableProxyPolicy == routerule.PolicyDirect {
 		r.warnf("transparent %s:%d proxy unavailable; falling back to DIRECT: %v", host, port, dialErr)
 		upstream, dialErr = r.dialDirect(ctx, host, port)
+		usedFallback = dialErr == nil
 	}
 	if dialErr != nil {
 		r.warnf("transparent %s:%d [%s] dial failed: %v", host, port, policy, dialErr)
 		return
 	}
 	defer upstream.Close()
+	if usedFallback {
+		r.directConnections.Add(1)
+		r.directFallbacks.Add(1)
+	} else if policy == routerule.PolicyDirect {
+		r.directConnections.Add(1)
+	} else {
+		r.proxyConnections.Add(1)
+	}
 	relay(conn, upstream)
+}
+
+func (r *TransparentRouter) Stats() TransparentStats {
+	if r == nil {
+		return TransparentStats{}
+	}
+	return TransparentStats{
+		DirectConnections: r.directConnections.Load(),
+		ProxyConnections:  r.proxyConnections.Load(),
+		DirectFallbacks:   r.directFallbacks.Load(),
+	}
 }
 
 func (r *TransparentRouter) dial(ctx context.Context, host string, port uint16, policy routerule.Policy) (net.Conn, error) {

@@ -3,10 +3,11 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   fetchRoutingConfig,
   fetchRoutingStatus,
+  fetchGatewayStatus,
   triggerReload,
   updateRoutingConfig,
 } from '../api/client'
-import type { RoutingConfig, RoutingStatus } from '../types'
+import type { GatewayStatus, RoutingConfig, RoutingStatus } from '../types'
 import { useUnsavedChangesGuard } from '../hooks/useUnsavedChangesGuard'
 import { profileToRoutingConfig, routingConfigToProfile } from './profiles/profileAdapters'
 import ProfileForm from './profiles/ProfileForm'
@@ -16,6 +17,7 @@ export default function RoutingPanel() {
   const [cfg, setCfg] = useState<RoutingConfig | null>(null)
   const [profile, setProfile] = useState<ForwardingProfile | null>(null)
   const [status, setStatus] = useState<RoutingStatus | null>(null)
+  const [gateway, setGateway] = useState<GatewayStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -28,13 +30,15 @@ export default function RoutingPanel() {
     setLoading(true)
     setError('')
     try {
-      const [routing, routingStatus] = await Promise.all([
+      const [routing, routingStatus, gatewayStatus] = await Promise.all([
         fetchRoutingConfig(),
         fetchRoutingStatus().catch(() => null),
+        fetchGatewayStatus().catch(() => null),
       ])
       setCfg(routing)
       setProfile(routingConfigToProfile(routing))
       setStatus(routingStatus)
+      setGateway(gatewayStatus)
       setDirty(false)
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载分流配置失败')
@@ -50,6 +54,7 @@ export default function RoutingPanel() {
   useEffect(() => {
     const id = window.setInterval(() => {
       void fetchRoutingStatus().then(setStatus).catch(() => undefined)
+      void fetchGatewayStatus().then(setGateway).catch(() => undefined)
     }, 5000)
     return () => window.clearInterval(id)
   }, [])
@@ -67,6 +72,7 @@ export default function RoutingPanel() {
       setNeedReload(result.need_reload)
       setNotice(result.message || '配置已保存')
       void fetchRoutingStatus().then(setStatus).catch(() => undefined)
+      void fetchGatewayStatus().then(setGateway).catch(() => undefined)
     } catch (err) {
       setError(err instanceof Error ? err.message : '保存分流配置失败')
     } finally {
@@ -156,6 +162,24 @@ export default function RoutingPanel() {
               ))}
             </div>
           </div>
+        </div>
+      )}
+
+      {gateway && (
+        <div className="rounded-lg border border-base-300/50 bg-base-100 p-5 shadow-sm">
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <div className="font-bold">透明网关</div>
+            <span className={`badge ${gateway.applied ? 'badge-success' : gateway.enabled ? 'badge-warning' : 'badge-ghost'}`}>
+              {gateway.applied ? '运行中' : gateway.enabled ? '错误' : '未启用'}
+            </span>
+          </div>
+          <div className="grid gap-3 text-sm md:grid-cols-4">
+            <div><div className="text-base-content/50">监听</div><div className="font-mono">{gateway.listen || '未配置'}</div></div>
+            <div><div className="text-base-content/50">活动连接</div><div>{gateway.active_connections ?? 0}</div></div>
+            <div><div className="text-base-content/50">DIRECT / PROXY</div><div>{gateway.direct_connections ?? 0} / {gateway.proxy_connections ?? 0}</div></div>
+            <div><div className="text-base-content/50">故障策略</div><div>{gateway.direct_fallbacks ?? 0} 次 DIRECT 回退</div></div>
+          </div>
+          {gateway.last_error && <div className="text-xs text-error mt-3">{gateway.last_error}</div>}
         </div>
       )}
 

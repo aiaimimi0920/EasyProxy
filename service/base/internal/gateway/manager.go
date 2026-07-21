@@ -20,11 +20,14 @@ type ListenerFactory func(context.Context, config.GatewayConfig) (net.Listener, 
 type RouterFactory func(config.GatewayConfig) *dispatch.TransparentRouter
 
 type Status struct {
-	Enabled   bool
-	Listen    string
-	Applied   bool
-	Active    int64
-	LastError string
+	Enabled           bool   `json:"enabled"`
+	Listen            string `json:"listen,omitempty"`
+	Applied           bool   `json:"applied"`
+	ActiveConnections int64  `json:"active_connections"`
+	DirectConnections uint64 `json:"direct_connections"`
+	ProxyConnections  uint64 `json:"proxy_connections"`
+	DirectFallbacks   uint64 `json:"direct_fallbacks"`
+	LastError         string `json:"last_error,omitempty"`
 }
 
 // Manager owns one transparent gateway generation and makes rule cleanup part
@@ -37,6 +40,7 @@ type Manager struct {
 	mu       sync.Mutex
 	cancel   context.CancelFunc
 	listener net.Listener
+	router   *dispatch.TransparentRouter
 	wg       sync.WaitGroup
 	active   atomic.Int64
 	status   Status
@@ -77,16 +81,16 @@ func (m *Manager) Start(ctx context.Context, cfg config.GatewayConfig) error {
 		return fmt.Errorf("listen transparent gateway: %w", err)
 	}
 	serveCtx, cancel := context.WithCancel(ctx)
-	m.mu.Lock()
-	m.cancel = cancel
-	m.listener = ln
-	m.status = Status{Enabled: true, Listen: cfg.Listen, Applied: true}
-	m.mu.Unlock()
-
 	var router *dispatch.TransparentRouter
 	if m.routerFn != nil {
 		router = m.routerFn(cfg)
 	}
+	m.mu.Lock()
+	m.cancel = cancel
+	m.listener = ln
+	m.router = router
+	m.status = Status{Enabled: true, Listen: cfg.Listen, Applied: true}
+	m.mu.Unlock()
 	m.wg.Add(1)
 	go m.acceptLoop(serveCtx, ln, router)
 	return nil
@@ -120,9 +124,20 @@ func (m *Manager) Status() Status {
 	m.mu.Lock()
 	status := m.status
 	m.mu.Unlock()
-	status.Active = m.active.Load()
+	status.ActiveConnections = m.active.Load()
+	m.mu.Lock()
+	router := m.router
+	m.mu.Unlock()
+	if router != nil {
+		stats := router.Stats()
+		status.DirectConnections = stats.DirectConnections
+		status.ProxyConnections = stats.ProxyConnections
+		status.DirectFallbacks = stats.DirectFallbacks
+	}
 	return status
 }
+
+func (m *Manager) GatewayStatus() any { return m.Status() }
 
 func (m *Manager) setError(err error) {
 	m.mu.Lock()

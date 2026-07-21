@@ -27,7 +27,7 @@ FROM debian:bookworm-slim AS runtime
 # 使用阿里云 Debian 镜像源
 RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources \
     && apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates gosu \
+    && apt-get install -y --no-install-recommends ca-certificates gosu iproute2 nftables \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -r -u 10001 easy \
     && mkdir -p /etc/easy-proxy/data \

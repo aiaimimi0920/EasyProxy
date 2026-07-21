@@ -22,7 +22,7 @@
 Add tests for gateway defaults, invalid policy/CIDR rejection, and deep cloning of device aliases.
 
 Expected assertions:
-- applyDefaults() sets no_available_proxy_policy to DIRECT and listen to 127.0.0.1:15001.
+- applyDefaults() sets no_available_proxy_policy to DIRECT and listen to 0.0.0.0:15001.
 - normalize() rejects policy DROP and malformed trusted CIDRs.
 - Config.Clone() does not share device address slices with the original.
 
@@ -44,7 +44,7 @@ Use these fields and YAML tags:
 - GatewayDNSConfig: Enabled, Listen.
 - GatewayDeviceConfig: Addresses []string.
 
-In applyDefaults, default Mode to transparent, Listen to 127.0.0.1:15001, TCP capture to tproxy, UDP capture to disabled, FinalPolicy to PROXY, NoAvailableProxyPolicy to DIRECT, and DNS listen to 0.0.0.0:53. Keep the gateway disabled by default.
+In applyDefaults, default Mode to transparent, Listen to 0.0.0.0:15001, TCP capture to tproxy, UDP capture to disabled, FinalPolicy to PROXY, NoAvailableProxyPolicy to DIRECT, and DNS listen to 0.0.0.0:53. Keep the gateway disabled by default.
 
 In normalizeInternal, reject policies other than DIRECT/PROXY, capture modes other than tproxy/disabled, malformed trusted CIDRs, malformed device addresses, and enabled gateway listen values without a port. Do not require overlay interface names to exist on the current host.
 

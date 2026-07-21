@@ -88,6 +88,12 @@ type RoutingController interface {
 	ApplyHot(cfg *config.Config) bool
 }
 
+// GatewayReporter exposes the transparent gateway runtime without coupling
+// the monitor package to Linux networking implementation types.
+type GatewayReporter interface {
+	GatewayStatus() any
+}
+
 // RoutingStatus is the observability view of the smart dispatch entry.
 type RoutingStatus struct {
 	Enabled         bool              `json:"enabled"`
@@ -156,6 +162,7 @@ type Server struct {
 	connectorMgr ConnectorManager
 	sourceSync   SourceSyncReporter
 	routing      RoutingController
+	gateway      GatewayReporter
 	proxyCompat  *proxyCompatState
 
 	// Serializes compatibility checkout selection/store so concurrent callers
@@ -228,6 +235,7 @@ func NewServer(cfg Config, mgr *Manager, logger *log.Logger) *Server {
 	mux.HandleFunc("/api/source-sync/source-health", s.withAuth(s.handleSourceSyncSourceHealth))
 	mux.HandleFunc("/api/routing/status", s.withAuth(s.handleRoutingStatus))
 	mux.HandleFunc("/api/routing/config", s.withAuth(s.handleRoutingConfig))
+	mux.HandleFunc("/api/gateway/status", s.withAuth(s.handleGatewayStatus))
 	s.registerLocalServerRoutes(mux)
 	mux.HandleFunc("/api/reload", s.withAuth(s.handleReload))
 	mux.HandleFunc("/proxy/catalog", s.withAuth(s.handleProxyCatalog))
@@ -559,6 +567,14 @@ func (s *Server) SetRoutingController(rc RoutingController) {
 	}
 }
 
+func (s *Server) SetGatewayReporter(reporter GatewayReporter) {
+	if s != nil {
+		s.depsMu.Lock()
+		s.gateway = reporter
+		s.depsMu.Unlock()
+	}
+}
+
 // SetNodeManager enables config-node CRUD endpoints.
 func (s *Server) SetNodeManager(nm NodeManager) {
 	if s != nil {
@@ -622,6 +638,15 @@ func (s *Server) routingSnapshot() RoutingController {
 	s.depsMu.RLock()
 	defer s.depsMu.RUnlock()
 	return s.routing
+}
+
+func (s *Server) gatewaySnapshot() GatewayReporter {
+	if s == nil {
+		return nil
+	}
+	s.depsMu.RLock()
+	defer s.depsMu.RUnlock()
+	return s.gateway
 }
 
 func (s *Server) nodeManagerSnapshot() NodeManager {
@@ -2629,6 +2654,19 @@ func (s *Server) handleRoutingStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, routing.RoutingStatus())
+}
+
+func (s *Server) handleGatewayStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	reporter := s.gatewaySnapshot()
+	if reporter == nil {
+		writeJSON(w, map[string]any{"enabled": false, "applied": false})
+		return
+	}
+	writeJSON(w, reporter.GatewayStatus())
 }
 
 // routingConfigPayload is the editable smart-routing configuration exchanged by

@@ -397,6 +397,10 @@ export async function fetchRoutingStatus(): Promise<import('../types').RoutingSt
   return request<import('../types').RoutingStatus>('/api/routing/status')
 }
 
+export async function fetchGatewayStatus(): Promise<import('../types').GatewayStatus> {
+  return request<import('../types').GatewayStatus>('/api/gateway/status')
+}
+
 export async function fetchRoutingConfig(): Promise<import('../types').RoutingConfig> {
   return request<import('../types').RoutingConfig>('/api/routing/config')
 }

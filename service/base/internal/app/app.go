@@ -158,6 +158,9 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	if err := gatewayMgr.Start(ctx, cfg.Gateway); err != nil {
 		return fmt.Errorf("start transparent gateway: %w", err)
 	}
+	if server := boxMgr.MonitorServer(); server != nil {
+		server.SetGatewayReporter(gatewayMgr)
+	}
 	defer gatewayMgr.Stop()
 
 	// ── 7. Start periodic stats flush ──

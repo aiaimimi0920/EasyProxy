@@ -56,6 +56,10 @@ func TestTransparentRouterUsesOriginalDestinationAndDirectFallback(t *testing.T)
 	case <-time.After(time.Second):
 		t.Fatal("transparent router did not stop")
 	}
+	stats := router.Stats()
+	if stats.DirectConnections != 1 || stats.DirectFallbacks != 1 || stats.ProxyConnections != 0 {
+		t.Fatalf("unexpected transparent stats: %+v", stats)
+	}
 }
 
 func startTransparentEcho(t *testing.T) string {

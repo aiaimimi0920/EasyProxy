@@ -8,6 +8,13 @@ services:
     restart: unless-stopped
     # 方式一：使用主机网络模式（推荐，支持端口自动重分配）
     network_mode: host
+    # Transparent gateway deployments require these explicit privileges and
+    # EASY_PROXY_RUN_AS_ROOT=1. Leave commented for ordinary proxy mode.
+    # cap_add:
+    #   - NET_ADMIN
+    #   - NET_RAW
+    # environment:
+    #   EASY_PROXY_RUN_AS_ROOT: "1"
     # 方式二：手动映射端口（注释掉 network_mode，启用下面的 ports）
     # ports:
     #   # Local Server mixed entry（disabled Local Server keeps legacy pool behavior）

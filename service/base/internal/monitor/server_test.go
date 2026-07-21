@@ -3420,6 +3420,35 @@ func TestProxyCompatCheckoutFallsBackWhenAllCandidatesAreCooling(t *testing.T) {
 	}
 }
 
+type gatewayReporterStub struct {
+	status any
+}
+
+func (s gatewayReporterStub) GatewayStatus() any { return s.status }
+
+func TestHandleGatewayStatusReturnsReporterSnapshot(t *testing.T) {
+	s := &Server{}
+	s.SetGatewayReporter(gatewayReporterStub{status: map[string]any{
+		"enabled":          true,
+		"applied":          true,
+		"listen":           "0.0.0.0:15001",
+		"direct_fallbacks": 2,
+	}})
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/status", nil)
+	rec := httptest.NewRecorder()
+	s.handleGatewayStatus(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["listen"] != "0.0.0.0:15001" || payload["direct_fallbacks"] != float64(2) {
+		t.Fatalf("unexpected gateway status: %+v", payload)
+	}
+}
+
 func TestProxyCompatRegistrationConnectionClosedTripsDegradedServiceCooldown(t *testing.T) {
 	mgr, err := NewManager(Config{})
 	if err != nil {

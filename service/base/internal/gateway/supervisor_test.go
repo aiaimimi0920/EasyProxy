@@ -22,7 +22,7 @@ func TestSupervisorApplyAndStopOwnsTransparentRules(t *testing.T) {
 	supervisor := NewSupervisor(runner)
 	cfg := config.GatewayConfig{
 		Enabled: true,
-		Listen:  "0.0.0.0:15001",
+		Listen:  "0.0.0.0:16000",
 		Ingress: config.GatewayIngressConfig{
 			Interfaces:   []string{"eth0"},
 			TrustedCIDRs: []string{"192.168.15.0/24"},
@@ -41,9 +41,10 @@ func TestSupervisorApplyAndStopOwnsTransparentRules(t *testing.T) {
 		"ip rule add fwmark 0x1/0x1 lookup 100",
 		"ip route add local 0.0.0.0/0 dev lo table 100",
 		"nft add table inet easyproxy_gateway",
+		"tcp dport { 16000 22323 29888 } return",
 		"iifname eth0",
 		"ip saddr 192.168.15.0/24",
-		"tproxy to :15001",
+		"tproxy to :16000",
 	} {
 		if !strings.Contains(joined, expected) {
 			t.Fatalf("commands do not contain %q:\n%s", expected, joined)

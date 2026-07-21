@@ -280,6 +280,17 @@ export interface RoutingStatus {
   sticky_sessions?: Record<string, string>
 }
 
+export interface GatewayStatus {
+  enabled: boolean
+  applied: boolean
+  listen?: string
+  active_connections?: number
+  direct_connections?: number
+  proxy_connections?: number
+  direct_fallbacks?: number
+  last_error?: string
+}
+
 export interface RoutingProviderConfig {
   url: string
   policy: string
