@@ -1,8 +1,9 @@
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
-    [string]$ProfileId = "easyproxies-ech-runtime",
+    [string]$ConfigPath = "",
+    [string]$ProfileId = "",
     [string]$WorkerUrl = "",
-    [string]$CustomDomainUrl = "https://proxyservice-ech-workers.aiaimimi.com:443",
+    [string]$CustomDomainUrl = "",
     [string]$AccessToken = "",
     [string]$MiSubBaseUrl = "",
     [string]$AdminPassword = "",
@@ -29,17 +30,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Net.Http
 
-function Get-RepoRoot {
-    return (Resolve-Path (Join-Path $PSScriptRoot "..\..\..")).Path
-}
-
-function Read-JsonFile {
-    param([Parameter(Mandatory = $true)][string]$Path)
-    if (-not (Test-Path -LiteralPath $Path)) {
-        return $null
-    }
-    return Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
-}
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..\..\..")).Path
+. (Join-Path $repoRoot "scripts\lib\easyproxy-config.ps1")
 
 function Resolve-OptionalPath {
     param(
@@ -73,33 +65,6 @@ function Get-ObjectPropertyValue {
     }
 
     return $property.Value
-}
-
-function Get-ManagedProfileFromArchive {
-    param(
-        [Parameter(Mandatory = $true)]$Archive,
-        [Parameter(Mandatory = $true)][string]$ProfileId
-    )
-
-    $profiles = $Archive.connector_registry.managed_test_profiles
-    if ($null -eq $profiles) {
-        return $null
-    }
-
-    foreach ($property in $profiles.psobject.Properties) {
-        $candidate = $property.Value
-        if ($null -eq $candidate) {
-            continue
-        }
-
-        $candidateCustomId = [string](Get-ObjectPropertyValue -Object $candidate -Name "custom_id" -Default "")
-        $candidateId = [string](Get-ObjectPropertyValue -Object $candidate -Name "id" -Default "")
-        if ($candidateCustomId -eq $ProfileId -or $candidateId -eq $ProfileId -or $property.Name -eq $ProfileId -or $property.Name -eq ($ProfileId -replace "-", "_")) {
-            return $candidate
-        }
-    }
-
-    return $null
 }
 
 function New-JsonHttpClient {
@@ -154,7 +119,7 @@ function Write-JsonFile {
         [Parameter(Mandatory = $true)][string]$Path,
         [Parameter(Mandatory = $true)]$Value
     )
-    $Value | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $Path -Encoding UTF8
+    ConvertTo-Json -InputObject $Value -Depth 100 | Set-Content -LiteralPath $Path -Encoding UTF8
 }
 
 function Normalize-SelectedRows {
@@ -223,47 +188,96 @@ function New-EchPreferredSource {
     }
 }
 
-$repoRoot = Get-RepoRoot
-$archivePath = Join-Path $repoRoot "AIRead\密钥\ProxyService\MiSub密钥.json"
-$archive = Read-JsonFile -Path $archivePath
-$managedProfile = $null
-$workerUrlSource = "explicit"
-if ($null -ne $archive) {
-    $managedProfile = Get-ManagedProfileFromArchive -Archive $archive -ProfileId $ProfileId
+function ConvertTo-EchWorkerUrl {
+    param([Parameter(Mandatory = $true)][string]$Url)
+
+    $uri = [System.Uri]$Url.Trim()
+    if (-not $uri.IsDefaultPort) {
+        return $uri.AbsoluteUri.TrimEnd("/")
+    }
+
+    $port = if ($uri.Scheme -eq "https") {
+        443
+    } elseif ($uri.Scheme -eq "http") {
+        80
+    } else {
+        return $uri.AbsoluteUri.TrimEnd("/")
+    }
+    $hostName = if ($uri.HostNameType -eq [System.UriHostNameType]::IPv6) {
+        "[$($uri.Host)]"
+    } else {
+        $uri.Host
+    }
+    $userInfo = if ([string]::IsNullOrWhiteSpace($uri.UserInfo)) { "" } else { "$($uri.UserInfo)@" }
+    $pathAndQuery = if ($uri.PathAndQuery -eq "/") { "" } else { $uri.PathAndQuery }
+    return "$($uri.Scheme)://${userInfo}${hostName}:${port}${pathAndQuery}$($uri.Fragment)"
 }
 
-if ([string]::IsNullOrWhiteSpace($MiSubBaseUrl) -and $null -ne $archive -and (Get-ObjectPropertyValue -Object (Get-ObjectPropertyValue -Object $archive -Name "production_runtime") -Name "base_url")) {
-    $MiSubBaseUrl = [string](Get-ObjectPropertyValue -Object (Get-ObjectPropertyValue -Object $archive -Name "production_runtime") -Name "base_url")
-}
-if ([string]::IsNullOrWhiteSpace($AdminPassword) -and $null -ne $archive -and (Get-ObjectPropertyValue -Object (Get-ObjectPropertyValue -Object (Get-ObjectPropertyValue -Object $archive -Name "runtime_secrets") -Name "required") -Name "ADMIN_PASSWORD")) {
-    $AdminPassword = [string](Get-ObjectPropertyValue -Object (Get-ObjectPropertyValue -Object (Get-ObjectPropertyValue -Object $archive -Name "runtime_secrets") -Name "required") -Name "ADMIN_PASSWORD")
-}
-if ([string]::IsNullOrWhiteSpace($ManifestToken) -and $null -ne $archive -and (Get-ObjectPropertyValue -Object (Get-ObjectPropertyValue -Object (Get-ObjectPropertyValue -Object $archive -Name "runtime_secrets") -Name "required") -Name "MANIFEST_TOKEN")) {
-    $ManifestToken = [string](Get-ObjectPropertyValue -Object (Get-ObjectPropertyValue -Object (Get-ObjectPropertyValue -Object $archive -Name "runtime_secrets") -Name "required") -Name "MANIFEST_TOKEN")
-}
-if ([string]::IsNullOrWhiteSpace($WorkerUrl) -and $PreferCustomDomain) {
-    $WorkerUrl = $CustomDomainUrl
-    $workerUrlSource = "custom_domain_default"
-}
-if ($null -ne $managedProfile -and $managedProfile.sources -and $managedProfile.sources.Count -gt 0) {
-    $defaultSource = $managedProfile.sources[0]
-    if ([string]::IsNullOrWhiteSpace($WorkerUrl) -and $defaultSource.input) {
-        $WorkerUrl = [string]$defaultSource.input
-        $workerUrlSource = "archive_managed_source"
+$rootConfig = $null
+$resolvedConfigPath = ""
+if (-not [string]::IsNullOrWhiteSpace($ConfigPath)) {
+    $resolvedConfigPath = Resolve-EasyProxyPath -Path $ConfigPath -AllowMissing
+    if (-not (Test-Path -LiteralPath $resolvedConfigPath)) {
+        throw "Config file not found: $resolvedConfigPath"
     }
-    if ([string]::IsNullOrWhiteSpace($AccessToken) -and $defaultSource.access_token) {
-        $AccessToken = [string]$defaultSource.access_token
+} else {
+    $defaultConfigPath = Join-Path $repoRoot "config.yaml"
+    if (Test-Path -LiteralPath $defaultConfigPath) {
+        $resolvedConfigPath = $defaultConfigPath
     }
+}
+
+if (-not [string]::IsNullOrWhiteSpace($resolvedConfigPath)) {
+    $rootConfig = Read-EasyProxyConfig -ConfigPath $resolvedConfigPath
+}
+
+$configuredWorkerUrl = ""
+$workerUrlSource = "explicit"
+if ($null -ne $rootConfig) {
+    $misub = Get-EasyProxyConfigSection -Config $rootConfig -Name "misub"
+    $misubPages = Get-EasyProxyConfigSection -Config $misub -Name "pages"
+    $misubDocker = Get-EasyProxyConfigSection -Config $misub -Name "docker"
+    $misubEnv = Get-EasyProxyConfigSection -Config $misubDocker -Name "env"
+    $echWorker = Get-EasyProxyConfigSection -Config $rootConfig -Name "echWorkersCloudflare"
+    $echSecrets = Get-EasyProxyConfigSection -Config $echWorker -Name "secrets"
+
+    if ([string]::IsNullOrWhiteSpace($ProfileId)) {
+        $ProfileId = [string](Get-EasyProxyConfigValue -Object $misubPages -Name "connectorProfileId" -Default "")
+    }
+    if ([string]::IsNullOrWhiteSpace($MiSubBaseUrl)) {
+        $MiSubBaseUrl = [string](Get-EasyProxyConfigValue -Object $misubPages -Name "publicUrl" -Default "")
+    }
+    if ([string]::IsNullOrWhiteSpace($AdminPassword)) {
+        $AdminPassword = [string](Get-EasyProxyConfigValue -Object $misubEnv -Name "ADMIN_PASSWORD" -Default "")
+    }
+    if ([string]::IsNullOrWhiteSpace($ManifestToken)) {
+        $ManifestToken = [string](Get-EasyProxyConfigValue -Object $misubEnv -Name "MANIFEST_TOKEN" -Default "")
+    }
+    if ([string]::IsNullOrWhiteSpace($AccessToken)) {
+        $AccessToken = [string](Get-EasyProxyConfigValue -Object $echSecrets -Name "ECH_TOKEN" -Default "")
+    }
+    $configuredWorkerUrl = [string](Get-EasyProxyConfigValue -Object $echWorker -Name "publicUrl" -Default "")
+}
+if ([string]::IsNullOrWhiteSpace($WorkerUrl) -and $PreferCustomDomain -and -not [string]::IsNullOrWhiteSpace($CustomDomainUrl)) {
+    $WorkerUrl = ConvertTo-EchWorkerUrl -Url $CustomDomainUrl
+    $workerUrlSource = "custom_domain_override"
+}
+if ([string]::IsNullOrWhiteSpace($WorkerUrl) -and -not [string]::IsNullOrWhiteSpace($configuredWorkerUrl)) {
+    $WorkerUrl = ConvertTo-EchWorkerUrl -Url $configuredWorkerUrl
+    $workerUrlSource = "root_config"
+}
+if ([string]::IsNullOrWhiteSpace($ProfileId)) {
+    $ProfileId = "easyproxies-ech-runtime"
 }
 if (-not [string]::IsNullOrWhiteSpace($WorkerUrl) -and $workerUrlSource -eq "explicit") {
     $workerUrlSource = "explicit"
 }
 
 if ([string]::IsNullOrWhiteSpace($WorkerUrl)) {
-    throw "WorkerUrl is required. Pass -WorkerUrl or archive defaults must exist in $archivePath"
+    throw "WorkerUrl is required. Pass -WorkerUrl, use -PreferCustomDomain, or set echWorkersCloudflare.publicUrl in config.yaml"
 }
 if ([string]::IsNullOrWhiteSpace($AccessToken)) {
-    throw "AccessToken is required. Pass -AccessToken or archive defaults must exist in $archivePath"
+    throw "AccessToken is required. Pass -AccessToken or set echWorkersCloudflare.secrets.ECH_TOKEN in config.yaml"
 }
 if ($TopCount -lt 1) {
     throw "TopCount must be >= 1"
@@ -350,7 +364,7 @@ if (-not [string]::IsNullOrWhiteSpace($ReuseResultCsvPath)) {
 }
 
 $rows = Import-Csv -LiteralPath $resultCsvPath -Encoding UTF8
-$selectedRows = Normalize-SelectedRows -Rows $rows -TopCount $TopCount
+$selectedRows = @(Normalize-SelectedRows -Rows $rows -TopCount $TopCount)
 if ($selectedRows.Count -eq 0) {
     throw "No preferred Cloudflare IPs were parsed from $resultCsvPath"
 }

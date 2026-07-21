@@ -25,7 +25,7 @@ Run or confirm the latest successful CI result for:
 
 ```powershell
 Set-Location service/base
-Get-ChildItem internal -Recurse -Filter *.go | ForEach-Object { gofmt -w $_.FullName }
+python ../../scripts/check-go-format.py cmd internal
 go test -count=1 -timeout=300s ./...
 go vet ./...
 

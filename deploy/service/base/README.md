@@ -8,9 +8,13 @@ Use this directory for:
 - deployment-specific config templates
 - scripts and notes for running the service from this monorepo
 
-Do not put real secrets here. Use:
+Do not put real secrets in tracked files. Operator material may use:
 
 - the shared `AIRead` archive linked locally outside Git
+- ignored root/runtime config, environment or platform secrets, and encrypted
+  import codes
+
+Tracked scripts do not require or auto-discover the `AIRead` directory layout.
 
 The source code now lives in:
 
@@ -612,6 +616,21 @@ What the script does:
 - saves run artifacts under:
   - `tmp/ech-workers-cloudflare/preferred-ip/<timestamp>`
 
+Configuration resolution:
+
+- `-ConfigPath` accepts the root operator `config.yaml`; when omitted, the
+  script uses the root `config.yaml` if it exists
+- command-line values override root config values
+- without a root config, pass the required values explicitly
+- the script does not search `AIRead` or any legacy private-archive path
+- root config fields used by this operation are:
+  - `misub.pages.connectorProfileId`
+  - `misub.pages.publicUrl`
+  - `misub.docker.env.ADMIN_PASSWORD`
+  - `misub.docker.env.MANIFEST_TOKEN`
+  - `echWorkersCloudflare.publicUrl`
+  - `echWorkersCloudflare.secrets.ECH_TOKEN`
+
 Important detail:
 
 - for the ECH worker case, the script uses generic Cloudflare `:443` latency
@@ -623,9 +642,8 @@ Typical reuse of an existing result file for a `MiSub`-managed profile:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\deploy\service\base\scripts\update_ech_preferred_ips.ps1 `
-  -ProfileId easyproxies-ech-runtime `
+  -ConfigPath .\config.yaml `
   -PreferCustomDomain `
-  -CustomDomainUrl https://proxyservice-ech-workers.aiaimimi.com:443 `
   -ReuseResultCsvPath .\tmp\ech-workers-cloudflare\preferred-ip\result.csv `
   -ApplyToMiSub
 ```
@@ -634,15 +652,16 @@ Typical full run:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\deploy\service\base\scripts\update_ech_preferred_ips.ps1 `
-  -ProfileId easyproxies-ech-runtime `
+  -ConfigPath .\config.yaml `
   -PreferCustomDomain `
-  -CustomDomainUrl https://proxyservice-ech-workers.aiaimimi.com:443 `
   -TopCount 5 `
   -ApplyToMiSub
 ```
 
 Useful override flags:
 
+- `-ConfigPath`
+- `-ProfileId`
 - `-WorkerUrl`
 - `-PreferCustomDomain`
 - `-CustomDomainUrl`
@@ -653,6 +672,10 @@ Useful override flags:
 - `-TopCount`
 - `-ReuseResultCsvPath`
 - `-AllIP`
+
+`-PreferCustomDomain` uses an explicit `-CustomDomainUrl` when supplied;
+otherwise it uses `echWorkersCloudflare.publicUrl` from the root config. No
+production Worker hostname is hardcoded as a credential or topology fallback.
 
 Recommended custom-domain migration order:
 

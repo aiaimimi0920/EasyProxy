@@ -150,6 +150,9 @@ Managed ECH connector note:
   as the preferred long-term machine URL once the custom domain is deployed
 - preferred IP write-back for the managed profile is handled by:
   - `deploy/service/base/scripts/update_ech_preferred_ips.ps1`
+- the script reads the normal root `config.yaml` when available, accepts
+  command-line overrides, and does not auto-discover credentials from the
+  external `AIRead` archive
 
 ## Aggregator Integration Model
 

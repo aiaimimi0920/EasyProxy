@@ -78,11 +78,15 @@ describe the first copy migration.
 - verify excluded local-only files were not imported
 - verify root docs point to the new monorepo paths
 
-### Phase 5: Follow-Up Work
+### Phase 5: Follow-Up Work (completed)
 
-- add root-level CI once the new repository is stable
-- decide whether to introduce a shared root config model
-- decide whether some deploy notes should be promoted into module-local docs
+- root-level CI validates root scripts, upstream regressions, MiSub, Go,
+  frontend source/generated assets, and the release contract
+- the shared root config model renders and supplies operator inputs across the
+  monorepo
+- active deployment notes live with their owning modules under `deploy/*`
+- tracked operator scripts no longer auto-discover secrets from legacy private
+  archive paths
 
 ## Guardrails
 

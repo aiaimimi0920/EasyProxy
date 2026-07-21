@@ -34,8 +34,9 @@ context where needed.
 - active production endpoints that still include `proxyservice` in their domain
   names remain unchanged because those are real deployed addresses, not stale
   repo paths
-- some operator scripts still carry compatibility lookups against legacy
-  private archive locations; that is follow-up work, not repository prose
+- operator-script compatibility lookups against legacy private archive
+  locations were retained at this phase and removed during Phase 07 follow-up
+  cleanup
 
 ## Verification
 

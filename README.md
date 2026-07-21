@@ -630,8 +630,11 @@ For release body drafting, start from
 Private deployment notes, secrets, and runtime state do not belong in this
 repository.
 
-Local operator material should continue to live under the shared `AIRead`
-knowledge base and remain ignored by Git when linked into this repository.
+Local operator material may live under the shared `AIRead` knowledge base and
+must remain ignored by Git when linked into this repository. Tracked scripts do
+not auto-discover credentials from that archive; runtime inputs come from the
+root `config.yaml`, environment variables, platform secret stores, import
+codes, or explicit command-line parameters.
 
 ## Release Contract
 
