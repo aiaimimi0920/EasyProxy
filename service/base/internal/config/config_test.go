@@ -1038,6 +1038,48 @@ func TestNormalizeWithPortMapRejectsInvalidLocalServerTopology(t *testing.T) {
 	}
 }
 
+func TestNormalizeWithPortMapReassignsDuplicatePreservedPort(t *testing.T) {
+	const preservedPort uint16 = 25001
+
+	cfg := &Config{
+		Mode: "hybrid",
+		Listener: ListenerConfig{
+			Address:  "127.0.0.1",
+			Port:     22323,
+			Protocol: InboundProtocolHTTP,
+		},
+		MultiPort: MultiPortConfig{
+			Address:  "127.0.0.1",
+			BasePort: 25000,
+			Protocol: InboundProtocolHTTP,
+		},
+		Nodes: []NodeConfig{
+			{
+				Name: "stale-port-node",
+				URI:  "socks5://127.0.0.1:1081",
+				Port: preservedPort,
+			},
+			{
+				Name: "preserved-node",
+				URI:  "socks5://127.0.0.1:1080",
+			},
+		},
+	}
+
+	portMap := map[string]uint16{
+		cfg.Nodes[1].NodeKey(): preservedPort,
+	}
+	if err := cfg.NormalizeWithPortMap(portMap); err != nil {
+		t.Fatalf("NormalizeWithPortMap() error = %v", err)
+	}
+	if got := cfg.Nodes[1].Port; got != preservedPort {
+		t.Fatalf("preserved node port = %d, want %d", got, preservedPort)
+	}
+	if got := cfg.Nodes[0].Port; got == 0 || got == preservedPort {
+		t.Fatalf("duplicate node port = %d, want a non-zero reassigned port", got)
+	}
+}
+
 func TestSaveSettingsPersistsLocalServerAndRoutingNodeFilter(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.yaml")

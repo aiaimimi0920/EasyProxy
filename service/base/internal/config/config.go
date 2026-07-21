@@ -807,13 +807,17 @@ func (c *Config) NormalizeWithPortMap(portMap map[string]uint16) error {
 		return errors.New("config.nodes cannot be empty (no inline, subscription, or manual nodes available)")
 	}
 
-	// Build set of ports already assigned from portMap
+	multiPortMode := c.Mode == "multi-port" || c.Mode == "hybrid"
+
+	// Reserve the pool listener before claiming node ports.
 	usedPorts := make(map[uint16]bool)
 	if c.Mode == "hybrid" {
 		usedPorts[c.Listener.Port] = true
 	}
+	preservedPorts := make([]bool, len(c.Nodes))
 
-	// First pass: assign ports from portMap for existing nodes, and track all pre-existing ports
+	// First pass: normalize node identities and claim preserved ports. Preserved
+	// assignments take priority over stale ports carried by the new config.
 	for idx := range c.Nodes {
 		c.Nodes[idx].Name = strings.TrimSpace(c.Nodes[idx].Name)
 		c.Nodes[idx].URI = NormalizeProxyURIInput(strings.TrimSpace(c.Nodes[idx].URI), c.SourceSync.DefaultDirectProxyScheme)
@@ -835,24 +839,43 @@ func (c *Config) NormalizeWithPortMap(portMap map[string]uint16) error {
 			c.Nodes[idx].Name = fmt.Sprintf("node-%d", idx)
 		}
 
-		// Check if this node has a preserved port from portMap
-		if c.Mode == "multi-port" || c.Mode == "hybrid" {
+		if multiPortMode {
 			nodeKey := c.Nodes[idx].NodeKey()
 			if existingPort, ok := portMap[nodeKey]; ok && existingPort > 0 {
-				c.Nodes[idx].Port = existingPort
-				usedPorts[existingPort] = true
-				log.Printf("✅ Preserved port %d for node %q", existingPort, c.Nodes[idx].Name)
-			} else if c.Nodes[idx].Port > 0 {
-				// Track pre-existing ports (e.g. from store) to avoid conflicts
-				usedPorts[c.Nodes[idx].Port] = true
+				if usedPorts[existingPort] {
+					c.Nodes[idx].Port = 0
+					log.Printf("Preserved port %d for node %q conflicts with an existing listener or node; reassigning", existingPort, c.Nodes[idx].Name)
+				} else {
+					c.Nodes[idx].Port = existingPort
+					usedPorts[existingPort] = true
+					preservedPorts[idx] = true
+					log.Printf("✅ Preserved port %d for node %q", existingPort, c.Nodes[idx].Name)
+				}
 			}
 		}
 	}
 
-	// Second pass: assign new ports for nodes without preserved ports
+	// Second pass: claim non-preserved ports carried by the new config. A
+	// duplicate is cleared so the normal allocator can give it a fresh port.
+	if multiPortMode {
+		for idx := range c.Nodes {
+			port := c.Nodes[idx].Port
+			if preservedPorts[idx] || port == 0 {
+				continue
+			}
+			if usedPorts[port] {
+				log.Printf("Node %q port %d conflicts with a preserved or earlier node port; reassigning", c.Nodes[idx].Name, port)
+				c.Nodes[idx].Port = 0
+				continue
+			}
+			usedPorts[port] = true
+		}
+	}
+
+	// Third pass: assign new ports for nodes without preserved ports.
 	portCursor := c.MultiPort.BasePort
 	for idx := range c.Nodes {
-		if c.Nodes[idx].Port == 0 && (c.Mode == "multi-port" || c.Mode == "hybrid") {
+		if c.Nodes[idx].Port == 0 && multiPortMode {
 			// Find next available port that's not used
 			for usedPorts[portCursor] || !isPortAvailable(c.MultiPort.Address, portCursor) {
 				portCursor++
