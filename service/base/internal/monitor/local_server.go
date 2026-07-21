@@ -961,9 +961,25 @@ func profileResponse(manager *profile.Manager, compiled *profile.CompiledProfile
 		Revision:         compiled.Revision(),
 		RegistryRevision: status.RegistryRevision,
 		NeedReload:       false,
-		Profile:          compiled.Definition(),
+		Profile:          profileDefinitionForAPI(compiled.Definition()),
 		ProviderStatus:   manager.ProviderStatus(profileID),
 	}
+}
+
+func profileDefinitionForAPI(definition profile.Definition) profile.Definition {
+	if definition.Rules == nil {
+		definition.Rules = []string{}
+	}
+	if definition.RuleProviders == nil {
+		definition.RuleProviders = []profile.RuleProvider{}
+	}
+	if definition.NodeFilter.Countries == nil {
+		definition.NodeFilter.Countries = []string{}
+	}
+	if definition.NodeFilter.Regions == nil {
+		definition.NodeFilter.Regions = []string{}
+	}
+	return definition
 }
 
 func profileMutationResponse(manager *profile.Manager, result profile.MutationResult, scope, deviceID string) profileResourceResponse {

@@ -146,6 +146,46 @@ func TestDeviceProfileAPIUsesCASAndReturnsMutationEnvelope(t *testing.T) {
 	}
 }
 
+func TestProfileAPIUsesEmptyArraysForOptionalCollections(t *testing.T) {
+	server := newLocalServerAPITestServer(t)
+	response := performAuthedJSON(t, server, http.MethodGet, "/api/local-server/profiles/shared", nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("response = %#v", response)
+	}
+	resource, ok := response.Body["profile"].(map[string]any)
+	if !ok {
+		t.Fatalf("profile resource = %#v", response.Body["profile"])
+	}
+	for _, field := range []string{"rules", "rule_providers"} {
+		value, exists := resource[field]
+		if !exists {
+			t.Fatalf("profile field %q missing", field)
+		}
+		if value == nil {
+			t.Fatalf("profile field %q must be an array, got null", field)
+		}
+		if _, ok := value.([]any); !ok {
+			t.Fatalf("profile field %q type = %T, want array", field, value)
+		}
+	}
+	nodeFilter, ok := resource["node_filter"].(map[string]any)
+	if !ok {
+		t.Fatalf("node_filter = %#v", resource["node_filter"])
+	}
+	for _, field := range []string{"countries", "regions"} {
+		value, exists := nodeFilter[field]
+		if !exists {
+			t.Fatalf("node_filter field %q missing", field)
+		}
+		if value == nil {
+			t.Fatalf("node_filter field %q must be an array, got null", field)
+		}
+		if _, ok := value.([]any); !ok {
+			t.Fatalf("node_filter field %q type = %T, want array", field, value)
+		}
+	}
+}
+
 func TestDeviceProfilePersistenceFailureReturns500AndPreservesRegistry(t *testing.T) {
 	harness := newLocalServerMonitor(t, "easyproxy", "secret", 1)
 	if err := harness.store.Close(); err != nil {
