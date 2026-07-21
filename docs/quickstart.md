@@ -243,9 +243,12 @@ Use the distribution guide for the full operator flow:
 
 Do not commit live deployment values.
 
-Keep:
+Keep private values outside Git. They may be stored as:
 
-- secrets under the shared `AIRead` archive
+- secrets under the shared `AIRead` archive for operator reference
 - runtime-local config under ignored files in `deploy/service/base`
 - private Cloudflare secrets in platform secret stores rather than committed
   files
+
+Tracked scripts do not require the `AIRead` directory layout and do not probe
+it automatically.

@@ -1,6 +1,10 @@
 # Local Server Device Profiles Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** This plan was executed task-by-task with the required implementation and review workflow. Checked boxes record the completed execution.
+
+**Status:** Completed and merged into `main` by `56eef14` on 2026-07-21.
+The checkboxes below were backfilled after the implementation, review, isolated
+Docker E2E, browser verification, and post-merge validation all passed.
 
 **Goal:** Turn EasyProxy into a LAN Local Server with one embedded Web Console, one shared credential, a shared forwarding Profile, and fully independent per-device forwarding Profiles selected by explicit `device_id` with best-effort IP/CIDR fallback.
 
@@ -95,7 +99,7 @@ Task 11 can run in parallel with Tasks 2-7 because it only establishes frontend 
 - Modify: `service/base/internal/builder/builder.go`
 - Modify: `service/base/internal/builder/builder_test.go`
 
-- [ ] **Step 1: Write failing configuration tests**
+- [x] **Step 1: Write failing configuration tests**
 
 Add focused tests that prove canonical migration, first-enable session invalidation, strict topology validation, deep cloning, SaveSettings persistence, Local Server listen precedence, unconditional primary-inbound suppression, and disabled-mode compatibility. Use these exact test names so the focused command covers every contract:
 
@@ -158,7 +162,7 @@ func TestDispatchOwnsPrimaryInboundInLocalServerMode(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the focused tests and verify RED**
+- [x] **Step 2: Run the focused tests and verify RED**
 
 Run:
 
@@ -169,7 +173,7 @@ go test -count=1 ./internal/config ./internal/builder -run 'TestNormalizeLocalSe
 
 Expected: compile failures for missing `LocalServerConfig`, `Config.LocalServer`, and `DispatchOwnsPrimaryInbound`.
 
-- [ ] **Step 3: Add the configuration types and normalization**
+- [x] **Step 3: Add the configuration types and normalization**
 
 Add the following declarations next to `RoutingConfig`:
 
@@ -321,7 +325,7 @@ func validIdentityToken(value string) bool {
 
 Call `normalizeLocalServer` from both `normalizeInternal` and `NormalizeWithPortMap` immediately after `applyDefaults`, before nodes or listeners are published. This keeps initial load, reload, and port-map reload validation identical.
 
-- [ ] **Step 4: Make the builder Local Server-aware**
+- [x] **Step 4: Make the builder Local Server-aware**
 
 Change the pool inbound gate and pool outbound gate to:
 
@@ -343,7 +347,7 @@ if enablePoolInbound || cfg.DispatchEnabled() {
 
 Add `TestBuildLocalServerSuppressesPlainInboundAndKeepsPoolOutbound` and keep the existing legacy route-A/route-B tests unchanged.
 
-- [ ] **Step 5: Run package tests and commit**
+- [x] **Step 5: Run package tests and commit**
 
 Run:
 
@@ -375,7 +379,7 @@ git commit -m "feat(service/base): add local server config contract"
 - Create: `service/base/internal/store/migrations_test.go`
 - Create: `service/base/internal/store/local_server_test.go`
 
-- [ ] **Step 1: Write the migration and CAS tests**
+- [x] **Step 1: Write the migration and CAS tests**
 
 Create temporary SQLite stores and use these exact tests: `TestMigration4PreservesExistingRows`, `TestLocalServerMigrationAndProfileCAS`, `TestPutDeviceProfileCreatesDeviceAtomically`, `TestDeviceAndMappingCAS`, `TestMappingRequiresExistingDevice`, `TestLocalServerMigrationRollsBackOnFailure`, and `TestSessionCredentialGenerationRoundTrip`. They must assert schema version 4, preservation of an existing node/session token, Profile create/update conflicts, idempotent delete, mapping CRUD, target-device constraints, transaction rollback, and session generation:
 
@@ -431,7 +435,7 @@ func TestSessionCredentialGenerationRoundTrip(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the tests and verify RED**
+- [x] **Step 2: Run the tests and verify RED**
 
 Run:
 
@@ -442,7 +446,7 @@ go test -count=1 ./internal/store -run 'TestMigration4|TestLocalServerMigration|
 
 Expected: compile failures for the new models and Store methods.
 
-- [ ] **Step 3: Add migration 4 and Store models**
+- [x] **Step 3: Add migration 4 and Store models**
 
 Append migration version 4 with this schema:
 
@@ -519,7 +523,7 @@ type DeviceIPMapping struct {
 
 Add `CredentialGeneration uint64` to `store.Session` and the corresponding monitor session model in Task 8.
 
-- [ ] **Step 4: Add explicit Store methods and CAS SQL**
+- [x] **Step 4: Add explicit Store methods and CAS SQL**
 
 Extend `Store` with:
 
@@ -577,7 +581,7 @@ return *saved, nil
 
 Implement equivalent CAS behavior for devices and mappings. `PutDeviceProfile` runs in `WithTx`, creates a missing `devices` row with `display_name=device_id` in the same transaction, and then performs the Profile CAS. `PutDeviceIPMapping` must return `ErrDeviceNotFound` if its normalized target device does not exist. `DeleteDeviceProfile` and `DeleteDeviceIPMapping` return `(false, nil)` when the row is already absent. Do not create a default Profile or automatic IP mapping during migration.
 
-- [ ] **Step 5: Persist and query session generation**
+- [x] **Step 5: Persist and query session generation**
 
 Change session SQL to include `credential_generation`:
 
@@ -600,7 +604,7 @@ func (s *sqliteStore) DeleteSessionsBeforeGeneration(ctx context.Context, genera
 }
 ```
 
-- [ ] **Step 6: Run store tests and commit**
+- [x] **Step 6: Run store tests and commit**
 
 Run:
 
@@ -635,7 +639,7 @@ git commit -m "feat(service/base): persist device profiles and session generatio
 - Modify: `service/base/internal/routerule/engine.go`
 - Modify: `service/base/internal/routerule/engine_test.go`
 
-- [ ] **Step 1: Write strict validation and resolver tests**
+- [x] **Step 1: Write strict validation and resolver tests**
 
 ```go
 func TestCompileRejectsInvalidRuleInsteadOfSilentlyDroppingIt(t *testing.T) {
@@ -681,7 +685,7 @@ func compileProfileForTest(t *testing.T, id string, kind Kind, revision int64, d
 }
 ```
 
-- [ ] **Step 2: Run the tests and verify RED**
+- [x] **Step 2: Run the tests and verify RED**
 
 Run:
 
@@ -692,7 +696,7 @@ go test -count=1 ./internal/profile ./internal/routerule
 
 Expected: the profile package does not exist and `routerule.ValidateRules` is missing.
 
-- [ ] **Step 3: Define the Profile document without importing pool or monitor**
+- [x] **Step 3: Define the Profile document without importing pool or monitor**
 
 Use these domain types:
 
@@ -761,7 +765,7 @@ func cloneSelection(SelectionSettings) SelectionSettings
 
 `ApplyDefinitionToRouting` updates only Profile-owned fields (`enabled`, strategy, default-rules flag, final policy, rules, providers, node filter, long-lived thresholds, and session TTL). It must preserve `routing.listen` and any future topology-only fields. This keeps the shared YAML and device JSON on one logical schema without accidentally erasing the legacy route-B listen address.
 
-- [ ] **Step 4: Add strict rule validation and immutable compilation**
+- [x] **Step 4: Add strict rule validation and immutable compilation**
 
 Add `routerule.ValidateRules` without changing the legacy lenient `routerule.New` behavior:
 
@@ -804,7 +808,7 @@ func (p *CompiledProfile) FinalPolicy() routerule.Policy { return p.engine.Final
 func (p *CompiledProfile) WithRevision(revision int64) *CompiledProfile
 ```
 
-- [ ] **Step 5: Implement immutable Registry resolution**
+- [x] **Step 5: Implement immutable Registry resolution**
 
 ```go
 type CredentialSnapshot struct {
@@ -885,7 +889,7 @@ func (t *DeviceActivityTracker) Snapshot() map[string]DeviceActivity
 
 `Snapshot` returns a new map, and `Observe` ignores empty device IDs so anonymous shared fallback does not create a fake device row.
 
-- [ ] **Step 6: Run tests and commit**
+- [x] **Step 6: Run tests and commit**
 
 Run:
 
@@ -919,7 +923,7 @@ git commit -m "feat(service/base): add device profile registry"
 - Modify: `service/base/internal/monitor/manager.go`
 - Modify: `service/base/internal/monitor/manager_test.go`
 
-- [ ] **Step 1: Write failing isolation tests**
+- [x] **Step 1: Write failing isolation tests**
 
 Add tests proving that identical session and stable keys do not cross Profiles, different Profile TTLs expire independently, and raw monitor data can meet one Profile threshold but not another:
 
@@ -963,7 +967,7 @@ func TestLongLivedPolicyUsesRawSnapshot(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the focused tests and verify RED**
+- [x] **Step 2: Run the focused tests and verify RED**
 
 Run:
 
@@ -974,7 +978,7 @@ go test -count=1 ./internal/outbound/pool ./internal/monitor -run 'TestSessionBi
 
 Expected: compile failures for the new directive fields and helper.
 
-- [ ] **Step 3: Extend the directive and make namespacing internal**
+- [x] **Step 3: Extend the directive and make namespacing internal**
 
 ```go
 type LongLivedPolicy struct {
@@ -1006,7 +1010,7 @@ func (d SelectionDirective) stableBucketKey() string { return d.namespaced(d.Fil
 
 Use `directive.stableBucketKey()` for stable bindings and `directive.namespacedSessionKey()` for session bindings. Legacy directives with empty ProfileID keep their existing keys. A Profile revision change intentionally starts a fresh affinity namespace so a recreated or materially changed Profile cannot reuse obsolete sticky/session state.
 
-- [ ] **Step 4: Store per-binding session TTL and evaluate raw long-lived data**
+- [x] **Step 4: Store per-binding session TTL and evaluate raw long-lived data**
 
 Change `sessionBinding` to carry expiry:
 
@@ -1035,7 +1039,7 @@ func MeetsLongLivedPolicy(snapshot Snapshot, minUptime time.Duration, minRate fl
 
 When directive thresholds are non-zero, both filter matching and stable preference call this helper; otherwise preserve `Snapshot.LongLived` legacy behavior.
 
-- [ ] **Step 5: Run tests and commit**
+- [x] **Step 5: Run tests and commit**
 
 Run:
 
@@ -1071,7 +1075,7 @@ git commit -m "feat(service/base): isolate pool selection by profile"
 - Modify: `service/base/internal/routerule/provider.go`
 - Create: `service/base/internal/routerule/provider_status_test.go`
 
-- [ ] **Step 1: Write failing CAS, normalization, and immutable-provider tests**
+- [x] **Step 1: Write failing CAS, normalization, and immutable-provider tests**
 
 Canonical device IDs are lower-case. Add tests that prove `Laptop` and `laptop` resolve to one resource, stale revisions fail, copy-shared is one-time, delete returns to shared, and a late provider callback cannot mutate an already-published compiled Profile:
 
@@ -1160,7 +1164,7 @@ func putProfileWithProvider(t *testing.T, mgr *Manager, deviceID string, expecte
 }
 ```
 
-- [ ] **Step 2: Run the tests and verify RED**
+- [x] **Step 2: Run the tests and verify RED**
 
 Run:
 
@@ -1171,7 +1175,7 @@ go test -count=1 ./internal/profile -run 'TestNormalizeDeviceID|TestManager|Test
 
 Expected: missing Manager/provider symbols.
 
-- [ ] **Step 3: Implement canonical identity and Manager construction**
+- [x] **Step 3: Implement canonical identity and Manager construction**
 
 ```go
 func NormalizeDeviceID(value string) (string, error) {
@@ -1229,7 +1233,7 @@ func (m *Manager) ActivitySnapshot() map[string]DeviceActivity
 
 `NewManager` loads devices, Profile JSON, and mappings, compiles every persisted Profile strictly, and returns an error naming the offending device if persisted JSON is corrupt. `PrepareConfig` validates/compiles the candidate shared Profile and canonical credential without publication. After reload commit, `OnConfigUpdate` performs the infallible `PublishConfigSnapshot` swap from that prepared result. Tests must prove every Local Server config notification is preceded by `PrepareConfig`; initial construction already publishes the initial snapshot, and shared/credential hot updates use their dedicated publish methods rather than this reload callback.
 
-- [ ] **Step 4: Implement CAS mutations without publishing partial state**
+- [x] **Step 4: Implement CAS mutations without publishing partial state**
 
 Expose these methods:
 
@@ -1291,7 +1295,7 @@ func mutationResult(registry *Registry, revision int64, profile *CompiledProfile
 
 `persistDeviceProfileCAS` uses `Store.WithTx`: normalize the device ID, create the device row with `display_name=device_id` when absent, then write the Profile CAS in the same transaction. Do not cache a pre-write Registry candidate across the store transaction; always clone the current Registry after the successful CAS so a concurrent provider publication is not overwritten. `PrepareShared` only validates/compiles; `PublishShared` rechecks the expected revision under `mutationMu`, clones the latest Registry after YAML persistence succeeds, and performs the infallible pointer swap.
 
-- [ ] **Step 5: Add asynchronous provider runners with generation checks**
+- [x] **Step 5: Add asynchronous provider runners with generation checks**
 
 ```go
 type ProviderRunner interface {
@@ -1352,7 +1356,7 @@ func (f *manualProviderFactory) LastRunner(t *testing.T) *manualProviderRunner {
 
 Extend `routerule.ProviderManager` with an optional status callback while keeping `NewProviderManager` backward-compatible. Each failed fetch publishes degraded/error status but retains cached last-success rules; a later successful fetch clears degraded status. Start each Profile runner in a goroutine so an initial network fetch cannot block the API. Every callback checks Profile ID, Profile revision, and provider generation under `mutationMu`, creates a new `routerule.Engine`, clones the compiled Profile and current Registry, and atomically publishes the new snapshot. Never call `SetRulesAndFinal` on an Engine already reachable from a published Registry.
 
-- [ ] **Step 6: Run tests and commit**
+- [x] **Step 6: Run tests and commit**
 
 Run:
 
@@ -1389,7 +1393,7 @@ git commit -m "feat(service/base): manage persistent device profiles"
 - Modify: `service/base/internal/dispatch/params.go`
 - Modify: `service/base/internal/dispatch/params_test.go`
 
-- [ ] **Step 1: Write failing shared username-grammar tests**
+- [x] **Step 1: Write failing shared username-grammar tests**
 
 ```go
 func TestSplitProxyUsername(t *testing.T) {
@@ -1548,7 +1552,7 @@ Add explicit tests that disabled Profiles stay DIRECT even with `nosplit`, `X-Pr
 
 Also add `TestHTTPKeepAliveReadsProfileRegistryPerRequest`, `TestDirectProfileDoesNotReadPoolProvider`, `TestProxyProfileWithoutPoolReturns502`, `TestUnknownExplicitDeviceUsesSharedWithoutIPFallback`, and the equivalent SOCKS general-failure assertion. These close the per-request publication, idle-pool, and explicit-identity rules that protocol parity alone does not prove.
 
-- [ ] **Step 2: Run dispatch tests and verify RED**
+- [x] **Step 2: Run dispatch tests and verify RED**
 
 Run:
 
@@ -1559,7 +1563,7 @@ go test -count=1 ./internal/dispatch -run 'TestSplitProxyUsername|TestProfileSel
 
 Expected: missing profile resolver/authentication symbols.
 
-- [ ] **Step 3: Add Local Server resolver and credential interfaces**
+- [x] **Step 3: Add Local Server resolver and credential interfaces**
 
 ```go
 type ProfileResolver interface {
@@ -1599,7 +1603,7 @@ func (s *Server) authenticateHTTPRequest(req *http.Request) (parsedProxyUsername
 
 Authentication order is fixed: `splitBaseUsername` separates only the first segment without interpreting `dev=`; hash the supplied/canonical base username and password with SHA-256 and compare both digests using `subtle.ConstantTimeCompare`; only after that succeeds does `splitProxyUsername` validate/extract exactly one `dev=` and pass remaining tokens to `parseTokens`. This prevents invalid `dev=` syntax from becoming a credential oracle. HTTP maps bad base/password to 407 and authenticated malformed `dev=` to 400; SOCKS maps both to RFC 1929 auth failure.
 
-- [ ] **Step 4: Change HTTP and SOCKS handlers to retain authenticated identity**
+- [x] **Step 4: Change HTTP and SOCKS handlers to retain authenticated identity**
 
 Use these signatures:
 
@@ -1613,7 +1617,7 @@ func (s *Server) socksUserPassAuth(conn net.Conn) (parsedProxyUsername, bool)
 
 Local Server requires RFC 1929 username/password for SOCKS5. Legacy no-auth behavior remains unchanged.
 
-- [ ] **Step 5: Resolve the Profile before interpreting split overrides**
+- [x] **Step 5: Resolve the Profile before interpreting split overrides**
 
 Implement one shared request resolver:
 
@@ -1665,7 +1669,7 @@ func policyForProfile(split bool, compiled *profile.CompiledProfile, host string
 
 `peerAddr` accepts `*net.TCPAddr` first, then parses `host:port`, and returns an invalid `netip.Addr` rather than trusting headers. `applyTo` starts from a deep copy of the Profile directive, applies only explicitly present overlay fields, and fills an empty session key from the peer IP fallback.
 
-- [ ] **Step 6: Map the selected Profile into the pool directive**
+- [x] **Step 6: Map the selected Profile into the pool directive**
 
 `directiveFromProfile` converts `profile.SelectionSettings` to the pool package at the dispatch boundary:
 
@@ -1690,7 +1694,7 @@ func directiveFromProfile(r profile.Resolution) pool.SelectionDirective {
 }
 ```
 
-- [ ] **Step 7: Run dispatch tests and commit**
+- [x] **Step 7: Run dispatch tests and commit**
 
 Run:
 
@@ -1724,7 +1728,7 @@ git commit -m "feat(service/base): route local clients by device profile"
 - Modify: `service/base/internal/app/app_test.go`
 - Modify: `service/base/internal/monitor/server.go`
 
-- [ ] **Step 1: Write failing initial-idle BoxManager tests**
+- [x] **Step 1: Write failing initial-idle BoxManager tests**
 
 ```go
 func TestStartWithoutNodesEntersInitialIdle(t *testing.T) {
@@ -1775,7 +1779,7 @@ func newInitialIdleTestManager(t *testing.T) *Manager {
 func boolPointer(value bool) *bool { return &value }
 ```
 
-- [ ] **Step 2: Write failing RoutingController Local Server lifecycle tests**
+- [x] **Step 2: Write failing RoutingController Local Server lifecycle tests**
 
 Add tests for shared disabled startup, `Idle=true`, running-to-idle, idle-to-running, source-only reload, credential hot swap without listener restart, listen change with transactional restart, and failed pool rollback with the DIRECT dispatcher restored.
 
@@ -1827,7 +1831,7 @@ func localServerConfigForTest() *config.Config {
 }
 ```
 
-- [ ] **Step 3: Run lifecycle tests and verify RED**
+- [x] **Step 3: Run lifecycle tests and verify RED**
 
 Run:
 
@@ -1838,7 +1842,7 @@ go test -count=1 ./internal/boxmgr ./internal/app -run 'TestStartWithoutNodes|Te
 
 Expected: current BoxManager tries to build a zero-member box and current routing controller suppresses the dispatcher while idle.
 
-- [ ] **Step 4: Implement initial idle and an immutable state accessor**
+- [x] **Step 4: Implement initial idle and an immutable state accessor**
 
 Add:
 
@@ -1852,7 +1856,7 @@ func (m *Manager) CurrentReloadState() ReloadState {
 
 At the start of `Manager.Start`, after monitor preparation and before `createManagedBox`, branch when `cfg.LocalServer.Enabled && len(cfg.Nodes) == 0`. The initial-idle path must set `cfg`, `lastAppliedCfg`, `idle`, `lastAppliedIdle`, `currentBox=nil`, call `monitorServer.SetConfig`, and start the periodic health lifecycle exactly once. Legacy mode keeps its existing zero-node startup behavior.
 
-- [ ] **Step 5: Make RoutingController mode-aware without duplicating it**
+- [x] **Step 5: Make RoutingController mode-aware without duplicating it**
 
 Use an option so legacy call sites remain simple:
 
@@ -1895,7 +1899,7 @@ Split `startLocked` into legacy and Local Server branches. The Local Server bran
 
 Make `ApplyHot` mode-aware: Local Server shared session TTL/filter/rules/providers are already compiled and atomically published by Profile Manager, so the controller must not create a second Engine/ProviderManager and must treat shared session TTL as hot-applicable; legacy mode keeps the existing single-engine/provider path and still requires reload for its pool-wide session TTL. `RoutingStatus` must expose dispatcher readiness separately from shared enabled/revision/rule count.
 
-- [ ] **Step 6: Wire Profile Manager in app startup**
+- [x] **Step 6: Wire Profile Manager in app startup**
 
 After opening Store, create Profile Manager before `boxMgr.PrepareMonitor`/`boxMgr.Start` so the reusable monitor runtime receives canonical auth before its listener becomes public:
 
@@ -1942,7 +1946,7 @@ func (s *Server) profileManagerSnapshot() *profile.Manager {
 
 Register Profile Manager/config/reload listeners before background source refresh starts, and order config notifications so a successfully committed Config is published to Profile Manager before management APIs can mutate the new snapshot.
 
-- [ ] **Step 7: Run lifecycle packages and commit**
+- [x] **Step 7: Run lifecycle packages and commit**
 
 Run:
 
@@ -1975,7 +1979,7 @@ git commit -m "feat(service/base): run local server dispatch lifecycle"
 - Modify: `service/base/internal/app/app.go`
 - Modify: `service/base/internal/profile/manager.go`
 
-- [ ] **Step 1: Write failing authentication and rotation tests**
+- [x] **Step 1: Write failing authentication and rotation tests**
 
 Add tests for unauthenticated auth-mode discovery, canonical JSON login, Basic management auth, legacy password login, ignored `Proxy-Authorization`, password redaction, generation invalidation, and no listener restart on Local Server rotation:
 
@@ -2068,7 +2072,7 @@ func performJSONRequest(t *testing.T, server *Server, method, path string, body 
 }
 ```
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Run:
 
@@ -2079,7 +2083,7 @@ go test -count=1 ./internal/monitor -run 'TestLocalServerAuth|TestManagementDoes
 
 Expected: current auth is password-only and sessions have no generation.
 
-- [ ] **Step 3: Use the Task 7 Profile Manager dependency as the dynamic credential snapshot**
+- [x] **Step 3: Use the Task 7 Profile Manager dependency as the dynamic credential snapshot**
 
 ```go
 func (s *Server) credentialSnapshot() profile.CredentialSnapshot {
@@ -2092,7 +2096,7 @@ func (s *Server) credentialSnapshot() profile.CredentialSnapshot {
 
 App wiring must call `server.SetProfileManager(profileMgr)` before public management startup.
 
-- [ ] **Step 4: Implement auth-mode discovery and canonical login**
+- [x] **Step 4: Implement auth-mode discovery and canonical login**
 
 `GET /api/auth` returns:
 
@@ -2113,7 +2117,7 @@ var req struct {
 
 Local Server hashes both supplied/canonical fields with SHA-256 and compares both fixed-size digests with `subtle.ConstantTimeCompare`. `withAuth` accepts Cookie/Bearer session, Basic canonical credentials, and existing raw/Bearer canonical password compatibility, but never reads `Proxy-Authorization`.
 
-- [ ] **Step 5: Carry credential generation through memory and SQLite sessions**
+- [x] **Step 5: Carry credential generation through memory and SQLite sessions**
 
 Add `CredentialGeneration uint64` to monitor `Session`. `createSession` snapshots the current generation into both memory and `store.Session`. `validateSession` rejects memory or store sessions whose generation differs from the current credential snapshot.
 
@@ -2129,7 +2133,7 @@ go func(storeRef store.Store, generation uint64) {
 
 Correctness comes from generation comparison, not cleanup completion.
 
-- [ ] **Step 6: Implement write-only password rotation on `/api/local-server/config` foundation**
+- [x] **Step 6: Implement write-only password rotation on `/api/local-server/config` foundation**
 
 The update DTO uses a pointer:
 
@@ -2168,7 +2172,7 @@ save failure, reload-window conflict, or failed reload
 
 The ordered Profile Manager config-listener path calls `PublishConfigSnapshot` only after the committed Config becomes active; `RoutingController.CompleteReload` must not publish it early. This makes file-based credential changes follow the same atomic publication rule as API changes.
 
-- [ ] **Step 7: Run monitor tests and commit**
+- [x] **Step 7: Run monitor tests and commit**
 
 Run:
 
@@ -2201,7 +2205,7 @@ git commit -m "feat(service/base): unify local server credentials"
 - Modify: `service/base/internal/profile/manager.go`
 - Modify: `service/base/internal/profile/types.go`
 
-- [ ] **Step 1: Write failing handler tests for the complete resource contract**
+- [x] **Step 1: Write failing handler tests for the complete resource contract**
 
 Test status/config redaction, shared revision, device resource upsert, Profile CAS upsert, one-time copy-shared, enabled patch, idempotent delete, mapping CRUD by mapping ID, reload-window conflict, and persistence rollback:
 
@@ -2273,7 +2277,7 @@ func validProfilePayload(enabled bool) map[string]any {
 }
 ```
 
-- [ ] **Step 2: Run the handler tests and verify RED**
+- [x] **Step 2: Run the handler tests and verify RED**
 
 Run:
 
@@ -2284,7 +2288,7 @@ go test -count=1 ./internal/monitor -run 'TestDeviceProfileAPI|TestLocalServerCo
 
 Expected: all new routes return 404.
 
-- [ ] **Step 3: Register the Local Server route family in one place**
+- [x] **Step 3: Register the Local Server route family in one place**
 
 In `NewServer`, add:
 
@@ -2308,7 +2312,7 @@ func (s *Server) registerLocalServerRoutes(mux *http.ServeMux) {
 
 Parse escaped path segments with `url.PathUnescape`, then pass every device ID through `profile.NormalizeDeviceID`.
 
-- [ ] **Step 4: Use one mutation envelope and structured errors**
+- [x] **Step 4: Use one mutation envelope and structured errors**
 
 ```go
 type mutationEnvelope struct {
@@ -2409,7 +2413,7 @@ func (s *Server) beginConfigMutation(ctx context.Context) (func(), error) {
 
 Keep `configUpdateMu` and `reloadWindowCount` checks inside that barrier so reload target capture cannot race a Profile/config write.
 
-- [ ] **Step 5: Implement shared Profile candidate-save and one compatibility transaction**
+- [x] **Step 5: Implement shared Profile candidate-save and one compatibility transaction**
 
 For shared PUT:
 
@@ -2429,7 +2433,7 @@ Expose `GET/PUT /api/routing/config` through the same shared helpers in Local Se
 
 Also make `GET /api/routing/status` a true shared alias in Local Server mode: `enabled` is the shared Profile switch, `dispatcher_ready` reports the always-on listener separately, and rule count/final policy/default strategy/revision come from Profile Manager's immutable shared snapshot rather than `dispatch.Server`'s legacy single engine.
 
-- [ ] **Step 6: Implement device and mapping handlers**
+- [x] **Step 6: Implement device and mapping handlers**
 
 Implement the complete resource family, not only Profile writes:
 
@@ -2449,7 +2453,7 @@ Mapping POST creates a server-generated mapping ID with `crypto/rand`; mapping P
 
 `GET /api/local-server/status` must include dispatcher readiness, provider degraded count/summary, `peer_address_mode: "tcp_peer"`, Profile/mapping counts, and the Docker/NAT source-IP warning. Add resolver tests for exact IP over CIDR, longest prefix over shorter prefix, higher priority within equal prefix length, disabled mapping exclusion, and explicit `dev=` overriding all mappings.
 
-- [ ] **Step 7: Run monitor/profile tests and commit**
+- [x] **Step 7: Run monitor/profile tests and commit**
 
 Run:
 
@@ -2482,7 +2486,7 @@ git commit -m "feat(service/base): expose device profile management api"
 - Modify: `service/base/internal/boxmgr/manager.go`
 - Modify: `service/base/internal/boxmgr/manager_test.go`
 
-- [ ] **Step 1: Write failing compatibility tests**
+- [x] **Step 1: Write failing compatibility tests**
 
 ```go
 func TestProxyUsernameForHostEncodesCanonicalDeviceID(t *testing.T) {
@@ -2522,7 +2526,7 @@ func TestRecordAppliedConfigKeepsHotLocalServerFieldsForRollback(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run focused tests and verify RED**
+- [x] **Step 2: Run focused tests and verify RED**
 
 Run:
 
@@ -2533,7 +2537,7 @@ go test -count=1 ./internal/monitor ./internal/boxmgr -run 'TestProxyUsernameFor
 
 Expected: checkout returns the old static username, settings expose legacy secrets, and rollback snapshots omit Local Server hot fields.
 
-- [ ] **Step 3: Update compatibility checkout and settings behavior**
+- [x] **Step 3: Update compatibility checkout and settings behavior**
 
 In Local Server mode, checkout obtains credentials from Profile Manager and formats:
 
@@ -2553,7 +2557,7 @@ Extend the existing `TestProxyCompatCheckoutLifecycle` fixture (which already ha
 
 In `/api/settings`, Local Server GET uses a dedicated sanitized response DTO/map that omits `listener_password` and `management_password` keys entirely, returns `local_server_enabled`, `local_server_auth_username`, and `local_server_password_set`, and never marshals any password. Do not rely on empty strings in the existing static DTO. Local Server PUT rejects supplied conflicting legacy credential fields with `409 credential_source_conflict`; missing old fields do not clear canonical auth.
 
-- [ ] **Step 4: Preserve hot Local Server state in BoxManager rollback snapshots**
+- [x] **Step 4: Preserve hot Local Server state in BoxManager rollback snapshots**
 
 Make `mergeHotAppliedConfig` mode-aware. In Local Server mode merge:
 
@@ -2566,7 +2570,7 @@ Do not merge structural `LocalServer.Enabled`, `LocalServer.Listen`, mode, liste
 
 After every successful shared Profile hot publication or active Local Server credential publication, call `boxMgr.RecordAppliedConfig(candidate)` through the existing routing/node-manager dependency. Structural Local Server changes call it only after the reload commits. Add a rollback test that performs the real handler update followed by a failed source reload and proves the last successful hot fields are retained.
 
-- [ ] **Step 5: Run tests and commit**
+- [x] **Step 5: Run tests and commit**
 
 Run:
 
@@ -2599,7 +2603,7 @@ git commit -m "fix(service/base): close local server compatibility gaps"
 - Create: `service/base/frontend/src/test/test-environment.test.tsx`
 - Modify: `.github/workflows/validate.yml`
 
-- [ ] **Step 1: Add a RED harness test before adding the test script**
+- [x] **Step 1: Add a RED harness test before adding the test script**
 
 ```tsx
 import { render, screen } from '@testing-library/react'
@@ -2622,7 +2626,7 @@ it('clears localStorage between tests', () => {
 })
 ```
 
-- [ ] **Step 2: Run the missing command and verify RED**
+- [x] **Step 2: Run the missing command and verify RED**
 
 Run:
 
@@ -2633,7 +2637,7 @@ npm run test
 
 Expected: npm reports that the `test` script does not exist.
 
-- [ ] **Step 3: Install and configure the official frontend test stack**
+- [x] **Step 3: Install and configure the official frontend test stack**
 
 Run:
 
@@ -2718,11 +2722,11 @@ export function mockFetch(...responses: Response[]): Mock<typeof fetch> {
 
 Do not add MSW.
 
-- [ ] **Step 4: Add the test command to CI**
+- [x] **Step 4: Add the test command to CI**
 
 In `.github/workflows/validate.yml`, run `npm ci`, `npm run test`, `npm run lint`, then `npm run build` for `service/base/frontend`.
 
-- [ ] **Step 5: Run frontend checks and commit**
+- [x] **Step 5: Run frontend checks and commit**
 
 Run:
 
@@ -2764,7 +2768,7 @@ git commit -m "test(frontend): add Vitest and RTL harness"
 - Modify: `service/base/frontend/src/App.tsx`
 - Create: `service/base/frontend/src/App.test.tsx`
 
-- [ ] **Step 1: Write RED API transport tests**
+- [x] **Step 1: Write RED API transport tests**
 
 ```ts
 it('preserves structured 409 payloads', async () => {
@@ -2827,7 +2831,7 @@ export function mappingFixture(overrides: Partial<IPMapping> = {}): IPMapping {
 }
 ```
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Run:
 
@@ -2838,7 +2842,7 @@ npm run test -- src/api/client.test.ts src/api/localServer.test.ts
 
 Expected: missing typed transport and domain API.
 
-- [ ] **Step 3: Define DTOs and one exported transport**
+- [x] **Step 3: Define DTOs and one exported transport**
 
 `localServer.ts` locks the JSON contract with these fields:
 
@@ -2979,7 +2983,7 @@ deleteIPMapping(mappingId: string, expectedRevision: number): Promise<MutationRe
 
 Creation sends `If-None-Match: *`; updates/deletes send `If-Match: "<revision>"`. Request bodies may also include the same expected revision, but the client must not send contradictory values.
 
-- [ ] **Step 4: Update login from auth-mode discovery**
+- [x] **Step 4: Update login from auth-mode discovery**
 
 Extend `AuthResponse`:
 
@@ -3016,13 +3020,13 @@ export async function login(username: string, password: string): Promise<AuthRes
 
 `App` must retain the `checkAuth()` response instead of discarding it, pass `authMode={authInfo.auth_mode ?? 'legacy_password'}` to `LoginPage`, and clear that state on unauthorized/logout. `LoginPage` must not make a second discovery request. Add an App test proving canonical discovery renders the username field and legacy discovery does not.
 
-- [ ] **Step 5: Add write-only Local Server settings**
+- [x] **Step 5: Add write-only Local Server settings**
 
 `LocalServerSettingsCard` GETs `/api/local-server/config`, always initializes the password field to `''`, omits `auth_password` when the field remains blank, and sends a non-empty password only when the operator explicitly enters one. Tests verify no password refill, blank save preserves the secret, non-empty save rotates it, and Local Server mode explains that legacy credential fields are derived/unavailable.
 
 Make `SettingsData.listener_password` and `SettingsData.management_password` optional and hide/disable their legacy controls when `local_server_enabled` is true, because the sanitized Local Server `/api/settings` response omits those keys entirely.
 
-- [ ] **Step 6: Run checks and commit**
+- [x] **Step 6: Run checks and commit**
 
 Run:
 
@@ -3057,7 +3061,7 @@ git commit -m "feat(frontend): add local server api and canonical login"
 - Create: `service/base/frontend/src/hooks/useUnsavedChangesGuard.test.tsx`
 - Modify: `service/base/frontend/src/components/RoutingPanel.tsx`
 
-- [ ] **Step 1: Write RED adapter and form tests**
+- [x] **Step 1: Write RED adapter and form tests**
 
 ```ts
 it('round-trips the legacy flattened routing payload', () => {
@@ -3091,7 +3095,7 @@ function legacyRoutingFixture(): RoutingConfig {
 }
 ```
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Run:
 
@@ -3102,7 +3106,7 @@ npm run test -- src/components/profiles
 
 Expected: ProfileForm, adapters, and editor are missing.
 
-- [ ] **Step 3: Extract ProfileForm without data fetching**
+- [x] **Step 3: Extract ProfileForm without data fetching**
 
 `ProfileForm` is a controlled component:
 
@@ -3118,7 +3122,7 @@ Move enabled, strategy, final policy, default rules, rules text, providers, node
 
 `RoutingPanel` becomes a shared/legacy adapter around `ProfileForm`; legacy mode continues to use `/api/routing/config` and the flattened DTO. `profileToRoutingConfig(profile, previous)` replaces only Profile-owned fields and preserves `previous.listen` and future topology-only keys.
 
-- [ ] **Step 4: Add revision-aware ProfileEditor and dirty guard**
+- [x] **Step 4: Add revision-aware ProfileEditor and dirty guard**
 
 ```ts
 interface ProfileEditorProps {
@@ -3139,7 +3143,7 @@ export function requestAppNavigation(): boolean {
 
 When dirty, the hook listens for that event, calls the injected/default `window.confirm`, and invokes `event.preventDefault()` when the operator rejects navigation. It also returns `confirmNavigation()` for device/editor-local actions. Task 14 makes App tab/hash changes call `requestAppNavigation()` before changing state. Tests prove a rejected confirmation leaves both hash and selected device unchanged.
 
-- [ ] **Step 5: Run checks and commit**
+- [x] **Step 5: Run checks and commit**
 
 Run:
 
@@ -3179,7 +3183,7 @@ git commit -m "refactor(frontend): extract forwarding profile editor"
 - Modify: `deploy/service/base/Dockerfile`
 - Modify: `.github/workflows/publish-ghcr-images.yml`
 
-- [ ] **Step 1: Write RED UI tests for the effective-state matrix and CRUD**
+- [x] **Step 1: Write RED UI tests for the effective-state matrix and CRUD**
 
 ```tsx
 it.each([
@@ -3247,7 +3251,7 @@ function mockDeviceAPIs(state: {
 }
 ```
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Run:
 
@@ -3258,13 +3262,13 @@ npm run test -- src/components/DevicesPanel.test.tsx src/components/devices
 
 Expected: device components are missing.
 
-- [ ] **Step 3: Implement the device page as explicit resources**
+- [x] **Step 3: Implement the device page as explicit resources**
 
 `SharedProfileCard` shows shared enabled, strategy, final policy, rule count, and revision. `DeviceTable` shows display name, canonical device ID, identity source, last seen, Profile mode, effective state, revision, and actions. `IPMappingsPanel` uses mapping IDs and shows the source-IP reliability warning.
 
 `DevicesPanel` owns list refresh and modal/editor selection but delegates Profile editing to `ProfileEditor`. Deleting an independent Profile updates the row to shared mode without deleting the device or mappings.
 
-- [ ] **Step 4: Register the `devices` tab and protect dirty navigation**
+- [x] **Step 4: Register the `devices` tab and protect dirty navigation**
 
 Update:
 
@@ -3274,7 +3278,7 @@ type TabId = 'monitor' | 'manage' | 'routing' | 'devices' | 'debug' | 'settings'
 
 Add the sidebar item “设备策略”, hash `#devices`, and `renderContent` branch. `handleTabClick`, browser hash changes, editor close, and device-row switches call `requestAppNavigation()` before mutating state/hash; a canceled event restores the previous hash. Mobile rows use stacked summaries rather than horizontal overflow.
 
-- [ ] **Step 5: Add an embedded asset regression test before rebuilding**
+- [x] **Step 5: Add an embedded asset regression test before rebuilding**
 
 `server_assets_test.go` must GET `/`, parse every `/assets/...` reference from embedded index, verify each returns 200, verify SPA fallback returns index, and verify unknown `/api/not-real` stays 404.
 
@@ -3287,7 +3291,7 @@ go test -count=1 ./internal/monitor -run TestEmbeddedFrontendAssets
 
 Expected: this is a characterization/regression test and may already pass against the existing bundle. It is not the TDD RED for the Devices UI; source-level component tests above provide that RED. Bundle/source synchronization is enforced after rebuild with a clean-diff check.
 
-- [ ] **Step 6: Build and commit the final UI bundle**
+- [x] **Step 6: Build and commit the final UI bundle**
 
 Run:
 
@@ -3312,7 +3316,7 @@ RUN npm run build -- --outDir /tmp/frontend-dist
 
 Add frontend `npm ci/test/lint/build` and, after the standard tracked-asset build, `git diff --exit-code -- service/base/internal/monitor/assets` to the GHCR workflow preflight.
 
-- [ ] **Step 7: Commit UI and generated assets together**
+- [x] **Step 7: Commit UI and generated assets together**
 
 ```powershell
 Set-Location C:\Users\Public\nas_home\AI\GameEditor\EasyProxy
@@ -3336,7 +3340,7 @@ git commit -m "feat(frontend): add device profile console"
 - Modify comments only: `deploy/service/base/docker-compose.yaml`
 - Modify comments only: `service/base/docker-compose.yml`
 
-- [ ] **Step 1: Write RED renderer tests**
+- [x] **Step 1: Write RED renderer tests**
 
 Add tests with temporary root configs rather than rendering an unresolved placeholder directly:
 
@@ -3390,7 +3394,7 @@ def test_root_local_server_render_rejects_bypass_topology(self):
 
 Also test empty/placeholder canonical password, conflicting listens, non-mixed listener, and disabled Local Server preserving legacy credentials.
 
-- [ ] **Step 2: Run script tests and verify RED**
+- [x] **Step 2: Run script tests and verify RED**
 
 Run:
 
@@ -3401,7 +3405,7 @@ python -m unittest tests.test_script_smoke.ScriptSmokeTests.test_root_local_serv
 
 Expected: Local Server fields are not rendered or validated.
 
-- [ ] **Step 3: Add operator-facing Local Server examples**
+- [x] **Step 3: Add operator-facing Local Server examples**
 
 Keep tracked `config.example.yaml` and `deploy/service/base/config.template.yaml` renderable and legacy-compatible by default. Add the complete canonical block but leave it disabled until the operator replaces the placeholder:
 
@@ -3418,7 +3422,7 @@ Keep shared `routing.enabled: false` in tracked examples. `docs/local-server.md`
 
 Keep `deploy/service/base/config.template.yaml` and the direct service example backward-compatible with `local_server.enabled: false`, but document the canonical block and Local Server constraints beside it.
 
-- [ ] **Step 4: Normalize the rendered runtime and GitHub-generated settings**
+- [x] **Step 4: Normalize the rendered runtime and GitHub-generated settings**
 
 Import `re`, then after `deep_merge`, call:
 
@@ -3454,11 +3458,11 @@ def normalize_local_server_runtime(config: dict[str, Any]) -> None:
 
 Update `sync-github-deployment-settings.py` to generate one shared password, set Local Server enabled, mode pool, mixed listener, and canonical auth. Keep the old management environment value as a compatibility alias sourced from the same secret.
 
-- [ ] **Step 5: Update deploy placeholder checks and compose comments**
+- [x] **Step 5: Update deploy placeholder checks and compose comments**
 
 `deploy-subproject.ps1` rejects an enabled Local Server with empty/example canonical secret before Docker is invoked. Compose comments label `22323` as the Local Server mixed entry, `29888` as the shared Web Console, and the multi-port range as legacy-only.
 
-- [ ] **Step 6: Run renderer/smoke tests and commit**
+- [x] **Step 6: Run renderer/smoke tests and commit**
 
 Run:
 
@@ -3488,7 +3492,7 @@ git commit -m "feat(config): render canonical local server settings"
 - Create: `deploy/service/base/scripts/validate-local-server-device-profiles.ps1`
 - Modify: `.github/workflows/publish-ghcr-images.yml`
 
-- [ ] **Step 1: Create a deterministic counted upstream fixture**
+- [x] **Step 1: Create a deterministic counted upstream fixture**
 
 The Python helper must use only the standard library and expose this stable CLI:
 
@@ -3509,7 +3513,7 @@ HTTP absolute-form target     -> increment target and forward
 
 It must bind inside the disposable Docker network, log structured JSON lines, and exit cleanly on SIGTERM. Add a `--self-test` mode that starts loopback origin/counter instances, sends one CONNECT and one absolute-form request, asserts both counters, then exits 0.
 
-- [ ] **Step 2: Run fixture self-test**
+- [x] **Step 2: Run fixture self-test**
 
 Run:
 
@@ -3520,7 +3524,7 @@ python deploy/service/base/scripts/local-server-e2e-fixture.py --self-test
 
 Expected: exit 0 with a JSON summary showing one CONNECT and one HTTP hit.
 
-- [ ] **Step 3: Write the isolated PowerShell validation runner**
+- [x] **Step 3: Write the isolated PowerShell validation runner**
 
 The runner accepts `-Image`, `-ValidationId`, `-KeepArtifacts`, `-KeepRuntime`, and `-CleanupOnly`. It creates unique names and ports, records the legacy container before state (including an explicit `{exists:false}` record), writes a fresh Local Server config, launches counted proxy/origins/EasyProxy/client containers, and cleans them in `finally` unless `-KeepRuntime` was requested. `-CleanupOnly -ValidationId <id>` removes a previously retained topology using its evidence metadata.
 
@@ -3549,7 +3553,7 @@ Use an upstream counter as the routing source of truth; do not infer route choic
 
 Start the isolated EasyProxy instance with zero nodes for assertion 3. Then create the counted upstream proxy node through the existing config-node API and trigger the normal reload before assertions 4-14; do not weaken the zero-node test by preloading a dormant node.
 
-- [ ] **Step 4: Run the new validation locally**
+- [x] **Step 4: Run the new validation locally**
 
 Build a unique image and run on unused ports:
 
@@ -3562,11 +3566,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File deploy/service/base/scripts/
 
 Expected: every named assertion passes; cleanup leaves no test containers/network/ports; legacy container before/after JSON matches.
 
-- [ ] **Step 5: Add the validation to GHCR runtime E2E**
+- [x] **Step 5: Add the validation to GHCR runtime E2E**
 
 Run the new script after the existing source/runtime validation, upload its JSON evidence directory, and keep the old MiSub/source validation unchanged. The Ubuntu workflow step must use `shell: pwsh` and invoke `./deploy/service/base/scripts/validate-local-server-device-profiles.ps1` directly; do not call Windows-only `powershell.exe` in hosted CI.
 
-- [ ] **Step 6: Commit the durable E2E**
+- [x] **Step 6: Commit the durable E2E**
 
 ```powershell
 Set-Location C:\Users\Public\nas_home\AI\GameEditor\EasyProxy
@@ -3590,7 +3594,7 @@ git commit -m "test(deploy): validate local server device profiles"
 - Modify: `docs/release-checklist.md`
 - Modify: `docs/smart-routing-status.md` only to add a pointer to the new Local Server document; do not rewrite historical evidence.
 
-- [ ] **Step 1: Write the operator documentation from the implemented behavior**
+- [x] **Step 1: Write the operator documentation from the implemented behavior**
 
 `docs/local-server.md` must include:
 
@@ -3607,7 +3611,7 @@ git commit -m "test(deploy): validate local server device profiles"
 - trusted-LAN firewall rules blocking WAN/guest VLAN access to 22323/29888 and VPN/TLS guidance for untrusted networks;
 - troubleshooting for 401, 407, 409, 422, 502, idle pool, and source-IP collapse.
 
-- [ ] **Step 2: Run the full backend, frontend, and script matrix**
+- [x] **Step 2: Run the full backend, frontend, and script matrix**
 
 ```powershell
 Set-Location C:\Users\Public\nas_home\AI\GameEditor\EasyProxy\service\base
@@ -3630,7 +3634,7 @@ git diff --check
 
 Expected: all commands exit 0. If `npm run build` changes embedded assets, stage those changes with the UI source that produced them rather than leaving a dirty final tree.
 
-- [ ] **Step 3: Run the isolated Docker E2E again from the final source tree**
+- [x] **Step 3: Run the isolated Docker E2E again from the final source tree**
 
 ```powershell
 Set-Location C:\Users\Public\nas_home\AI\GameEditor\EasyProxy
@@ -3642,7 +3646,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File deploy/service/base/scripts/
 
 Record the immutable image ID and evidence directory in the final report. Read the retained management URL and topology metadata from the evidence JSON for Step 4.
 
-- [ ] **Step 4: Verify the real Web Console in a browser**
+- [x] **Step 4: Verify the real Web Console in a browser**
 
 Against the isolated container, verify desktop `1440x900` and mobile `390x844`:
 
@@ -3665,11 +3669,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File deploy/service/base/scripts/
 
 Verify the retained containers, network, volumes, and host ports are gone before continuing.
 
-- [ ] **Step 5: Request two-stage code review and close findings**
+- [x] **Step 5: Request two-stage code review and close findings**
 
 Run one review focused on spec compliance and one focused on regressions/concurrency/security. Fix only validated findings, rerun the smallest affected tests, then rerun the full matrix if any production code changed.
 
-- [ ] **Step 6: Commit documentation and final verified fixes**
+- [x] **Step 6: Commit documentation and final verified fixes**
 
 ```powershell
 Set-Location C:\Users\Public\nas_home\AI\GameEditor\EasyProxy
@@ -3679,7 +3683,7 @@ git commit -m "docs: document local server device profiles"
 
 If code-review fixes exist, commit them separately before the documentation commit with a scope-specific message.
 
-- [ ] **Step 7: Confirm final repository invariants**
+- [x] **Step 7: Confirm final repository invariants**
 
 Run:
 
@@ -3704,20 +3708,20 @@ Expected working tree output contains only the two pre-existing untracked tar fi
 
 ## Final acceptance checklist
 
-- [ ] shared off + no independent Profile is DIRECT.
-- [ ] shared off + independent on still applies independent policy.
-- [ ] shared on + independent off is DIRECT.
-- [ ] shared edits never mutate independent Profile JSON or revision.
-- [ ] deleting independent Profile returns the device to shared.
-- [ ] explicit lower-cased `device_id` beats IP/CIDR mapping.
-- [ ] IP mapping is clearly marked best-effort under Docker/NAT.
-- [ ] one canonical credential protects Web, management API, HTTP proxy, CONNECT, and SOCKS5.
-- [ ] credential rotation invalidates old sessions without rebinding the Local Server socket.
-- [ ] device Profile updates use CAS revisions and return 409 on stale writes.
-- [ ] Profile provider callbacks cannot mutate retired Registry snapshots.
-- [ ] sticky/session/long-lived behavior is namespaced by Profile ID and revision.
-- [ ] zero-node initial startup keeps DIRECT available and PROXY returns a clear error.
-- [ ] legacy behavior is unchanged when Local Server is disabled.
-- [ ] MiSub, subscriptions, connectors, node sync, and health remain global and unchanged.
-- [ ] Go, frontend, scripts, CI preflight, embedded assets, isolated Docker E2E, and browser checks pass.
-- [ ] legacy container and the two untracked tar files remain unchanged.
+- [x] shared off + no independent Profile is DIRECT.
+- [x] shared off + independent on still applies independent policy.
+- [x] shared on + independent off is DIRECT.
+- [x] shared edits never mutate independent Profile JSON or revision.
+- [x] deleting independent Profile returns the device to shared.
+- [x] explicit lower-cased `device_id` beats IP/CIDR mapping.
+- [x] IP mapping is clearly marked best-effort under Docker/NAT.
+- [x] one canonical credential protects Web, management API, HTTP proxy, CONNECT, and SOCKS5.
+- [x] credential rotation invalidates old sessions without rebinding the Local Server socket.
+- [x] device Profile updates use CAS revisions and return 409 on stale writes.
+- [x] Profile provider callbacks cannot mutate retired Registry snapshots.
+- [x] sticky/session/long-lived behavior is namespaced by Profile ID and revision.
+- [x] zero-node initial startup keeps DIRECT available and PROXY returns a clear error.
+- [x] legacy behavior is unchanged when Local Server is disabled.
+- [x] MiSub, subscriptions, connectors, node sync, and health remain global and unchanged.
+- [x] Go, frontend, scripts, CI preflight, embedded assets, isolated Docker E2E, and browser checks pass.
+- [x] legacy container and the two untracked tar files remain unchanged.

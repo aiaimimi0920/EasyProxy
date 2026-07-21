@@ -37,6 +37,8 @@ Exit condition:
 
 ## Milestone 4: Follow-Up Cleanup
 
+Status: completed.
+
 Deliverables:
 
 - path cleanup inside imported docs
