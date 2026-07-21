@@ -3,6 +3,9 @@ package monitor
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -552,6 +555,146 @@ func TestProbeAllNodesCompletesWhenProbeIgnoresContext(t *testing.T) {
 	}
 }
 
+func TestProbeAllNodesAvoidsBurstConcurrencyThatOverwhelmsResolvers(t *testing.T) {
+	manager, err := NewManager(Config{
+		ProbeTargets: []string{"https://platform.openai.com/login"},
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	const (
+		totalNodes         = 40
+		maxSafeConcurrency = 16
+	)
+
+	var inFlight atomic.Int32
+	var maxSeen atomic.Int32
+
+	for idx := 0; idx < totalNodes; idx++ {
+		handle := manager.Register(NodeInfo{
+			Tag:           fmt.Sprintf("burst-%02d", idx),
+			Name:          fmt.Sprintf("Burst %02d", idx),
+			ListenAddress: "127.0.0.1",
+			Port:          uint16(32100 + idx),
+		})
+		handle.SetProbe(func(ctx context.Context) (time.Duration, error) {
+			current := inFlight.Add(1)
+			for {
+				prev := maxSeen.Load()
+				if current <= prev || maxSeen.CompareAndSwap(prev, current) {
+					break
+				}
+			}
+			defer inFlight.Add(-1)
+
+			select {
+			case <-time.After(30 * time.Millisecond):
+			case <-ctx.Done():
+				return 0, ctx.Err()
+			}
+
+			if current > maxSafeConcurrency {
+				return 0, fmt.Errorf("simulated resolver overload at concurrency=%d", current)
+			}
+			return 10 * time.Millisecond, nil
+		})
+	}
+
+	manager.probeAllNodes(500 * time.Millisecond)
+
+	snapshots := manager.Snapshot()
+	available := 0
+	for _, snap := range snapshots {
+		if snap.Available {
+			available++
+		}
+	}
+
+	if available != totalNodes {
+		t.Fatalf(
+			"expected all probes to stay below resolver burst limit and succeed, got available=%d/%d max_concurrency=%d",
+			available,
+			totalNodes,
+			maxSeen.Load(),
+		)
+	}
+	if maxSeen.Load() > maxSafeConcurrency {
+		t.Fatalf("expected probe concurrency <= %d, got %d", maxSafeConcurrency, maxSeen.Load())
+	}
+}
+
+func TestSetLongLivedThresholdsUpdatesExistingEntries(t *testing.T) {
+	manager, err := NewManager(Config{
+		LongLivedMinUptime:      4 * time.Hour,
+		LongLivedMinSuccessRate: 0.9,
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	handle := manager.Register(NodeInfo{Tag: "threshold-node", Name: "Threshold Node"})
+	handle.MarkInitialCheckDone(true)
+	handle.ApplyUsageReportSuccess()
+	handle.ApplyUsageReportFailure(0, true)
+
+	manager.mu.RLock()
+	entry := manager.nodes["threshold-node"]
+	manager.mu.RUnlock()
+	if entry == nil {
+		t.Fatal("expected registered entry")
+	}
+	entry.mu.Lock()
+	entry.firstSeenAt = time.Now().Add(-2 * time.Hour)
+	entry.mu.Unlock()
+
+	if snap := handle.Snapshot(); snap.LongLived {
+		t.Fatalf("entry should not meet the original uptime/rate thresholds: %+v", snap)
+	}
+
+	manager.SetLongLivedThresholds(time.Hour, 0.4)
+
+	snap := handle.Snapshot()
+	if !snap.LongLived {
+		t.Fatalf("updated thresholds should make the existing entry long-lived: %+v", snap)
+	}
+	if manager.cfg.LongLivedMinUptime != time.Hour || manager.cfg.LongLivedMinSuccessRate != 0.4 {
+		t.Fatalf("manager thresholds not updated: %+v", manager.cfg)
+	}
+}
+
+func TestSetLongLivedThresholdsNormalizesInvalidValues(t *testing.T) {
+	manager, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	manager.SetLongLivedThresholds(0, 1.5)
+
+	if manager.cfg.LongLivedMinUptime != defaultLongLivedMinUptime {
+		t.Fatalf("zero uptime should use default %s, got %s", defaultLongLivedMinUptime, manager.cfg.LongLivedMinUptime)
+	}
+	if manager.cfg.LongLivedMinSuccessRate != defaultLongLivedMinSuccessRate {
+		t.Fatalf("invalid rate should use default %.2f, got %.2f", defaultLongLivedMinSuccessRate, manager.cfg.LongLivedMinSuccessRate)
+	}
+}
+
+func TestLongLivedPolicyUsesRawSnapshot(t *testing.T) {
+	snapshot := Snapshot{
+		EffectiveAvailable:   true,
+		Uptime:               1500 * time.Millisecond,
+		UptimeSeconds:        1,
+		ReportedSuccessCount: 9,
+		ReportedFailureCount: 1,
+	}
+	if !MeetsLongLivedPolicy(snapshot, 1200*time.Millisecond, 0.8) {
+		t.Fatal("snapshot should meet relaxed policy")
+	}
+	if MeetsLongLivedPolicy(snapshot, 2*time.Second, 0.8) {
+		t.Fatal("snapshot should not meet strict uptime policy")
+	}
+}
+
 func TestRecordSuccessWithLatencyClearsLastError(t *testing.T) {
 	manager, err := NewManager(Config{})
 	if err != nil {
@@ -573,6 +716,658 @@ func TestRecordSuccessWithLatencyClearsLastError(t *testing.T) {
 	}
 	if !snap.Available || !snap.InitialCheckDone {
 		t.Fatalf("expected successful probe to mark node available, got %+v", snap)
+	}
+}
+
+func TestProbeGenerationRejectsStaleGeneration(t *testing.T) {
+	mgr, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	defer mgr.Stop()
+	mgr.probeReady = true
+	called := atomic.Bool{}
+	handle := mgr.Register(NodeInfo{Tag: "stale-generation"})
+	handle.SetProbe(func(context.Context) (time.Duration, error) {
+		called.Store(true)
+		return time.Millisecond, nil
+	})
+	oldGeneration := mgr.BeginReload()
+	mgr.BeginReload()
+	if _, err := mgr.ProbeGeneration(context.Background(), oldGeneration, time.Second); !errors.Is(err, ErrStaleGeneration) {
+		t.Fatalf("ProbeGeneration() error = %v, want ErrStaleGeneration", err)
+	}
+	if called.Load() {
+		t.Fatal("stale generation started a probe")
+	}
+}
+
+func TestProbeGenerationDoesNotReusePreviousAvailability(t *testing.T) {
+	mgr, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	defer mgr.Stop()
+	mgr.probeReady = true
+	handle := mgr.Register(NodeInfo{Tag: "candidate-health"})
+	handle.MarkInitialCheckDone(true)
+	generation := mgr.BeginReload()
+	// Re-registering the same tag keeps historical stats but must invalidate the
+	// previous generation's availability for the candidate health gate.
+	candidate := mgr.Register(NodeInfo{Tag: "candidate-health"})
+	candidate.SetProbe(func(context.Context) (time.Duration, error) {
+		return 0, errors.New("candidate probe failed")
+	})
+	summary, err := mgr.ProbeGeneration(context.Background(), generation, time.Second)
+	if err != nil {
+		t.Fatalf("ProbeGeneration() error = %v", err)
+	}
+	if summary.Available != 0 || summary.Total != 1 {
+		t.Fatalf("candidate summary = %+v, want one failed candidate", summary)
+	}
+	if snap := candidate.Snapshot(); snap.Available || snap.EffectiveAvailable {
+		t.Fatalf("previous availability leaked into candidate generation: %+v", snap)
+	}
+}
+
+func TestLateProbeCompletionCannotMutateNewGeneration(t *testing.T) {
+	mgr, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	defer mgr.Stop()
+	mgr.probeReady = true
+	started := make(chan struct{})
+	release := make(chan struct{})
+	generation := mgr.BeginReload()
+	handle := mgr.Register(NodeInfo{Tag: "late-probe"})
+	handle.SetProbe(func(context.Context) (time.Duration, error) {
+		close(started)
+		<-release
+		return time.Millisecond, nil
+	})
+	probeDone := make(chan struct{})
+	go func() {
+		_, _ = mgr.ProbeGeneration(context.Background(), generation, time.Second)
+		close(probeDone)
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("probe did not start")
+	}
+	mgr.BeginReload()
+	mgr.Register(NodeInfo{Tag: "late-probe"})
+	close(release)
+	select {
+	case <-probeDone:
+	case <-time.After(time.Second):
+		t.Fatal("probe did not finish")
+	}
+	snap := handle.Snapshot()
+	if snap.Available || snap.InitialCheckDone || snap.LastProbeSuccessAt.IsZero() == false {
+		t.Fatalf("stale probe mutated the new generation: %+v", snap)
+	}
+}
+
+func TestBeginReloadInvalidatesPeriodicRoundAndAllowsNewGenerationRequest(t *testing.T) {
+	mgr, err := NewManager(Config{ProbeTarget: "http://127.0.0.1:1"})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	defer mgr.Stop()
+
+	oldStarted := make(chan struct{})
+	oldRelease := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(oldRelease) }) })
+	oldHandle := mgr.Register(NodeInfo{Tag: "periodic-generation"})
+	oldHandle.SetProbe(func(context.Context) (time.Duration, error) {
+		close(oldStarted)
+		<-oldRelease // Deliberately ignore cancellation like a stuck network call.
+		return time.Millisecond, nil
+	})
+
+	mgr.RequestProbeAllOnce(5 * time.Second)
+	select {
+	case <-oldStarted:
+	case <-time.After(time.Second):
+		t.Fatal("old periodic probe did not start")
+	}
+
+	mgr.BeginReload()
+	candidateCalled := make(chan struct{})
+	candidateHandle := mgr.Register(NodeInfo{Tag: "periodic-generation"})
+	candidateHandle.SetProbe(func(context.Context) (time.Duration, error) {
+		close(candidateCalled)
+		return 2 * time.Millisecond, nil
+	})
+	mgr.RequestProbeAllOnce(time.Second)
+
+	select {
+	case <-candidateCalled:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("new-generation periodic request was swallowed by the old in-flight round")
+	}
+	releaseOnce.Do(func() { close(oldRelease) })
+}
+
+func TestRegisterNewGenerationDoesNotReusePreviousProbeBeforeReplacement(t *testing.T) {
+	mgr, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	defer mgr.Stop()
+
+	var oldProbeCalls atomic.Int32
+	oldHandle := mgr.Register(NodeInfo{Tag: "probe-replacement-window"})
+	oldHandle.SetProbe(func(context.Context) (time.Duration, error) {
+		oldProbeCalls.Add(1)
+		return time.Millisecond, nil
+	})
+
+	generation := mgr.BeginReload()
+	candidateHandle := mgr.Register(NodeInfo{Tag: "probe-replacement-window"})
+	summary, err := mgr.ProbeGeneration(context.Background(), generation, time.Second)
+	if err != nil {
+		t.Fatalf("ProbeGeneration() error = %v", err)
+	}
+	if got := oldProbeCalls.Load(); got != 0 {
+		t.Fatalf("new generation reused the previous probe closure %d time(s)", got)
+	}
+	if summary.Total != 1 || summary.Completed != 1 || summary.Available != 0 || summary.Failed != 1 {
+		t.Fatalf("candidate summary before probe replacement = %+v, want one unavailable candidate", summary)
+	}
+	if snap := candidateHandle.Snapshot(); snap.Available || !snap.InitialCheckDone {
+		t.Fatalf("candidate health before probe replacement = %+v", snap)
+	}
+}
+
+func TestReplacingProbeInvalidatesInFlightResultWithinGeneration(t *testing.T) {
+	mgr, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	defer mgr.Stop()
+
+	generation := mgr.BeginReload()
+	handle := mgr.Register(NodeInfo{Tag: "same-generation-probe-replacement"})
+	oldStarted := make(chan struct{})
+	oldRelease := make(chan struct{})
+	handle.SetProbe(func(context.Context) (time.Duration, error) {
+		close(oldStarted)
+		<-oldRelease
+		return time.Millisecond, nil
+	})
+
+	type probeResult struct {
+		summary ProbeSummary
+		err     error
+	}
+	resultCh := make(chan probeResult, 1)
+	go func() {
+		summary, probeErr := mgr.ProbeGeneration(context.Background(), generation, time.Second)
+		resultCh <- probeResult{summary: summary, err: probeErr}
+	}()
+	select {
+	case <-oldStarted:
+	case <-time.After(time.Second):
+		t.Fatal("old probe did not start")
+	}
+
+	var replacementCalls atomic.Int32
+	handle.SetProbe(func(context.Context) (time.Duration, error) {
+		replacementCalls.Add(1)
+		return 2 * time.Millisecond, nil
+	})
+	close(oldRelease)
+	result := <-resultCh
+	if result.err != nil {
+		t.Fatalf("ProbeGeneration(old probe) error = %v", result.err)
+	}
+	if result.summary.Available != 0 || result.summary.Completed != 0 {
+		t.Fatalf("replaced probe result was committed: %+v", result.summary)
+	}
+	if snap := handle.Snapshot(); snap.Available || snap.InitialCheckDone {
+		t.Fatalf("replaced probe mutated current health: %+v", snap)
+	}
+
+	replacementSummary, err := mgr.ProbeGeneration(context.Background(), generation, time.Second)
+	if err != nil {
+		t.Fatalf("ProbeGeneration(replacement) error = %v", err)
+	}
+	if replacementCalls.Load() != 1 || replacementSummary.Available != 1 {
+		t.Fatalf("replacement probe did not become authoritative: calls=%d summary=%+v", replacementCalls.Load(), replacementSummary)
+	}
+}
+
+func TestProbeGenerationSupersedesInFlightPeriodicRoundWithinSameGeneration(t *testing.T) {
+	mgr, err := NewManager(Config{ProbeTarget: "http://127.0.0.1:1"})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	defer mgr.Stop()
+
+	generation := mgr.BeginReload()
+	handle := mgr.Register(NodeInfo{Tag: "exclusive-generation-probe"})
+	periodicStarted := make(chan struct{})
+	periodicRelease := make(chan struct{})
+	periodicReturned := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(periodicRelease) }) })
+	var calls atomic.Int32
+	handle.SetProbe(func(context.Context) (time.Duration, error) {
+		if calls.Add(1) == 1 {
+			close(periodicStarted)
+			<-periodicRelease // Ignore cancellation to model a late network return.
+			close(periodicReturned)
+			return 0, errors.New("late periodic failure")
+		}
+		return 2 * time.Millisecond, nil
+	})
+
+	mgr.RequestProbeAllOnce(5 * time.Second)
+	select {
+	case <-periodicStarted:
+	case <-time.After(time.Second):
+		t.Fatal("periodic probe did not start")
+	}
+
+	summary, err := mgr.ProbeGeneration(context.Background(), generation, time.Second)
+	if err != nil {
+		t.Fatalf("ProbeGeneration() error = %v", err)
+	}
+	if summary.Available != 1 || summary.Completed != 1 {
+		t.Fatalf("candidate generation summary = %+v", summary)
+	}
+	if snap := handle.Snapshot(); !snap.Available {
+		t.Fatalf("candidate probe did not publish availability: %+v", snap)
+	}
+
+	releaseOnce.Do(func() { close(periodicRelease) })
+	select {
+	case <-periodicReturned:
+	case <-time.After(time.Second):
+		t.Fatal("late periodic probe did not return")
+	}
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		mgr.probeRoundMu.Lock()
+		activeRound := mgr.probeRound
+		mgr.probeRoundMu.Unlock()
+		if activeRound == nil {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if snap := handle.Snapshot(); !snap.Available || snap.LastError != "" || snap.FailureCount != 0 || len(snap.Timeline) != 1 {
+		t.Fatalf("late periodic result overwrote the exclusive candidate probe: %+v", snap)
+	}
+}
+
+func TestUpdateProbeTargetsSupersedesInFlightPeriodicRound(t *testing.T) {
+	mgr, err := NewManager(Config{ProbeTarget: "http://old.example/"})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	defer mgr.Stop()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+	handle := mgr.Register(NodeInfo{Tag: "probe-target-reload"})
+	handle.SetProbe(func(context.Context) (time.Duration, error) {
+		close(started)
+		<-release // model a network call that ignores cancellation
+		return time.Millisecond, nil
+	})
+
+	mgr.RequestProbeAllOnce(5 * time.Second)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("periodic probe did not start")
+	}
+
+	updateDone := make(chan error, 1)
+	go func() {
+		updateDone <- mgr.UpdateProbeTarget("http://new.example/")
+	}()
+	select {
+	case err := <-updateDone:
+		if err != nil {
+			t.Fatalf("UpdateProbeTarget() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UpdateProbeTarget did not return while the old probe ignored cancellation")
+	}
+	if snap := handle.Snapshot(); snap.Available || snap.InitialCheckDone {
+		t.Fatalf("old probe remained authoritative after target update: %+v", snap)
+	}
+
+	releaseOnce.Do(func() { close(release) })
+
+	if snap := handle.Snapshot(); snap.Available || snap.InitialCheckDone {
+		t.Fatalf("stale probe result mutated health after target update: %+v", snap)
+	}
+	targets, ok := mgr.ProbeTargets()
+	if !ok || len(targets) != 1 || targets[0].Original != "http://new.example/" {
+		t.Fatalf("probe targets after update = %+v (ok=%v)", targets, ok)
+	}
+}
+
+func TestManualProbeCompletionCannotMutateAfterProbeTargetUpdate(t *testing.T) {
+	mgr, err := NewManager(Config{ProbeTarget: "http://old.example/"})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	defer mgr.Stop()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	handle := mgr.Register(NodeInfo{Tag: "manual-probe-target-reload"})
+	handle.SetProbe(func(context.Context) (time.Duration, error) {
+		close(started)
+		<-release
+		return time.Millisecond, nil
+	})
+
+	probeDone := make(chan error, 1)
+	go func() {
+		_, probeErr := mgr.Probe(context.Background(), "manual-probe-target-reload")
+		probeDone <- probeErr
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("manual probe did not start")
+	}
+	if err := mgr.UpdateProbeTarget("http://new.example/"); err != nil {
+		t.Fatalf("UpdateProbeTarget() error = %v", err)
+	}
+	close(release)
+	select {
+	case err := <-probeDone:
+		if !errors.Is(err, ErrStaleGeneration) {
+			t.Fatalf("manual probe error = %v, want stale-generation rejection", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("manual probe did not finish after release")
+	}
+	if snap := handle.Snapshot(); snap.Available || snap.InitialCheckDone {
+		t.Fatalf("stale manual probe mutated health: %+v", snap)
+	}
+}
+
+func TestLateManualProbeCannotOverwriteNewerManualProbe(t *testing.T) {
+	mgr, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	defer mgr.Stop()
+
+	firstStarted := make(chan struct{})
+	firstRelease := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(firstRelease) }) })
+	var calls atomic.Int32
+	handle := mgr.Register(NodeInfo{Tag: "manual-order"})
+	handle.SetProbe(func(context.Context) (time.Duration, error) {
+		if calls.Add(1) == 1 {
+			close(firstStarted)
+			<-firstRelease
+			return 0, errors.New("late manual failure")
+		}
+		return 2 * time.Millisecond, nil
+	})
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, probeErr := mgr.Probe(context.Background(), "manual-order")
+		firstDone <- probeErr
+	}()
+	select {
+	case <-firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first manual probe did not start")
+	}
+
+	if _, err := mgr.Probe(context.Background(), "manual-order"); err != nil {
+		t.Fatalf("newer manual probe error = %v", err)
+	}
+	if snap := handle.Snapshot(); !snap.Available || snap.FailureCount != 0 {
+		t.Fatalf("newer manual probe did not establish health: %+v", snap)
+	}
+
+	releaseOnce.Do(func() { close(firstRelease) })
+	select {
+	case err := <-firstDone:
+		if !errors.Is(err, ErrStaleGeneration) {
+			t.Fatalf("late manual probe error = %v, want stale-result rejection", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("late manual probe did not finish")
+	}
+	if snap := handle.Snapshot(); !snap.Available || snap.FailureCount != 0 || len(snap.Timeline) != 1 {
+		t.Fatalf("late manual probe overwrote newer health: %+v", snap)
+	}
+}
+
+func TestLatePeriodicProbeCannotOverwriteNewerManualProbe(t *testing.T) {
+	mgr, err := NewManager(Config{ProbeTarget: "http://127.0.0.1:1"})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	defer mgr.Stop()
+
+	periodicStarted := make(chan struct{})
+	periodicRelease := make(chan struct{})
+	periodicReturned := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(periodicRelease) }) })
+	var calls atomic.Int32
+	handle := mgr.Register(NodeInfo{Tag: "periodic-manual-order"})
+	handle.SetProbe(func(context.Context) (time.Duration, error) {
+		if calls.Add(1) == 1 {
+			close(periodicStarted)
+			<-periodicRelease
+			close(periodicReturned)
+			return 0, errors.New("late periodic failure")
+		}
+		return 2 * time.Millisecond, nil
+	})
+
+	mgr.RequestProbeAllOnce(5 * time.Second)
+	select {
+	case <-periodicStarted:
+	case <-time.After(time.Second):
+		t.Fatal("periodic probe did not start")
+	}
+	if _, err := mgr.Probe(context.Background(), "periodic-manual-order"); err != nil {
+		t.Fatalf("newer manual probe error = %v", err)
+	}
+	if snap := handle.Snapshot(); !snap.Available || snap.FailureCount != 0 {
+		t.Fatalf("newer manual probe did not establish health: %+v", snap)
+	}
+
+	releaseOnce.Do(func() { close(periodicRelease) })
+	select {
+	case <-periodicReturned:
+	case <-time.After(time.Second):
+		t.Fatal("periodic probe did not return")
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		mgr.probeRoundMu.Lock()
+		active := mgr.probeRound
+		mgr.probeRoundMu.Unlock()
+		if active == nil {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if snap := handle.Snapshot(); !snap.Available || snap.FailureCount != 0 || len(snap.Timeline) != 1 {
+		t.Fatalf("late periodic probe overwrote newer manual health: %+v", snap)
+	}
+}
+
+func TestBeginReloadResetsInitialProbeGateAndRejectsOldRoundCompletion(t *testing.T) {
+	mgr, err := NewManager(Config{ProbeTarget: "http://127.0.0.1:1"})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	defer mgr.Stop()
+
+	oldStarted := make(chan struct{})
+	oldRelease := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(oldRelease) }) })
+	handle := mgr.Register(NodeInfo{Tag: "reload-gate"})
+	handle.SetProbe(func(context.Context) (time.Duration, error) {
+		close(oldStarted)
+		<-oldRelease
+		return time.Millisecond, nil
+	})
+
+	mgr.RequestProbeAllOnce(5 * time.Second)
+	select {
+	case <-oldStarted:
+	case <-time.After(time.Second):
+		t.Fatal("old periodic probe did not start")
+	}
+
+	generation := mgr.BeginReload()
+	if err := mgr.WaitForInitialProbe(75 * time.Millisecond); err == nil {
+		t.Fatal("reload should reset the initial probe gate until the new round completes")
+	}
+
+	candidate := mgr.Register(NodeInfo{Tag: "reload-gate"})
+	candidate.SetProbe(func(context.Context) (time.Duration, error) {
+		return 2 * time.Millisecond, nil
+	})
+	summary, err := mgr.ProbeGeneration(context.Background(), generation, time.Second)
+	if err != nil {
+		t.Fatalf("new generation probe error = %v", err)
+	}
+	if summary.Available != 1 || summary.Completed != 1 {
+		t.Fatalf("new generation probe summary = %+v", summary)
+	}
+	if err := mgr.WaitForInitialProbe(200 * time.Millisecond); err != nil {
+		t.Fatalf("matching generation probe should complete the gate: %v", err)
+	}
+
+	releaseOnce.Do(func() { close(oldRelease) })
+}
+
+func TestUpdateProbeTargetResetsInitialProbeGateUntilDirectGenerationProbe(t *testing.T) {
+	mgr, err := NewManager(Config{ProbeTarget: "http://old.example/"})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	defer mgr.Stop()
+
+	handle := mgr.Register(NodeInfo{Tag: "target-gate"})
+	handle.SetProbe(func(context.Context) (time.Duration, error) {
+		return 2 * time.Millisecond, nil
+	})
+	mgr.probeAllNodes(time.Second)
+	if err := mgr.WaitForInitialProbe(100 * time.Millisecond); err != nil {
+		t.Fatalf("initial probe should complete the initial gate: %v", err)
+	}
+
+	if err := mgr.UpdateProbeTarget("http://new.example/"); err != nil {
+		t.Fatalf("UpdateProbeTarget() error = %v", err)
+	}
+	if err := mgr.WaitForInitialProbe(75 * time.Millisecond); err == nil {
+		t.Fatal("probe target update should reset the initial probe gate")
+	}
+
+	mgr.mu.RLock()
+	generation := mgr.reloadGen
+	mgr.mu.RUnlock()
+	if _, err := mgr.ProbeGeneration(context.Background(), generation, time.Second); err != nil {
+		t.Fatalf("direct generation probe error = %v", err)
+	}
+	if err := mgr.WaitForInitialProbe(200 * time.Millisecond); err != nil {
+		t.Fatalf("direct matching generation probe should complete the gate: %v", err)
+	}
+}
+
+func TestPeriodicHealthCheckStartsAfterLateProbeTarget(t *testing.T) {
+	mgr, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	defer mgr.Stop()
+
+	probed := make(chan struct{}, 1)
+	handle := mgr.Register(NodeInfo{Tag: "late-periodic-target"})
+	handle.SetProbe(func(context.Context) (time.Duration, error) {
+		select {
+		case probed <- struct{}{}:
+		default:
+		}
+		return time.Millisecond, nil
+	})
+
+	mgr.StartPeriodicHealthCheck(20*time.Millisecond, 100*time.Millisecond)
+	select {
+	case <-probed:
+		t.Fatal("periodic probe ran before a target was configured")
+	case <-time.After(40 * time.Millisecond):
+	}
+
+	if err := mgr.UpdateProbeTarget("http://late.example/"); err != nil {
+		t.Fatalf("UpdateProbeTarget() error = %v", err)
+	}
+	select {
+	case <-probed:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("periodic health check did not resume after adding a probe target")
+	}
+	if err := mgr.WaitForInitialProbe(200 * time.Millisecond); err != nil {
+		t.Fatalf("late periodic probe did not complete the initial gate: %v", err)
+	}
+}
+
+func TestInitialProbeWaiterFollowsGateResetToNewGeneration(t *testing.T) {
+	mgr, err := NewManager(Config{ProbeTarget: "http://old.example/"})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	defer mgr.Stop()
+
+	waitDone := make(chan error, 1)
+	mgr.initialProbeMu.Lock()
+	go func() {
+		waitDone <- mgr.WaitForInitialProbe(250 * time.Millisecond)
+	}()
+	mgr.initialProbeMu.Unlock()
+	// Give the waiter time to capture the old gate before the reload replaces it.
+	time.Sleep(25 * time.Millisecond)
+
+	generation := mgr.BeginReload()
+	select {
+	case err := <-waitDone:
+		t.Fatalf("waiter returned before the replacement probe: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	handle := mgr.Register(NodeInfo{Tag: "waiter-gate"})
+	handle.SetProbe(func(context.Context) (time.Duration, error) {
+		return time.Millisecond, nil
+	})
+	if _, err := mgr.ProbeGeneration(context.Background(), generation, time.Second); err != nil {
+		t.Fatalf("replacement generation probe error = %v", err)
+	}
+	select {
+	case err := <-waitDone:
+		if err != nil {
+			t.Fatalf("waiter did not follow the replacement gate: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("waiter did not finish after replacement probe")
 	}
 }
 

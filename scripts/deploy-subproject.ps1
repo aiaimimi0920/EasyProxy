@@ -102,6 +102,28 @@ function Assert-ProjectConfigReady {
             if ($sourceSyncEnabled -and $manifestUrl -match 'example\.com') {
                 $errors += "serviceBase.runtime.source_sync.manifest_url still uses an example domain."
             }
+            $localServer = Get-EasyProxyConfigSection -Config $runtime -Name 'local_server'
+            $localServerEnabled = [bool](Get-EasyProxyConfigValue -Object $localServer -Name 'enabled' -Default $false)
+            if ($localServerEnabled) {
+                $mode = [string](Get-EasyProxyConfigValue -Object $runtime -Name 'mode' -Default '')
+                $listener = Get-EasyProxyConfigSection -Config $runtime -Name 'listener'
+                $listenerProtocol = [string](Get-EasyProxyConfigValue -Object $listener -Name 'protocol' -Default '')
+                $auth = Get-EasyProxyConfigSection -Config $localServer -Name 'auth'
+                $canonicalUsername = [string](Get-EasyProxyConfigValue -Object $auth -Name 'username' -Default '')
+                $canonicalPassword = [string](Get-EasyProxyConfigValue -Object $auth -Name 'password' -Default '')
+                if ($mode -ne 'pool') {
+                    $errors += "serviceBase.runtime.local_server requires mode: pool."
+                }
+                if ($listenerProtocol -ne 'mixed') {
+                    $errors += "serviceBase.runtime.local_server requires listener.protocol: mixed."
+                }
+                if ($canonicalUsername -notmatch '^[A-Za-z0-9._-]{1,64}$') {
+                    $errors += "serviceBase.runtime.local_server.auth.username must match [A-Za-z0-9._-]{1,64}."
+                }
+                if ([string]::IsNullOrWhiteSpace($canonicalPassword) -or $canonicalPassword -like '*change_me*' -or $canonicalPassword -match 'example\.com') {
+                    $errors += "serviceBase.runtime.local_server.auth.password must be a real shared secret."
+                }
+            }
         }
         "misub-pages" {
             $misub = Get-EasyProxyConfigSection -Config $Config -Name 'misub'

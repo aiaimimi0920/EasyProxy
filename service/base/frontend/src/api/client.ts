@@ -36,7 +36,7 @@ export function clearToken() {
 
 // ---- Base request helper ----
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+export async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = {
     ...(options.headers as Record<string, string> || {}),
   }
@@ -57,64 +57,86 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     credentials: 'include', // send cookies
   })
 
-  if (res.status === 401) {
-    clearToken()
-    // Dispatch a custom event so App can react
-    window.dispatchEvent(new CustomEvent('auth:unauthorized'))
-    throw new ApiError('未授权，请重新登录', 401)
+  const text = await res.text()
+  let payload: Record<string, unknown> = {}
+  if (text) {
+    try {
+      const parsed: unknown = JSON.parse(text)
+      if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+        payload = parsed as Record<string, unknown>
+      }
+    } catch {
+      // Preserve the HTTP status even when the body is not JSON.
+    }
   }
 
   if (!res.ok) {
-    let msg = `HTTP ${res.status}`
-    try {
-      const body = await res.json()
-      if (body.error) msg = body.error
-    } catch { /* ignore parse errors */ }
-    throw new ApiError(msg, res.status)
+    if (res.status === 401) {
+      clearToken()
+      window.dispatchEvent(new CustomEvent('auth:unauthorized'))
+    }
+    const message = typeof payload.error === 'string'
+      ? payload.error
+      : res.status === 401
+        ? '未授权，请重新登录'
+        : `HTTP ${res.status}`
+    throw new ApiError(message, res.status, payload)
   }
 
-  // Handle empty responses
-  const text = await res.text()
   if (!text) return {} as T
   return JSON.parse(text) as T
 }
 
 export class ApiError extends Error {
-  status: number
-  constructor(message: string, status: number) {
+  readonly status: number
+  readonly payload: Record<string, unknown>
+
+  constructor(
+    message: string,
+    status: number,
+    payload: Record<string, unknown> = {},
+  ) {
     super(message)
     this.name = 'ApiError'
     this.status = status
+    this.payload = payload
   }
 }
+
+const request = apiRequest
 
 // ---- Auth API ----
 
 /** Check if password is required & login */
 export async function checkAuth(): Promise<AuthResponse> {
-  // Use GET-like behavior: /api/auth without POST returns password status
   const res = await fetch('/api/auth', { credentials: 'include' })
-  return res.json()
+  const payload = await res.json() as AuthResponse & { auth_mode?: string; error?: string }
+  if (!res.ok) {
+    throw new ApiError(payload.error ?? `HTTP ${res.status}`, res.status, payload as Record<string, unknown>)
+  }
+  return {
+    ...payload,
+    auth_mode: payload.auth_mode === 'canonical_pair' ? 'canonical_pair' : 'legacy_password',
+  }
 }
 
-export async function login(password: string): Promise<AuthResponse> {
+export async function login(username: string, password: string): Promise<AuthResponse> {
   const res = await fetch('/api/auth', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ password }),
+    body: JSON.stringify({ username, password }),
     credentials: 'include',
   })
-
+  const payload = await res.json() as AuthResponse & { error?: string }
   if (!res.ok) {
-    const body = await res.json()
-    throw new ApiError(body.error || '登录失败', res.status)
+    throw new ApiError(
+      payload.error ?? '登录失败',
+      res.status,
+      payload as Record<string, unknown>,
+    )
   }
-
-  const data: AuthResponse = await res.json()
-  if (data.token) {
-    setToken(data.token)
-  }
-  return data
+  if (payload.token) setToken(payload.token)
+  return payload
 }
 
 export function logout() {
@@ -366,5 +388,24 @@ export async function importNodes(content: string): Promise<{ message: string; i
   return request('/api/import', {
     method: 'POST',
     body: JSON.stringify({ content }),
+  })
+}
+
+// ---- Smart Routing API ----
+
+export async function fetchRoutingStatus(): Promise<import('../types').RoutingStatus> {
+  return request<import('../types').RoutingStatus>('/api/routing/status')
+}
+
+export async function fetchRoutingConfig(): Promise<import('../types').RoutingConfig> {
+  return request<import('../types').RoutingConfig>('/api/routing/config')
+}
+
+export async function updateRoutingConfig(
+  cfg: import('../types').RoutingConfig
+): Promise<import('../types').RoutingConfigUpdateResponse> {
+  return request<import('../types').RoutingConfigUpdateResponse>('/api/routing/config', {
+    method: 'PUT',
+    body: JSON.stringify(cfg),
   })
 }

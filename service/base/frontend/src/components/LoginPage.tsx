@@ -2,16 +2,22 @@ import { useState } from 'react'
 import { login } from '../api/client'
 
 interface LoginPageProps {
+  authMode?: 'legacy_password' | 'canonical_pair'
   onLogin: () => void
 }
 
-export default function LoginPage({ onLogin }: LoginPageProps) {
+export default function LoginPage({ authMode = 'legacy_password', onLogin }: LoginPageProps) {
+  const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (authMode === 'canonical_pair' && !username.trim()) {
+      setError('请输入用户名')
+      return
+    }
     if (!password.trim()) {
       setError('请输入密码')
       return
@@ -21,7 +27,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
     setError('')
 
     try {
-      await login(password)
+      await login(authMode === 'canonical_pair' ? username.trim() : '', password)
       onLogin()
     } catch (err) {
       setError(err instanceof Error ? err.message : '登录失败')
@@ -93,12 +99,38 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
         <div className="max-w-md w-full">
           <div className="mb-12 text-center lg:text-left">
             <h2 className="text-3xl lg:text-4xl font-bold text-base-content mb-3 tracking-tight">欢迎回来</h2>
-            <p className="text-base text-base-content/50 font-medium">请输入管理面板密码以继续使用系统</p>
+            <p className="text-base text-base-content/50 font-medium">
+              {authMode === 'canonical_pair' ? '请输入本地服务器用户名和密码' : '请输入管理面板密码以继续使用系统'}
+            </p>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-6">
+            {authMode === 'canonical_pair' && (
+              <fieldset className="fieldset">
+                <label htmlFor="login-username" className="fieldset-legend font-semibold text-base-content/70">
+                  用户名
+                </label>
+                <input
+                  id="login-username"
+                  type="text"
+                  autoComplete="username"
+                  placeholder="请输入用户名"
+                  className={`input input-lg w-full bg-base-200/50 focus:bg-base-100 transition-colors text-base ${error ? 'input-error ring-1 ring-error/50' : 'focus:ring-2 focus:ring-primary/20'}`}
+                  value={username}
+                  onChange={(e) => {
+                    setUsername(e.target.value)
+                    setError('')
+                  }}
+                  autoFocus
+                  disabled={loading}
+                />
+              </fieldset>
+            )}
+
             <fieldset className="fieldset">
-              <legend className="fieldset-legend font-semibold text-base-content/70">管理密码</legend>
+              <label htmlFor="login-password" className="fieldset-legend font-semibold text-base-content/70">
+                管理密码
+              </label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-base-content/40">
                   <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -106,7 +138,9 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
                   </svg>
                 </div>
                 <input
+                  id="login-password"
                   type="password"
+                  autoComplete="current-password"
                   placeholder="请输入密码"
                   className={`input input-lg w-full pl-12 bg-base-200/50 focus:bg-base-100 transition-colors text-base ${error ? 'input-error ring-1 ring-error/50' : 'focus:ring-2 focus:ring-primary/20'}`}
                   value={password}
@@ -114,7 +148,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
                     setPassword(e.target.value)
                     setError('')
                   }}
-                  autoFocus
+                  autoFocus={authMode !== 'canonical_pair'}
                   disabled={loading}
                 />
               </div>

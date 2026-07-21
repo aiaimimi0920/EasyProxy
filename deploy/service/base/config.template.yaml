@@ -28,6 +28,33 @@ multi_port:
   username: ""
   password: ""
 
+# Smart routing is opt-in. With listen left empty, route A reuses the normal
+# listener port, so the existing Docker 22323 publication remains sufficient.
+# A custom listen value is route B and requires an additional Docker port bind.
+routing:
+  enabled: false
+  listen: ""
+  default_strategy: stable # Prefer long-lived nodes; fall back to any healthy node.
+  use_default_rules: true
+  final_policy: PROXY
+  rules: []
+  rule_providers: []
+  long_lived:
+    min_uptime: 2h
+    min_success_rate: 0.9
+  session:
+    ttl: 10m
+
+# Canonical Local Server is opt-in. Enabling it requires mode: pool and a
+# listener.protocol of mixed; the renderer derives listener/management
+# credentials from this single write-only secret.
+local_server:
+  enabled: false
+  listen: ""
+  auth:
+    username: easyproxy
+    password: change_me_to_a_strong_shared_password
+
 management:
   enabled: true
   listen: 0.0.0.0:29888

@@ -61,7 +61,9 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: upstreams/misub/package-lock.json
+          cache-dependency-path: |
+            upstreams/misub/package-lock.json
+            service/base/frontend/package-lock.json
 
       - name: Install Python test dependencies
         shell: pwsh
@@ -91,29 +93,40 @@ jobs:
         run: |
           npm run test:run
 
-      - name: Run service/base monitor tests
+      - name: Install frontend dependencies
         shell: pwsh
-        working-directory: service/base
+        working-directory: service/base/frontend
         run: |
-          go test ./internal/monitor
+          npm ci
 
-      - name: Run service/base boxmgr tests
+      - name: Run frontend tests
         shell: pwsh
-        working-directory: service/base
+        working-directory: service/base/frontend
         run: |
-          go test ./internal/boxmgr
+          npm run test
 
-      - name: Run service/base config tests
+      - name: Lint frontend
         shell: pwsh
-        working-directory: service/base
+        working-directory: service/base/frontend
         run: |
-          go test ./internal/config
+          npm run lint
 
-      - name: Run service/base subscription tests
+      - name: Build tracked frontend assets
+        shell: pwsh
+        working-directory: service/base/frontend
+        run: |
+          npm run build
+
+      - name: Verify tracked frontend assets are current
+        shell: pwsh
+        run: |
+          git diff --exit-code -- service/base/internal/monitor/assets
+
+      - name: Run all service/base Go tests
         shell: pwsh
         working-directory: service/base
         run: |
-          go test ./internal/subscription
+          go test -count=1 ./...
 
   publish:
     name: Build and publish GHCR images
@@ -459,12 +472,28 @@ jobs:
             -Image "ghcr.io/${{ needs.publish.outputs.owner_lc }}/easy-proxy-monorepo-service:${{ needs.publish.outputs.release_tag }}" `
             -KeepArtifacts
 
+      - name: Run Local Server device Profile validation
+        shell: pwsh
+        run: |
+          ./deploy/service/base/scripts/validate-local-server-device-profiles.ps1 `
+            -Image "ghcr.io/${{ needs.publish.outputs.owner_lc }}/easy-proxy-monorepo-service:${{ needs.publish.outputs.release_tag }}" `
+            -ValidationId "local-server-${{ github.run_id }}-${{ github.run_attempt }}" `
+            -KeepArtifacts
+
       - name: Upload runtime validation artifacts
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: easyproxy-runtime-validation-${{ needs.publish.outputs.release_tag }}
           path: tmp/easy-proxy-runtime-validation
+          if-no-files-found: ignore
+
+      - name: Upload Local Server validation artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: easyproxy-local-server-validation-${{ needs.publish.outputs.release_tag }}
+          path: tmp/local-server-device-profile-validation
           if-no-files-found: ignore
 
       - name: Runtime validation summary
@@ -476,4 +505,5 @@ jobs:
             echo "- validated image: \`ghcr.io/${{ needs.publish.outputs.owner_lc }}/easy-proxy-monorepo-service:${{ needs.publish.outputs.release_tag }}\`"
             echo "- config source: \`EASYPROXY_ROOT_CONFIG_YAML_B64\`"
             echo "- scenarios: \`local-subscription, local-direct-proxy, manifest-subscription, fallback-subscription, local-connector, manifest-connector\`"
+            echo "- Local Server: \`device Profiles, protocol parity, credential rotation, embedded assets, cleanup invariants\`"
           } >> "$GITHUB_STEP_SUMMARY"

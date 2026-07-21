@@ -3,12 +3,14 @@ package subscription
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -35,6 +37,39 @@ type ConnectorRuntime interface {
 // Option configures the Manager.
 type Option func(*Manager)
 
+// refreshReloadIntent is the portion of boxmgr.ReloadIntent needed by the
+// refresh transaction. Keeping this small makes the fetch/retry boundary
+// independently testable without starting a sing-box instance.
+type refreshReloadIntent interface {
+	End()
+}
+
+type refreshReloader interface {
+	BeginReloadIntent(context.Context) (refreshReloadIntent, error)
+	CurrentPortMap() map[string]uint16
+	ReloadWithPortMapAndEphemeralNodes(*config.Config, map[string]uint16, []config.NodeConfig) error
+}
+
+type boxManagerRefreshReloader struct {
+	manager *boxmgr.Manager
+}
+
+func (r boxManagerRefreshReloader) BeginReloadIntent(ctx context.Context) (refreshReloadIntent, error) {
+	return r.manager.BeginReloadIntent(ctx)
+}
+
+func (r boxManagerRefreshReloader) CurrentPortMap() map[string]uint16 {
+	return r.manager.CurrentPortMap()
+}
+
+func (r boxManagerRefreshReloader) ReloadWithPortMapAndEphemeralNodes(
+	newCfg *config.Config,
+	portMap map[string]uint16,
+	ephemeralNodes []config.NodeConfig,
+) error {
+	return r.manager.ReloadWithPortMapAndEphemeralNodes(newCfg, portMap, ephemeralNodes)
+}
+
 // WithLogger sets a custom logger.
 func WithLogger(l Logger) Option {
 	return func(m *Manager) { m.logger = l }
@@ -50,6 +85,14 @@ func WithConnectorRuntime(rt ConnectorRuntime) Option {
 	return func(m *Manager) { m.connectorRuntime = rt }
 }
 
+func withPreferredIPSelector(selector preferredIPRuntimeSelector) Option {
+	return func(m *Manager) { m.preferredIPSelector = selector }
+}
+
+func withRefreshReloader(reloader refreshReloader) Option {
+	return func(m *Manager) { m.refreshReloader = reloader }
+}
+
 // Ensure Manager implements boxmgr.ConfigUpdateListener.
 var _ boxmgr.ConfigUpdateListener = (*Manager)(nil)
 
@@ -57,12 +100,14 @@ var _ boxmgr.ConfigUpdateListener = (*Manager)(nil)
 type Manager struct {
 	mu sync.RWMutex
 
-	baseCfg          *config.Config
-	boxMgr           *boxmgr.Manager
-	logger           Logger
-	httpClient       *http.Client // Custom HTTP client with connection pooling
-	store            store.Store  // Data store for persisting nodes
-	connectorRuntime ConnectorRuntime
+	baseCfg             *config.Config
+	boxMgr              *boxmgr.Manager
+	refreshReloader     refreshReloader
+	logger              Logger
+	httpClient          *http.Client // Custom HTTP client with connection pooling
+	store               store.Store  // Data store for persisting nodes
+	connectorRuntime    ConnectorRuntime
+	preferredIPSelector preferredIPRuntimeSelector
 
 	status           monitor.SubscriptionStatus
 	sourceSyncStatus monitor.SourceSyncStatus
@@ -125,14 +170,18 @@ func New(cfg *config.Config, boxMgr *boxmgr.Manager, opts ...Option) *Manager {
 	}
 
 	m := &Manager{
-		baseCfg:       cfg,
-		boxMgr:        boxMgr,
-		ctx:           ctx,
-		cancel:        cancel,
-		manualRefresh: make(chan struct{}, 1),
-		configChanged: make(chan struct{}, 1),
-		refreshDone:   make(chan struct{}),
-		httpClient:    httpClient,
+		baseCfg:             cfg,
+		boxMgr:              boxMgr,
+		ctx:                 ctx,
+		cancel:              cancel,
+		manualRefresh:       make(chan struct{}, 1),
+		configChanged:       make(chan struct{}, 1),
+		refreshDone:         make(chan struct{}),
+		httpClient:          httpClient,
+		preferredIPSelector: runPreferredIPSelection,
+	}
+	if boxMgr != nil {
+		m.refreshReloader = boxManagerRefreshReloader{manager: boxMgr}
 	}
 	for _, opt := range opts {
 		opt(m)
@@ -156,6 +205,11 @@ func (m *Manager) SetBoxManager(boxMgr *boxmgr.Manager) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.boxMgr = boxMgr
+	if boxMgr == nil {
+		m.refreshReloader = nil
+	} else {
+		m.refreshReloader = boxManagerRefreshReloader{manager: boxMgr}
+	}
 }
 
 // BootstrapRuntimeNodes materializes manifest/fallback runtime sources into the
@@ -178,17 +232,25 @@ func (m *Manager) BootstrapRuntimeNodes() error {
 
 	ephemeralNodes := append(subscriptionNodes, m.materializeProxySources(snapshot.EphemeralProxySources)...)
 	newCfg := m.createNewConfig(ephemeralNodes)
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if m.baseCfg == nil {
+	if newCfg == nil {
 		return fmt.Errorf("config is nil")
 	}
 
-	m.baseCfg.Nodes = newCfg.Nodes
-	m.status.NodeCount = len(m.baseCfg.Nodes)
+	m.mu.RLock()
+	baseCfg := m.baseCfg
+	m.mu.RUnlock()
+	if baseCfg == nil {
+		return fmt.Errorf("config is nil")
+	}
+
+	baseCfg.Lock()
+	baseCfg.Nodes = append([]config.NodeConfig(nil), newCfg.Nodes...)
+	baseCfg.Unlock()
+
+	m.mu.Lock()
+	m.status.NodeCount = len(newCfg.Nodes)
 	m.status.LastRefresh = time.Now()
+	m.mu.Unlock()
 
 	if err := m.syncRuntimeNodesToStore(ephemeralNodes); err != nil {
 		m.logger.Warnf("failed to sync bootstrap runtime nodes to store: %v", err)
@@ -232,13 +294,19 @@ func (m *Manager) Stop() {
 // It only requires that subscription URLs are configured.
 func (m *Manager) RefreshNow() error {
 	m.mu.RLock()
-	hasRefreshSources := hasRuntimeRefreshSources(m.baseCfg)
-	timeout := m.baseCfg.SubscriptionRefresh.Timeout
-	healthCheckTimeout := m.baseCfg.SubscriptionRefresh.HealthCheckTimeout
-	if m.baseCfg.SourceSync.RequestTimeout > timeout {
-		timeout = m.baseCfg.SourceSync.RequestTimeout
-	}
+	baseCfg := m.baseCfg
 	m.mu.RUnlock()
+	if baseCfg == nil {
+		return fmt.Errorf("配置未初始化")
+	}
+	baseCfg.RLock()
+	hasRefreshSources := hasRuntimeRefreshSources(baseCfg)
+	timeout := baseCfg.SubscriptionRefresh.Timeout
+	healthCheckTimeout := baseCfg.SubscriptionRefresh.HealthCheckTimeout
+	if baseCfg.SourceSync.RequestTimeout > timeout {
+		timeout = baseCfg.SourceSync.RequestTimeout
+	}
+	baseCfg.RUnlock()
 
 	if !hasRefreshSources {
 		return fmt.Errorf("没有配置可刷新的来源")
@@ -279,9 +347,14 @@ func (m *Manager) RefreshNow() error {
 func (m *Manager) Status() monitor.SubscriptionStatus {
 	m.mu.RLock()
 	status := m.status
-	status.Enabled = m.isEnabledLocked()
-	status.HasSubscriptions = hasRuntimeRefreshSources(m.baseCfg)
+	baseCfg := m.baseCfg
 	m.mu.RUnlock()
+	if baseCfg != nil {
+		baseCfg.RLock()
+		status.Enabled = isEnabledConfig(baseCfg)
+		status.HasSubscriptions = hasRuntimeRefreshSources(baseCfg)
+		baseCfg.RUnlock()
+	}
 
 	// Check if nodes have been modified since last refresh
 	status.NodesModified = m.CheckNodesModified()
@@ -371,22 +444,46 @@ func (m *Manager) refreshLoop() {
 // isEnabled checks if auto-refresh should run (acquires read lock).
 func (m *Manager) isEnabled() bool {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.isEnabledLocked()
+	baseCfg := m.baseCfg
+	m.mu.RUnlock()
+	if baseCfg == nil {
+		return false
+	}
+	baseCfg.RLock()
+	defer baseCfg.RUnlock()
+	return isEnabledConfig(baseCfg)
 }
 
 func (m *Manager) shouldStartImmediateRefresh() bool {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.isEnabledLocked() && m.status.LastRefresh.IsZero()
+	baseCfg := m.baseCfg
+	lastRefreshZero := m.status.LastRefresh.IsZero()
+	m.mu.RUnlock()
+	return lastRefreshZero && baseCfg != nil && func() bool {
+		baseCfg.RLock()
+		defer baseCfg.RUnlock()
+		return isEnabledConfig(baseCfg)
+	}()
 }
 
 // isEnabledLocked checks if auto-refresh should run (caller must hold mu).
 func (m *Manager) isEnabledLocked() bool {
-	localSubscriptionsEnabled := m.baseCfg.SubscriptionRefresh.Enabled && len(m.baseCfg.Subscriptions) > 0
-	localConnectorsEnabled := hasEnabledLocalConnectors(m.baseCfg.Connectors)
-	sourceSyncEnabled := m.baseCfg.SourceSync.Enabled &&
-		(strings.TrimSpace(m.baseCfg.SourceSync.ManifestURL) != "" || len(m.baseCfg.SourceSync.FallbackSubscriptions) > 0)
+	if m.baseCfg == nil {
+		return false
+	}
+	m.baseCfg.RLock()
+	defer m.baseCfg.RUnlock()
+	return isEnabledConfig(m.baseCfg)
+}
+
+func isEnabledConfig(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	localSubscriptionsEnabled := cfg.SubscriptionRefresh.Enabled && len(cfg.Subscriptions) > 0
+	localConnectorsEnabled := hasEnabledLocalConnectors(cfg.Connectors)
+	sourceSyncEnabled := cfg.SourceSync.Enabled &&
+		(strings.TrimSpace(cfg.SourceSync.ManifestURL) != "" || len(cfg.SourceSync.FallbackSubscriptions) > 0)
 	return localSubscriptionsEnabled || localConnectorsEnabled || sourceSyncEnabled
 }
 
@@ -399,6 +496,11 @@ func (m *Manager) currentInterval() time.Duration {
 
 // currentIntervalLocked returns the configured refresh interval (caller must hold mu).
 func (m *Manager) currentIntervalLocked() time.Duration {
+	if m.baseCfg == nil {
+		return time.Hour
+	}
+	m.baseCfg.RLock()
+	defer m.baseCfg.RUnlock()
 	intervals := make([]time.Duration, 0, 2)
 	if m.baseCfg.SubscriptionRefresh.Enabled && len(m.baseCfg.Subscriptions) > 0 {
 		intervals = append(intervals, m.baseCfg.SubscriptionRefresh.Interval)
@@ -447,33 +549,66 @@ func (m *Manager) doRefresh() {
 
 	m.logger.Infof("starting subscription refresh")
 
-	snapshot, err := m.buildActiveSourceSnapshot()
-	if err != nil {
-		m.logger.Errorf("build source snapshot failed: %v", err)
-		m.mu.Lock()
-		m.status.LastError = err.Error()
-		m.status.LastRefresh = time.Now()
-		m.mu.Unlock()
+	intentCtx := m.ctx
+	if intentCtx == nil {
+		intentCtx = context.Background()
+	}
+	m.mu.RLock()
+	reloader := m.refreshReloader
+	m.mu.RUnlock()
+	if reloader == nil {
+		err := errors.New("box manager is not configured")
+		m.recordRefreshError(err)
 		return
 	}
 
-	subscriptionNodes, err := m.fetchSubscriptionSources(snapshot.SubscriptionSources)
-	if err != nil {
-		m.logger.Errorf("fetch subscriptions failed: %v", err)
-		m.mu.Lock()
-		m.status.LastError = err.Error()
-		m.status.LastRefresh = time.Now()
-		m.mu.Unlock()
-		return
+	var snapshot activeSourceSnapshot
+	var ephemeralNodes []config.NodeConfig
+	var reloadIntent refreshReloadIntent
+	for attempt := 1; attempt <= 3; attempt++ {
+		configBefore := m.baseConfigSnapshot()
+		var err error
+		snapshot, err = m.buildActiveSourceSnapshot()
+		if err != nil {
+			m.logger.Errorf("build source snapshot failed: %v", err)
+			m.recordRefreshError(err)
+			return
+		}
+
+		subscriptionNodes, err := m.fetchSubscriptionSources(snapshot.SubscriptionSources)
+		if err != nil {
+			m.logger.Errorf("fetch subscriptions failed: %v", err)
+			m.recordRefreshError(err)
+			return
+		}
+
+		ephemeralNodes = append(subscriptionNodes, m.materializeProxySources(snapshot.EphemeralProxySources)...)
+
+		reloadIntent, err = reloader.BeginReloadIntent(intentCtx)
+		if err != nil {
+			m.logger.Errorf("begin reload intent failed: %v", err)
+			m.recordRefreshError(err)
+			return
+		}
+		if reflect.DeepEqual(configBefore, m.baseConfigSnapshot()) {
+			break
+		}
+		reloadIntent.End()
+		reloadIntent = nil
+		if attempt == 3 {
+			err = errors.New("configuration changed repeatedly during subscription refresh")
+			m.logger.Errorf("source snapshot did not stabilize: %v", err)
+			m.recordRefreshError(err)
+			return
+		}
+		m.logger.Warnf("configuration changed during source fetch; retrying with the latest snapshot")
 	}
+	defer reloadIntent.End()
 
-	ephemeralNodes := append(subscriptionNodes, m.materializeProxySources(snapshot.EphemeralProxySources)...)
-	m.boxMgr.SetEphemeralNodes(ephemeralNodes)
-
-	portMap := m.boxMgr.CurrentPortMap()
+	portMap := reloader.CurrentPortMap()
 	newCfg := m.createNewConfig(ephemeralNodes)
 
-	if err := m.boxMgr.ReloadWithPortMap(newCfg, portMap); err != nil {
+	if err := reloader.ReloadWithPortMapAndEphemeralNodes(newCfg, portMap, ephemeralNodes); err != nil {
 		m.logger.Errorf("reload failed: %v", err)
 		m.mu.Lock()
 		m.status.LastError = err.Error()
@@ -500,6 +635,13 @@ func (m *Manager) doRefresh() {
 	m.mu.Unlock()
 
 	m.logger.Infof("subscription refresh completed, %d total nodes active (%d runtime-generated)", totalNodes, len(ephemeralNodes))
+}
+
+func (m *Manager) recordRefreshError(err error) {
+	m.mu.Lock()
+	m.status.LastError = err.Error()
+	m.status.LastRefresh = time.Now()
+	m.mu.Unlock()
 }
 
 // OnConfigUpdate is called by boxmgr after a successful reload.
@@ -536,9 +678,7 @@ func (m *Manager) MarkNodesModified() {
 }
 
 func (m *Manager) buildActiveSourceSnapshot() (activeSourceSnapshot, error) {
-	m.mu.RLock()
-	cfg := m.baseCfg.Clone()
-	m.mu.RUnlock()
+	cfg := m.baseConfigSnapshot()
 
 	snapshot := activeSourceSnapshot{}
 	if cfg == nil {
@@ -959,32 +1099,41 @@ func cloneConnectorOptions(input map[string]any) map[string]any {
 
 func (m *Manager) currentFetchTimeout() time.Duration {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
-	timeout := m.baseCfg.SubscriptionRefresh.Timeout
+	baseCfg := m.baseCfg
+	m.mu.RUnlock()
+	if baseCfg == nil {
+		return 30 * time.Second
+	}
+	baseCfg.RLock()
+	defer baseCfg.RUnlock()
+	timeout := baseCfg.SubscriptionRefresh.Timeout
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	if m.baseCfg.SourceSync.RequestTimeout > timeout {
-		timeout = m.baseCfg.SourceSync.RequestTimeout
+	if baseCfg.SourceSync.RequestTimeout > timeout {
+		timeout = baseCfg.SourceSync.RequestTimeout
 	}
 	return timeout
 }
 
 func (m *Manager) currentSubscriptionCacheSettings() (string, time.Duration, time.Duration) {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
-	if m.baseCfg == nil {
+	baseCfg := m.baseCfg
+	m.mu.RUnlock()
+	if baseCfg == nil {
 		return "", time.Hour, 5 * time.Minute
 	}
-	localCacheTTL := m.baseCfg.SubscriptionRefresh.Interval
+	baseCfg.RLock()
+	defer baseCfg.RUnlock()
+	localCacheTTL := baseCfg.SubscriptionRefresh.Interval
 	if localCacheTTL <= 0 {
 		localCacheTTL = time.Hour
 	}
-	sourceSyncCacheTTL := m.baseCfg.SourceSync.RefreshInterval
+	sourceSyncCacheTTL := baseCfg.SourceSync.RefreshInterval
 	if sourceSyncCacheTTL <= 0 {
 		sourceSyncCacheTTL = 5 * time.Minute
 	}
-	return m.baseCfg.SubscriptionCacheDir(), localCacheTTL, sourceSyncCacheTTL
+	return baseCfg.SubscriptionCacheDir(), localCacheTTL, sourceSyncCacheTTL
 }
 
 // fetchSubscription fetches and parses a single subscription URL.
@@ -995,12 +1144,14 @@ func (m *Manager) fetchSubscription(subURL string, timeout time.Duration, cacheD
 // createNewConfig creates a new config with runtime-generated nodes while
 // preserving local inline/file/manual nodes.
 func (m *Manager) createNewConfig(ephemeralNodes []config.NodeConfig) *config.Config {
-	// Deep copy base config (uses Clone to avoid copying the mutex)
-	m.mu.RLock()
-	baseCfg := m.baseCfg
-	m.mu.RUnlock()
-
-	newCfg := baseCfg.Clone()
+	// Deep copy the source config under its own read lock. The subscription
+	// manager pointer can remain stable while the management API edits fields
+	// in place during a reload intent.
+	baseCfg := m.baseConfigSnapshot()
+	if baseCfg == nil {
+		return nil
+	}
+	newCfg := baseCfg
 
 	// Start with persistent local nodes only.
 	var allNodes []config.NodeConfig
@@ -1070,6 +1221,18 @@ func (m *Manager) createNewConfig(ephemeralNodes []config.NodeConfig) *config.Co
 
 	newCfg.Nodes = allNodes
 	return newCfg
+}
+
+func (m *Manager) baseConfigSnapshot() *config.Config {
+	m.mu.RLock()
+	baseCfg := m.baseCfg
+	m.mu.RUnlock()
+	if baseCfg == nil {
+		return nil
+	}
+	baseCfg.RLock()
+	defer baseCfg.RUnlock()
+	return baseCfg.Clone()
 }
 
 type defaultLogger struct{}

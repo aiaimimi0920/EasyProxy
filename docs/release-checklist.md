@@ -12,20 +12,50 @@ Use this checklist before publishing a tag or manually running the GHCR release 
    - `upstreams/misub/.env`
    - `workers/ech-workers-cloudflare/.dev.vars`
 3. Confirm `.gitignore` still excludes local runtime data, generated config, and Python caches.
+4. If Local Server is enabled, confirm:
+   - `mode: pool`
+   - `listener.protocol: mixed`
+   - no `extra_listeners`
+   - one non-placeholder `local_server.auth` username/password
+   - host/router firewall rules block WAN and guest VLAN access to `22323/29888`
 
 ## Validation
 
 Run or confirm the latest successful CI result for:
 
 ```powershell
-python -m unittest discover -s "tests" -p "test_*.py" -v
-python -m unittest discover -s "upstreams/aggregator/tests" -p "test_*.py" -v
-
 Set-Location service/base
-go test ./internal/monitor
-go test ./internal/boxmgr
-go test ./internal/config
+Get-ChildItem internal -Recurse -Filter *.go | ForEach-Object { gofmt -w $_.FullName }
+go test -count=1 -timeout=300s ./...
+go vet ./...
+
+Set-Location frontend
+npm ci
+npm run test
+npm run lint
+npm run build
+
+Set-Location ../../..
+python -m unittest discover -s "tests" -p "test_*.py" -v
+python scripts/validate-release-contract.py
+git diff --check
 ```
+
+If Local Server behavior, Profile APIs, embedded frontend assets, proxy
+authentication, or deployment topology changed, build a fresh image and run:
+
+```powershell
+$tag = "easyproxy/easy-proxy-monorepo-service:local-server-release-check"
+$validationId = "local-server-release-$(Get-Date -Format yyyyMMddHHmmss)"
+docker build -f deploy/service/base/Dockerfile -t $tag .
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File deploy/service/base/scripts/validate-local-server-device-profiles.ps1 `
+  -Image $tag -ValidationId $validationId -KeepArtifacts
+```
+
+Record the image ID and evidence directory. The validation must use disposable,
+label-scoped resources and must not start, stop, replace, or attach the legacy
+`easy-proxy` container.
 
 CI workflows:
 
@@ -46,6 +76,7 @@ CI workflows:
 4. Confirm required GitHub repository secrets are present for any Cloudflare deploy you plan to run. See [docs/github-secrets.md](/C:/Users/Public/nas_home/AI/GameEditor/EasyProxy/docs/github-secrets.md).
 5. Confirm the service/base R2 distribution secrets are present before running `.github/workflows/publish-service-base-config.yml`.
 6. If owner-only import-code artifacts are part of the release process, confirm `EASYPROXY_IMPORT_CODE_OWNER_PUBLIC_KEY` is configured and that the matching private key is still available locally.
+7. If the Local Server Web Console changed, confirm `/`, hashed assets, `#devices`, canonical login, Profile CRUD/CAS, and desktop/mobile layouts in a real browser against the final image.
 
 ## Upstream-Carried Modules
 
@@ -66,6 +97,7 @@ If release behavior changed, update the corresponding docs:
 - `deploy/upstreams/aggregator/README.md`
 - `deploy/upstreams/ech-workers/README.md`
 - `docs/service-base-config-distribution.md`
+- `docs/local-server.md`
 - `docs/release-notes-template.md`
 
 ## GitHub Actions Compatibility

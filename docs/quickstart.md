@@ -76,6 +76,43 @@ This renders:
 - `upstreams/misub/.env`
 - `workers/ech-workers-cloudflare/.dev.vars`
 
+## Local Server For LAN Devices
+
+To expose one authenticated HTTP/CONNECT/SOCKS5 entry to trusted LAN devices,
+set these root `config.yaml` values before rendering:
+
+```yaml
+serviceBase:
+  runtime:
+    mode: pool
+    listener:
+      address: 0.0.0.0
+      port: 22323
+      protocol: mixed
+    routing:
+      enabled: true
+      listen: ""
+    local_server:
+      enabled: true
+      listen: ""
+      auth:
+        username: easyproxy
+        password: "change_me_to_a_strong_shared_password"
+```
+
+Replace the `change_me...` value first; the root deployment gate rejects it as
+an unsafe placeholder.
+
+Then render and deploy with the normal root entrypoint. Configure each device
+as a standard proxy; no EasyProxy client daemon is needed. Use the base username
+for shared/IP-mapped selection or `easyproxy+dev=<device_id>` for stable explicit
+selection. Restrict host/router firewall access to trusted LAN subnets and block
+WAN/guest VLAN access to `22323` and `29888`.
+
+Read [`local-server.md`](./local-server.md) before enabling it. The guide covers
+independent Profile behavior, Docker/NAT source-IP limits, API revisions,
+credential rotation, client examples, and troubleshooting.
+
 ## Root Operator Entry Points
 
 Run these from the repository root:

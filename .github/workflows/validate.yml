@@ -38,7 +38,9 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: upstreams/misub/package-lock.json
+          cache-dependency-path: |
+            upstreams/misub/package-lock.json
+            service/base/frontend/package-lock.json
 
       - name: Install Python test dependencies
         shell: pwsh
@@ -68,29 +70,35 @@ jobs:
         run: |
           npm run test:run
 
-      - name: Run service/base monitor tests
+      - name: Run all service/base Go tests
         shell: pwsh
         working-directory: service/base
         run: |
-          go test ./internal/monitor
+          go test -count=1 ./...
 
-      - name: Run service/base boxmgr tests
+      - name: Install service/base frontend dependencies
         shell: pwsh
-        working-directory: service/base
+        working-directory: service/base/frontend
         run: |
-          go test ./internal/boxmgr
+          npm ci
 
-      - name: Run service/base config tests
+      - name: Test service/base frontend
         shell: pwsh
-        working-directory: service/base
+        working-directory: service/base/frontend
         run: |
-          go test ./internal/config
+          npm run test
 
-      - name: Run service/base subscription tests
+      - name: Lint service/base frontend
         shell: pwsh
-        working-directory: service/base
+        working-directory: service/base/frontend
         run: |
-          go test ./internal/subscription
+          npm run lint
+
+      - name: Build service/base frontend
+        shell: pwsh
+        working-directory: service/base/frontend
+        run: |
+          npm run build
 
       - name: Validate Release Contract
         shell: pwsh

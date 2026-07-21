@@ -88,14 +88,14 @@ export interface SettingsData {
   listener_port: number
   listener_protocol: string
   listener_username: string
-  listener_password: string
+  listener_password?: string
 
   // Multi-port
   multi_port_address: string
   multi_port_base_port: number
   multi_port_protocol: string
   multi_port_username: string
-  multi_port_password: string
+  multi_port_password?: string
 
   // Pool
   pool_mode: string
@@ -106,8 +106,13 @@ export interface SettingsData {
   management_enabled: boolean
   management_listen: string
   management_probe_target: string
-  management_password: string
+  management_password?: string
   management_health_check_interval: string
+
+  // Local Server compatibility view
+  local_server_enabled?: boolean
+  local_server_auth_username?: string
+  local_server_password_set?: boolean
 
   // Subscription refresh
   sub_refresh_enabled: boolean
@@ -144,9 +149,11 @@ export interface SettingsUpdateResponse {
 // ---- Auth types ----
 
 export interface AuthResponse {
-  message: string
+  message?: string
   token?: string
   no_password?: boolean
+  auth_mode?: 'legacy_password' | 'canonical_pair'
+  username_required?: boolean
 }
 
 export interface ErrorResponse {
@@ -257,3 +264,42 @@ export interface TrafficStreamEvent {
   sampled_at: string
   nodes: TrafficStreamNode[]
 }
+
+// ---- Smart Routing (smart dispatch entry) types ----
+
+export interface RoutingStatus {
+  enabled: boolean
+  listen?: string
+  default_strategy?: string
+  final_policy?: string
+  rule_count: number
+  sticky_buckets?: Record<string, string>
+  sticky_sessions?: Record<string, string>
+}
+
+export interface RoutingProviderConfig {
+  url: string
+  policy: string
+  behavior: string
+  interval: string
+}
+
+export interface RoutingConfig {
+  enabled: boolean
+  listen: string
+  default_strategy: string
+  use_default_rules: boolean
+  final_policy: string
+  rules: string[]
+  rule_providers: RoutingProviderConfig[]
+  long_lived_min_uptime: string
+  long_lived_min_success_rate: number
+  session_ttl: string
+}
+
+export interface RoutingConfigUpdateResponse {
+  message: string
+  need_reload: boolean
+}
+
+export * from './localServer'

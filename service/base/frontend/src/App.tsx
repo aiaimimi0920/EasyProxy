@@ -1,14 +1,18 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import MonitorPanel from './components/MonitorPanel'
 import ManagePanel from './components/ManagePanel'
+import RoutingPanel from './components/RoutingPanel'
+import DevicesPanel from './components/DevicesPanel'
 import DebugPanel from './components/DebugPanel'
 import SettingsPanel from './components/SettingsPanel'
 import LoginPage from './components/LoginPage'
 import { checkAuth, getToken, logout } from './api/client'
+import { requestAppNavigation } from './hooks/useUnsavedChangesGuard'
+import type { AuthResponse } from './types'
 import packageJson from '../package.json'
 
 type AuthState = 'loading' | 'need_login' | 'authenticated'
-type TabId = 'monitor' | 'manage' | 'debug' | 'settings'
+type TabId = 'monitor' | 'manage' | 'routing' | 'devices' | 'debug' | 'settings'
 
 const ALL_THEMES = [
   'light', 'dark', 'cupcake', 'bumblebee', 'emerald', 'corporate',
@@ -41,6 +45,26 @@ const MENU_ITEMS: { id: TabId; label: string; icon: React.ReactNode; desc: strin
     ),
   },
   {
+    id: 'routing',
+    label: '智能分流',
+    desc: '规则与策略',
+    icon: (
+      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+      </svg>
+    ),
+  },
+  {
+    id: 'devices',
+    label: '设备策略',
+    desc: '设备与映射',
+    icon: (
+      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 3h6a2 2 0 012 2v2h2a2 2 0 012 2v8a2 2 0 01-2 2h-2v1a1 1 0 11-2 0v-1H9v1a1 1 0 11-2 0v-1H5a2 2 0 01-2-2V9a2 2 0 012-2h2V5a2 2 0 012-2zM7 11h10M7 15h10" />
+      </svg>
+    ),
+  },
+  {
     id: 'debug',
     label: '调试面板',
     desc: '运行时信息',
@@ -63,7 +87,7 @@ const MENU_ITEMS: { id: TabId; label: string; icon: React.ReactNode; desc: strin
   },
 ]
 
-const VALID_TABS: TabId[] = ['monitor', 'manage', 'debug', 'settings']
+const VALID_TABS: TabId[] = ['monitor', 'manage', 'routing', 'devices', 'debug', 'settings']
 const THEME_STORAGE_KEY = 'ep-theme'
 
 const APP_VERSION = `v${packageJson.version}`
@@ -113,13 +137,25 @@ function getTabFromHash(): TabId {
 
 function App() {
   const [activeTab, setActiveTab] = useState<TabId>(getTabFromHash)
+  const acceptedHashRef = useRef(window.location.hash)
   const [authState, setAuthState] = useState<AuthState>('loading')
+  const [authInfo, setAuthInfo] = useState<AuthResponse | null>(null)
   const [theme, setTheme] = useState(getInitialTheme)
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
   // Sync hash → state on browser back/forward
   useEffect(() => {
-    const onHashChange = () => setActiveTab(getTabFromHash())
+    const onHashChange = () => {
+      const nextHash = window.location.hash
+      if (nextHash === acceptedHashRef.current) return
+      if (!requestAppNavigation()) {
+        window.location.hash = acceptedHashRef.current
+        return
+      }
+      acceptedHashRef.current = nextHash
+      const nextTab = getTabFromHash()
+      setActiveTab(nextTab)
+    }
     window.addEventListener('hashchange', onHashChange)
     return () => window.removeEventListener('hashchange', onHashChange)
   }, [])
@@ -129,43 +165,53 @@ function App() {
     localStorage.setItem(THEME_STORAGE_KEY, theme)
   }, [theme])
 
-  useEffect(() => {
-    const doCheck = async () => {
-      try {
-        const res = await checkAuth()
-        if (res.no_password) {
-          setAuthState('authenticated')
-        } else if (getToken()) {
-          setAuthState('authenticated')
-        } else {
-          setAuthState('need_login')
-        }
-      } catch {
-        if (getToken()) {
-          setAuthState('authenticated')
-        } else {
-          setAuthState('need_login')
-        }
+  const discoverAuth = useCallback(async (allowStoredToken: boolean) => {
+    try {
+      const res = await checkAuth()
+      setAuthInfo(res)
+      if (res.no_password || (allowStoredToken && getToken())) {
+        setAuthState('authenticated')
+      } else {
+        setAuthState('need_login')
+      }
+    } catch {
+      setAuthInfo(null)
+      if (allowStoredToken && getToken()) {
+        setAuthState('authenticated')
+      } else {
+        setAuthState('need_login')
       }
     }
-    doCheck()
   }, [])
 
   useEffect(() => {
-    const handler = () => setAuthState('need_login')
+    void Promise.resolve().then(() => discoverAuth(true))
+  }, [discoverAuth])
+
+  const rediscoverLoginMode = useCallback(() => {
+    setAuthInfo(null)
+    setAuthState('loading')
+    void discoverAuth(false)
+  }, [discoverAuth])
+
+  useEffect(() => {
+    const handler = () => rediscoverLoginMode()
     window.addEventListener('auth:unauthorized', handler)
     return () => window.removeEventListener('auth:unauthorized', handler)
-  }, [])
+  }, [rediscoverLoginMode])
 
   const handleLogin = useCallback(() => setAuthState('authenticated'), [])
   const handleLogout = useCallback(() => {
     logout()
-    setAuthState('need_login')
-  }, [])
+    rediscoverLoginMode()
+  }, [rediscoverLoginMode])
 
   const handleTabClick = useCallback((tab: TabId) => {
+    if (!requestAppNavigation()) return
+    const nextHash = `#${tab}`
+    acceptedHashRef.current = nextHash
     setActiveTab(tab)
-    window.location.hash = tab
+    if (window.location.hash !== nextHash) window.location.hash = tab
     setSidebarOpen(false)
   }, [])
 
@@ -173,6 +219,8 @@ function App() {
     switch (activeTab) {
       case 'monitor': return <MonitorPanel />
       case 'manage': return <ManagePanel />
+      case 'routing': return <RoutingPanel />
+      case 'devices': return <DevicesPanel />
       case 'debug': return <DebugPanel />
       case 'settings': return <SettingsPanel />
       default: return <MonitorPanel />
@@ -189,7 +237,7 @@ function App() {
   }
 
   if (authState === 'need_login') {
-    return <LoginPage onLogin={handleLogin} />
+    return <LoginPage authMode={authInfo?.auth_mode ?? 'legacy_password'} onLogin={handleLogin} />
   }
 
   return (

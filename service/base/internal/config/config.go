@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -48,8 +49,66 @@ type Config struct {
 	SkipCertVerify      bool                      `yaml:"skip_cert_verify"` // 全局跳过 SSL 证书验证
 	DatabasePath        string                    `yaml:"database_path"`    // SQLite 数据库路径，默认 data/data.db
 	ExtraListeners      []ExtraListenerConfig     `yaml:"extra_listeners"`  // 额外监听端口（不同选择策略）
+	LocalServer         LocalServerConfig         `yaml:"local_server"`     // 局域网本地服务器统一入口
+	Routing             RoutingConfig             `yaml:"routing"`          // 智能分流 + 多策略选节点入口
 
 	filePath string `yaml:"-"` // 配置文件路径，用于保存
+}
+
+// RoutingConfig controls the smart dispatch entry: rule-based traffic splitting
+// (DIRECT vs PROXY) plus strategy-based node selection (stable / session /
+// attribute filters). When disabled the runtime behaves exactly as before: the
+// plain pool inbound serves all traffic with no splitting.
+type RoutingConfig struct {
+	Enabled         bool                    `yaml:"enabled"`           // 是否启用智能分流入口（默认关闭，保持旧行为）
+	Listen          string                  `yaml:"listen"`            // 智能入口监听地址，默认接管 listener 的 host:port
+	DefaultStrategy string                  `yaml:"default_strategy"`  // 默认入口策略：stable / session / auto（默认 stable）
+	UseDefaultRules *bool                   `yaml:"use_default_rules"` // 是否附加内置“中国直连”默认规则集（默认 true）
+	FinalPolicy     string                  `yaml:"final_policy"`      // 兜底策略：DIRECT / PROXY（默认 PROXY）
+	Rules           []string                `yaml:"rules"`             // 自定义分流规则，按顺序优先于默认集
+	RuleProviders   []RuleProvider          `yaml:"rule_providers"`    // 远程规则集
+	NodeFilter      RoutingNodeFilterConfig `yaml:"node_filter"`       // 节点筛选条件
+	LongLived       LongLivedConfig         `yaml:"long_lived"`        // 长效节点判定阈值
+	Session         SessionConfig           `yaml:"session"`           // 会话粘性参数
+}
+
+type LocalServerConfig struct {
+	Enabled              bool                  `yaml:"enabled"`
+	Listen               string                `yaml:"listen"`
+	Auth                 LocalServerAuthConfig `yaml:"auth"`
+	SharedRevision       int64                 `yaml:"shared_revision"`
+	CredentialGeneration uint64                `yaml:"credential_generation"`
+}
+
+type LocalServerAuthConfig struct {
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
+}
+
+type RoutingNodeFilterConfig struct {
+	Countries []string `yaml:"countries"`
+	Regions   []string `yaml:"regions"`
+	LongLived *bool    `yaml:"long_lived"`
+}
+
+// RuleProvider describes a remote rule list applied with a single policy.
+type RuleProvider struct {
+	URL      string        `yaml:"url"`
+	Policy   string        `yaml:"policy"`   // DIRECT / PROXY
+	Behavior string        `yaml:"behavior"` // domain / ipcidr / classical（默认 domain）
+	Interval time.Duration `yaml:"interval"` // 刷新间隔（默认 24h）
+}
+
+// LongLivedConfig sets when a node is considered "long-lived" (stable enough for
+// anti-ban stable strategy). Zero values fall back to defaults (2h / 0.9).
+type LongLivedConfig struct {
+	MinUptime      time.Duration `yaml:"min_uptime"`       // 最小在线时长（默认 2h）
+	MinSuccessRate float64       `yaml:"min_success_rate"` // 最小成功率 0-1（默认 0.9）
+}
+
+// SessionConfig controls session stickiness for the session strategy.
+type SessionConfig struct {
+	TTL time.Duration `yaml:"ttl"` // 会话空闲过期时间（默认 10m）
 }
 
 // ExtraListenerConfig defines an additional listener with its own pool selection mode.
@@ -525,6 +584,30 @@ func (c *Config) applyDefaults() error {
 		c.SourceSync.ConnectorRuntime.PreferredIP.IPFilePath = "/usr/local/share/cfst/ip.txt"
 	}
 
+	// Routing / smart-dispatch defaults. The feature is opt-in (Enabled defaults
+	// to false) so existing deployments keep their current behaviour untouched.
+	if strings.TrimSpace(c.Routing.DefaultStrategy) == "" {
+		c.Routing.DefaultStrategy = "stable"
+	}
+	if c.Routing.LongLived.MinUptime <= 0 {
+		c.Routing.LongLived.MinUptime = 2 * time.Hour
+	}
+	if c.Routing.LongLived.MinSuccessRate <= 0 {
+		c.Routing.LongLived.MinSuccessRate = 0.9
+	}
+	if c.Routing.Session.TTL <= 0 {
+		c.Routing.Session.TTL = 10 * time.Minute
+	}
+	if c.Routing.UseDefaultRules == nil {
+		useDefault := true
+		c.Routing.UseDefaultRules = &useDefault
+	}
+	for idx := range c.Routing.RuleProviders {
+		if c.Routing.RuleProviders[idx].Interval <= 0 {
+			c.Routing.RuleProviders[idx].Interval = 24 * time.Hour
+		}
+	}
+
 	if c.LogLevel == "" {
 		c.LogLevel = "info"
 	}
@@ -538,6 +621,9 @@ func (c *Config) applyDefaults() error {
 // SQLite Store and loaded by the caller (app.go / boxmgr).
 func (c *Config) normalizeInternal(skipSubscriptionFetch bool) error {
 	if err := c.applyDefaults(); err != nil {
+		return err
+	}
+	if err := c.normalizeLocalServer(); err != nil {
 		return err
 	}
 
@@ -693,6 +779,11 @@ func (c *Config) normalizeInternal(skipSubscriptionFetch bool) error {
 // BuildPortMap creates a mapping from node URI to port for existing nodes.
 // This is used to preserve port assignments when reloading configuration.
 func (c *Config) BuildPortMap() map[string]uint16 {
+	if c == nil {
+		return nil
+	}
+	c.RLock()
+	defer c.RUnlock()
 	portMap := make(map[string]uint16)
 	for _, node := range c.Nodes {
 		if node.Port > 0 {
@@ -706,6 +797,9 @@ func (c *Config) BuildPortMap() map[string]uint16 {
 // for nodes that exist in the provided port map.
 func (c *Config) NormalizeWithPortMap(portMap map[string]uint16) error {
 	if err := c.applyDefaults(); err != nil {
+		return err
+	}
+	if err := c.normalizeLocalServer(); err != nil {
 		return err
 	}
 
@@ -787,12 +881,178 @@ func (c *Config) NormalizeWithPortMap(portMap map[string]uint16) error {
 	return nil
 }
 
+func (c *Config) normalizeLocalServer() error {
+	if c == nil || !c.LocalServer.Enabled {
+		return nil
+	}
+	if c.Mode != "pool" {
+		return fmt.Errorf("local_server.enabled requires mode %q", "pool")
+	}
+	if c.Listener.Protocol != InboundProtocolMixed {
+		return fmt.Errorf("local_server.enabled requires listener.protocol %q", InboundProtocolMixed)
+	}
+	if len(c.ExtraListeners) > 0 {
+		return errors.New("local_server.enabled does not support extra_listeners")
+	}
+
+	localListen := strings.TrimSpace(c.LocalServer.Listen)
+	routingListen := strings.TrimSpace(c.Routing.Listen)
+	if localListen != "" && routingListen != "" && localListen != routingListen {
+		return fmt.Errorf("local_server.listen %q conflicts with routing.listen %q", localListen, routingListen)
+	}
+
+	if c.LocalServer.SharedRevision == 0 {
+		c.LocalServer.SharedRevision = 1
+	}
+	if c.LocalServer.CredentialGeneration == 0 {
+		c.LocalServer.CredentialGeneration = 1
+	}
+
+	username := strings.TrimSpace(c.LocalServer.Auth.Username)
+	if username != "" && !validIdentityToken(username) {
+		return fmt.Errorf("local_server.auth.username %q is invalid", c.LocalServer.Auth.Username)
+	}
+
+	password := c.LocalServer.Auth.Password
+	migratedPassword := false
+	if password == "" {
+		listenerPassword := c.Listener.Password
+		managementPassword := c.Management.Password
+		switch {
+		case listenerPassword != "" && managementPassword != "" && listenerPassword != managementPassword:
+			return errors.New("local_server.auth.password is missing and legacy listener/management passwords conflict")
+		case listenerPassword != "":
+			password = listenerPassword
+		case managementPassword != "":
+			password = managementPassword
+		default:
+			return errors.New("local_server.auth.password is required when local_server.enabled=true")
+		}
+		migratedPassword = true
+	}
+	if len(password) == 0 {
+		return errors.New("local_server.auth.password is required when local_server.enabled=true")
+	}
+	if strings.IndexByte(password, 0) >= 0 {
+		return errors.New("local_server.auth.password must not contain NUL")
+	}
+	if len(password) > 256 {
+		return errors.New("local_server.auth.password must be at most 256 bytes")
+	}
+
+	if username == "" {
+		listenerUsername := strings.TrimSpace(c.Listener.Username)
+		if validIdentityToken(listenerUsername) {
+			username = listenerUsername
+		} else {
+			username = "easyproxy"
+		}
+	}
+
+	c.LocalServer.Auth.Username = username
+	c.LocalServer.Auth.Password = password
+	if migratedPassword && c.LocalServer.CredentialGeneration < 2 {
+		c.LocalServer.CredentialGeneration = 2
+	}
+
+	c.Listener.Username = username
+	c.Listener.Password = password
+	c.Management.Password = password
+	return nil
+}
+
 // ManagementEnabled reports whether the monitoring endpoint should run.
 func (c *Config) ManagementEnabled() bool {
 	if c.Management.Enabled == nil {
 		return true
 	}
 	return *c.Management.Enabled
+}
+
+// RoutingUseDefaultRules reports whether the built-in default rule set should be
+// appended after user rules. Defaults to true when unset.
+func (c *Config) RoutingUseDefaultRules() bool {
+	if c == nil || c.Routing.UseDefaultRules == nil {
+		return true
+	}
+	return *c.Routing.UseDefaultRules
+}
+
+// DispatchListen returns the host:port the smart dispatch entry should bind when
+// routing is enabled. An explicit routing.listen wins; otherwise the dispatcher
+// takes over the plain listener's host:port (route A — it becomes the default
+// proxy entry). This is the single source of truth shared by the builder (to
+// decide whether to drop the pool inbound) and app wiring (to start the server).
+func (c *Config) DispatchListen() string {
+	if c == nil {
+		return ""
+	}
+	if c != nil && c.LocalServer.Enabled {
+		if listen := strings.TrimSpace(c.LocalServer.Listen); listen != "" {
+			return listen
+		}
+	}
+	return c.legacyDispatchListen()
+}
+
+// RoutingTakesOverPoolInbound reports whether the smart dispatch entry binds the
+// same host:port as the plain pool inbound. When true the builder must omit the
+// pool inbound so the dispatcher can bind that port (the pool outbound is still
+// built and dialed directly by the dispatcher). When false (routing disabled, or
+// routing.listen points at a different port — route B) both entries coexist.
+func (c *Config) RoutingTakesOverPoolInbound() bool {
+	if c == nil || !c.Routing.Enabled {
+		return false
+	}
+	poolInbound := net.JoinHostPort(normalizeHostForCompare(c.Listener.Address), strconv.Itoa(int(c.Listener.Port)))
+	dispatch := c.legacyDispatchListen()
+	if host, port, err := net.SplitHostPort(dispatch); err == nil {
+		dispatch = net.JoinHostPort(normalizeHostForCompare(host), port)
+	}
+	return dispatch == poolInbound
+}
+
+func (c *Config) DispatchOwnsPrimaryInbound() bool {
+	if c == nil {
+		return false
+	}
+	if c.LocalServer.Enabled {
+		return true
+	}
+	return c.RoutingTakesOverPoolInbound()
+}
+
+func (c *Config) DispatchEnabled() bool {
+	return c != nil && (c.LocalServer.Enabled || c.Routing.Enabled)
+}
+
+func (c *Config) legacyDispatchListen() string {
+	host := "0.0.0.0"
+	port := uint16(22323)
+	if c != nil {
+		if listen := strings.TrimSpace(c.Routing.Listen); listen != "" {
+			return listen
+		}
+		if addr := strings.TrimSpace(c.Listener.Address); addr != "" {
+			host = addr
+		}
+		if c.Listener.Port != 0 {
+			port = c.Listener.Port
+		}
+	}
+	return net.JoinHostPort(host, strconv.Itoa(int(port)))
+}
+
+// normalizeHostForCompare canonicalizes bind hosts so that equivalent forms
+// ("", "0.0.0.0", "::") compare equal when deciding port takeover.
+func normalizeHostForCompare(host string) string {
+	h := strings.TrimSpace(host)
+	switch h {
+	case "", "0.0.0.0", "::", "[::]":
+		return "0.0.0.0"
+	default:
+		return h
+	}
 }
 
 // ConnectorRuntimeEnabled reports whether manifest connectors should be executed locally.
@@ -1574,35 +1834,165 @@ func (c *Config) Clone() *Config {
 	if c == nil {
 		return nil
 	}
-	cloned := *c
-	cloned.mu = sync.RWMutex{} // fresh mutex for the clone
+	cloned := Config{
+		Mode:                c.Mode,
+		Listener:            c.Listener,
+		MultiPort:           c.MultiPort,
+		Pool:                c.Pool,
+		Management:          c.Management,
+		SubscriptionRefresh: c.SubscriptionRefresh,
+		SourceSync:          c.SourceSync,
+		GeoIP:               c.GeoIP,
+		Nodes:               cloneConfigSlice(c.Nodes),
+		Connectors:          cloneConfigSlice(c.Connectors),
+		NodesFile:           c.NodesFile,
+		Subscriptions:       cloneConfigSlice(c.Subscriptions),
+		ExternalIP:          c.ExternalIP,
+		LogLevel:            c.LogLevel,
+		SkipCertVerify:      c.SkipCertVerify,
+		DatabasePath:        c.DatabasePath,
+		ExtraListeners:      cloneConfigSlice(c.ExtraListeners),
+		LocalServer:         c.LocalServer,
+		Routing:             c.Routing,
+		filePath:            c.filePath,
+	}
 
-	// Deep copy slices
-	if c.Nodes != nil {
-		cloned.Nodes = make([]NodeConfig, len(c.Nodes))
-		copy(cloned.Nodes, c.Nodes)
-	}
-	if c.Connectors != nil {
-		cloned.Connectors = make([]ConnectorSourceConfig, len(c.Connectors))
-		for idx, connector := range c.Connectors {
-			cloned.Connectors[idx] = connector
-			if connector.ConnectorConfig != nil {
-				cloned.Connectors[idx].ConnectorConfig = make(map[string]any, len(connector.ConnectorConfig))
-				for key, value := range connector.ConnectorConfig {
-					cloned.Connectors[idx].ConnectorConfig[key] = value
-				}
-			}
-		}
-	}
-	if c.Subscriptions != nil {
-		cloned.Subscriptions = make([]string, len(c.Subscriptions))
-		copy(cloned.Subscriptions, c.Subscriptions)
-	}
-	if c.SourceSync.FallbackSubscriptions != nil {
-		cloned.SourceSync.FallbackSubscriptions = make([]string, len(c.SourceSync.FallbackSubscriptions))
-		copy(cloned.SourceSync.FallbackSubscriptions, c.SourceSync.FallbackSubscriptions)
+	cloned.Management.Enabled = cloneConfigBool(c.Management.Enabled)
+	cloned.Management.ProbeTargets = cloneConfigSlice(c.Management.ProbeTargets)
+	cloned.Routing.UseDefaultRules = cloneConfigBool(c.Routing.UseDefaultRules)
+	cloned.Routing.Rules = cloneConfigSlice(c.Routing.Rules)
+	cloned.Routing.RuleProviders = cloneConfigSlice(c.Routing.RuleProviders)
+	cloned.Routing.NodeFilter.Countries = cloneConfigSlice(c.Routing.NodeFilter.Countries)
+	cloned.Routing.NodeFilter.Regions = cloneConfigSlice(c.Routing.NodeFilter.Regions)
+	cloned.Routing.NodeFilter.LongLived = cloneConfigBool(c.Routing.NodeFilter.LongLived)
+	cloned.SourceSync.FallbackSubscriptions = cloneConfigSlice(c.SourceSync.FallbackSubscriptions)
+	cloned.SourceSync.ConnectorRuntime.Enabled = cloneConfigBool(c.SourceSync.ConnectorRuntime.Enabled)
+	for idx := range cloned.Connectors {
+		cloned.Connectors[idx].ConnectorConfig = cloneConfigStringMap(c.Connectors[idx].ConnectorConfig)
 	}
 	return &cloned
+}
+
+func cloneConfigSlice[T any](values []T) []T {
+	if values == nil {
+		return nil
+	}
+	cloned := make([]T, len(values))
+	copy(cloned, values)
+	return cloned
+}
+
+func cloneConfigBool(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+func cloneConfigStringMap(values map[string]any) map[string]any {
+	if values == nil {
+		return nil
+	}
+	return cloneConfigValue(values).(map[string]any)
+}
+
+func cloneConfigValue(value any) any {
+	if value == nil {
+		return nil
+	}
+	cloned := cloneConfigReflectValue(reflect.ValueOf(value), make(map[configCloneVisit]reflect.Value))
+	return cloned.Interface()
+}
+
+type configCloneVisit struct {
+	typ      reflect.Type
+	kind     reflect.Kind
+	pointer  uintptr
+	length   int
+	capacity int
+}
+
+func cloneConfigReflectValue(value reflect.Value, visited map[configCloneVisit]reflect.Value) reflect.Value {
+	if !value.IsValid() {
+		return value
+	}
+
+	switch value.Kind() {
+	case reflect.Interface:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		cloned := reflect.New(value.Type()).Elem()
+		cloned.Set(cloneConfigReflectValue(value.Elem(), visited))
+		return cloned
+	case reflect.Map:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		visit := configCloneVisit{
+			typ:     value.Type(),
+			kind:    value.Kind(),
+			pointer: value.Pointer(),
+		}
+		if cloned, ok := visited[visit]; ok {
+			return cloned
+		}
+		cloned := reflect.MakeMapWithSize(value.Type(), value.Len())
+		visited[visit] = cloned
+		iter := value.MapRange()
+		for iter.Next() {
+			cloned.SetMapIndex(iter.Key(), cloneConfigReflectValue(iter.Value(), visited))
+		}
+		return cloned
+	case reflect.Slice:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		visit := configCloneVisit{
+			typ:      value.Type(),
+			kind:     value.Kind(),
+			pointer:  value.Pointer(),
+			length:   value.Len(),
+			capacity: value.Cap(),
+		}
+		if cloned, ok := visited[visit]; ok {
+			return cloned
+		}
+		cloned := reflect.MakeSlice(value.Type(), value.Len(), value.Cap())
+		visited[visit] = cloned
+		for idx := 0; idx < value.Len(); idx++ {
+			cloned.Index(idx).Set(cloneConfigReflectValue(value.Index(idx), visited))
+		}
+		return cloned
+	case reflect.Array:
+		cloned := reflect.New(value.Type()).Elem()
+		for idx := 0; idx < value.Len(); idx++ {
+			cloned.Index(idx).Set(cloneConfigReflectValue(value.Index(idx), visited))
+		}
+		return cloned
+	case reflect.Pointer:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		if value.Elem().Kind() == reflect.Struct {
+			return value
+		}
+		visit := configCloneVisit{
+			typ:     value.Type(),
+			kind:    value.Kind(),
+			pointer: value.Pointer(),
+		}
+		if cloned, ok := visited[visit]; ok {
+			return cloned
+		}
+		cloned := reflect.New(value.Type().Elem())
+		visited[visit] = cloned
+		cloned.Elem().Set(cloneConfigReflectValue(value.Elem(), visited))
+		return cloned
+	default:
+		return value
+	}
 }
 
 // FilePath returns the config file path.
@@ -1691,6 +2081,12 @@ func (c *Config) SaveSettings() error {
 
 	// GeoIP
 	saveCfg.GeoIP = c.GeoIP
+
+	// Local Server
+	saveCfg.LocalServer = c.LocalServer
+
+	// Routing (smart dispatch entry)
+	saveCfg.Routing = c.Routing
 
 	// Connectors
 	saveCfg.Connectors = c.Connectors

@@ -2,6 +2,8 @@ package monitor
 
 import (
 	"bytes"
+	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,12 +12,783 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"easy_proxies/internal/config"
+	"easy_proxies/internal/profile"
+	"easy_proxies/internal/store"
 )
+
+type recordingRoutingController struct {
+	applyCalls  int
+	applyResult bool
+	lastConfig  *config.Config
+}
+
+type localServerMonitorHarness struct {
+	server   *Server
+	profiles *profile.Manager
+	config   *config.Config
+	store    store.Store
+}
+
+type jsonTestResponse struct {
+	Code int
+	Body map[string]any
+}
+
+func newLocalServerMonitor(t *testing.T, username, password string, generation uint64) localServerMonitorHarness {
+	return newLocalServerMonitorWithEnabled(t, username, password, generation, true)
+}
+
+func newLocalServerMonitorWithEnabled(t *testing.T, username, password string, generation uint64, enabled bool) localServerMonitorHarness {
+	return newLocalServerMonitorWithStoreDecorator(t, username, password, generation, enabled, nil)
+}
+
+func newLocalServerMonitorWithStoreDecorator(t *testing.T, username, password string, generation uint64, enabled bool, decorate func(store.Store) store.Store) localServerMonitorHarness {
+	t.Helper()
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte("mode: pool\nlistener:\n  address: 127.0.0.1\n  port: 22323\n  protocol: mixed\nmanagement: {}\nrouting: {}\nlocal_server: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{
+		Mode:       "pool",
+		Listener:   config.ListenerConfig{Address: "127.0.0.1", Port: 22323, Protocol: config.InboundProtocolMixed, Username: username, Password: password},
+		Management: config.ManagementConfig{Password: password},
+		Routing:    config.RoutingConfig{Enabled: true, FinalPolicy: "PROXY"},
+		LocalServer: config.LocalServerConfig{
+			Enabled:              enabled,
+			SharedRevision:       1,
+			CredentialGeneration: generation,
+			Auth:                 config.LocalServerAuthConfig{Username: username, Password: password},
+		},
+	}
+	cfg.SetFilePath(configPath)
+	profileStore := st
+	if decorate != nil {
+		profileStore = decorate(st)
+	}
+	profiles, err := profile.NewManager(ctx, cfg, profileStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(profiles.Close)
+	monitorManager, err := NewManager(Config{Password: password})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(monitorManager.Stop)
+	server := NewServer(Config{Password: password, ProxyUsername: username, ProxyPassword: password}, monitorManager, nil)
+	server.SetConfig(cfg)
+	server.SetStore(st)
+	server.SetProfileManager(profiles)
+	return localServerMonitorHarness{server: server, profiles: profiles, config: cfg, store: st}
+}
+
+func performJSONRequest(t *testing.T, server *Server, method, path string, body any, headers http.Header) jsonTestResponse {
+	t.Helper()
+	var reader io.Reader
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reader = bytes.NewReader(encoded)
+	}
+	req := httptest.NewRequest(method, path, reader)
+	for key, values := range headers {
+		for _, value := range values {
+			req.Header.Add(key, value)
+		}
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	rr := httptest.NewRecorder()
+	server.handler.ServeHTTP(rr, req)
+	result := jsonTestResponse{Code: rr.Code, Body: map[string]any{}}
+	if rr.Body.Len() != 0 {
+		if err := json.Unmarshal(rr.Body.Bytes(), &result.Body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return result
+}
+
+func TestLocalServerAuthRequiresCanonicalPair(t *testing.T) {
+	harness := newLocalServerMonitor(t, "easyproxy", "secret", 4)
+	status := performJSONRequest(t, harness.server, http.MethodGet, "/api/auth", nil, nil)
+	if status.Body["auth_mode"] != "canonical_pair" || status.Body["username_required"] != true {
+		t.Fatalf("auth status = %#v", status.Body)
+	}
+	login := performJSONRequest(t, harness.server, http.MethodPost, "/api/auth", map[string]any{
+		"username": "easyproxy", "password": "secret",
+	}, nil)
+	if login.Code != http.StatusOK || login.Body["token"] == "" {
+		t.Fatalf("login = %#v", login)
+	}
+}
+
+func TestLocalServerManagementAcceptsCanonicalBasicAuth(t *testing.T) {
+	harness := newLocalServerMonitor(t, "easyproxy", "secret", 1)
+	headers := make(http.Header)
+	headers.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("easyproxy:secret")))
+	response := performJSONRequest(t, harness.server, http.MethodGet, "/api/settings", nil, headers)
+	if response.Code != http.StatusOK {
+		t.Fatalf("Basic management auth status = %d body=%#v", response.Code, response.Body)
+	}
+}
+
+func TestManagementDoesNotAcceptProxyAuthorization(t *testing.T) {
+	harness := newLocalServerMonitor(t, "easyproxy", "secret", 1)
+	headers := make(http.Header)
+	headers.Set("Proxy-Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("easyproxy:secret")))
+	response := performJSONRequest(t, harness.server, http.MethodGet, "/api/settings", nil, headers)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("Proxy-Authorization status = %d", response.Code)
+	}
+}
+
+func TestSessionGenerationInvalidatesOldSession(t *testing.T) {
+	harness := newLocalServerMonitor(t, "easyproxy", "old", 2)
+	session, err := harness.server.createSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	harness.profiles.PublishCredentials(profile.CredentialSnapshot{Username: "easyproxy", Password: "new", Generation: 3})
+	if harness.server.validateSession(session.Token) {
+		t.Fatal("old-generation session remained valid")
+	}
+}
+
+func TestLocalServerConfigDoesNotReturnPassword(t *testing.T) {
+	harness := newLocalServerMonitor(t, "easyproxy", "secret", 1)
+	headers := make(http.Header)
+	headers.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("easyproxy:secret")))
+	response := performJSONRequest(t, harness.server, http.MethodGet, "/api/local-server/config", nil, headers)
+	if response.Code != http.StatusOK || response.Body["auth_username"] != "easyproxy" || response.Body["password_set"] != true {
+		t.Fatalf("Local Server config response = %#v", response)
+	}
+	if _, ok := response.Body["auth_password"]; ok {
+		t.Fatalf("Local Server config leaked password: %#v", response.Body)
+	}
+}
+
+func TestLocalServerSettingsDoNotExposeOrAcceptLegacyPasswords(t *testing.T) {
+	harness := newLocalServerMonitor(t, "easyproxy", "secret", 1)
+	harness.config.Lock()
+	harness.config.MultiPort.Password = "legacy-multi-secret"
+	harness.config.Unlock()
+	settings := performAuthedJSON(t, harness.server, http.MethodGet, "/api/settings", nil)
+	encoded, _ := json.Marshal(settings.Body)
+	if settings.Code != http.StatusOK || bytes.Contains(encoded, []byte("listener_password")) || bytes.Contains(encoded, []byte("management_password")) || bytes.Contains(encoded, []byte("multi_port_password")) {
+		t.Fatalf("legacy password leaked: %s", encoded)
+	}
+	if settings.Body["local_server_enabled"] != true || settings.Body["local_server_auth_username"] != "easyproxy" || settings.Body["local_server_password_set"] != true {
+		t.Fatalf("canonical settings = %#v", settings.Body)
+	}
+
+	conflict := performAuthedJSON(t, harness.server, http.MethodPut, "/api/settings", map[string]any{
+		"listener_password":   "legacy-secret",
+		"management_password": "legacy-secret",
+	})
+	if conflict.Code != http.StatusConflict || conflict.Body["error"] != "credential_source_conflict" {
+		t.Fatalf("legacy credential update = %#v", conflict)
+	}
+	multiPortConflict := performAuthedJSON(t, harness.server, http.MethodPut, "/api/settings", map[string]any{
+		"multi_port_password": "legacy-multi-secret",
+	})
+	if multiPortConflict.Code != http.StatusConflict || multiPortConflict.Body["error"] != "credential_source_conflict" {
+		t.Fatalf("legacy multi-port credential update = %#v", multiPortConflict)
+	}
+
+	delete(settings.Body, "local_server_enabled")
+	delete(settings.Body, "local_server_auth_username")
+	delete(settings.Body, "local_server_password_set")
+	settings.Body["log_level"] = "debug"
+	settings.Body["multi_port_base_port"] = float64(30000)
+	settings.Body["multi_port_protocol"] = "http"
+	settings.Body["pool_mode"] = "auto"
+	for _, key := range []string{
+		"pool_blacklist_duration",
+		"sub_refresh_interval",
+		"sub_refresh_timeout",
+		"sub_refresh_health_check_timeout",
+		"sub_refresh_drain_timeout",
+		"source_sync_refresh_interval",
+		"source_sync_request_timeout",
+		"geoip_auto_update_interval",
+		"management_health_check_interval",
+	} {
+		delete(settings.Body, key)
+	}
+	preserved := performAuthedJSON(t, harness.server, http.MethodPut, "/api/settings", settings.Body)
+	if preserved.Code != http.StatusOK {
+		t.Fatalf("sanitized settings save = %#v", preserved)
+	}
+	credentials := harness.profiles.Credentials()
+	if credentials.Username != "easyproxy" || credentials.Password != "secret" {
+		t.Fatalf("canonical credentials changed after sanitized save: %#v", credentials)
+	}
+	harness.config.RLock()
+	if harness.config.Listener.Username != "easyproxy" || harness.config.Listener.Password != "secret" || harness.config.Management.Password != "secret" {
+		t.Fatalf("derived credentials changed after sanitized save: listener=%#v management=%q", harness.config.Listener, harness.config.Management.Password)
+	}
+	harness.config.RUnlock()
+}
+
+func TestLocalServerSettingsRemainSanitizedDuringPendingDisable(t *testing.T) {
+	harness := newLocalServerMonitor(t, "easyproxy", "secret", 1)
+	response := performAuthedJSON(t, harness.server, http.MethodPut, "/api/local-server/config", map[string]any{
+		"enabled": false,
+	})
+	if response.Code != http.StatusOK || response.Body["need_reload"] != true {
+		t.Fatalf("pending disable = %#v", response)
+	}
+	settings := performAuthedJSON(t, harness.server, http.MethodGet, "/api/settings", nil)
+	encoded, _ := json.Marshal(settings.Body)
+	if settings.Code != http.StatusOK || bytes.Contains(encoded, []byte("listener_password")) || bytes.Contains(encoded, []byte("management_password")) || bytes.Contains(encoded, []byte("multi_port_password")) {
+		t.Fatalf("pending disable leaked legacy passwords: %s", encoded)
+	}
+}
+
+func TestLocalServerCredentialRotationPublishesWithoutReload(t *testing.T) {
+	harness := newLocalServerMonitor(t, "easyproxy", "old-secret", 2)
+	session, err := harness.server.createSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	headers := make(http.Header)
+	headers.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("easyproxy:old-secret")))
+	response := performJSONRequest(t, harness.server, http.MethodPut, "/api/local-server/config", map[string]any{
+		"auth_password": "new-secret",
+	}, headers)
+	if response.Code != http.StatusOK || response.Body["need_reload"] != false {
+		t.Fatalf("credential rotation response = %#v", response)
+	}
+	resource, ok := response.Body["resource"].(map[string]any)
+	if !ok || resource["auth_username"] != "easyproxy" || resource["password_set"] != true {
+		t.Fatalf("credential rotation resource = %#v", response.Body["resource"])
+	}
+	if _, exists := resource["auth_password"]; exists {
+		t.Fatalf("credential rotation leaked password: %#v", resource)
+	}
+	credentials := harness.profiles.Credentials()
+	if credentials.Password != "new-secret" || credentials.Generation != 3 {
+		t.Fatalf("published credentials = %#v", credentials)
+	}
+	if harness.server.validateSession(session.Token) {
+		t.Fatal("credential rotation left old session valid")
+	}
+}
+
+func TestLocalServerStructuralChangeDoesNotPublishCredentialsBeforeReload(t *testing.T) {
+	harness := newLocalServerMonitor(t, "easyproxy", "old-secret", 2)
+	headers := make(http.Header)
+	headers.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("easyproxy:old-secret")))
+	response := performJSONRequest(t, harness.server, http.MethodPut, "/api/local-server/config", map[string]any{
+		"listen":        "127.0.0.1:32323",
+		"auth_password": "new-secret",
+	}, headers)
+	if response.Code != http.StatusOK || response.Body["need_reload"] != true {
+		t.Fatalf("structural update response = %#v", response)
+	}
+	credentials := harness.profiles.Credentials()
+	if credentials.Password != "old-secret" || credentials.Generation != 2 {
+		t.Fatalf("structural update published credentials early: %#v", credentials)
+	}
+}
+
+func TestLocalServerPendingStructuralChangeKeepsLaterCredentialsPending(t *testing.T) {
+	harness := newLocalServerMonitor(t, "easyproxy", "old-secret", 2)
+	headers := make(http.Header)
+	headers.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("easyproxy:old-secret")))
+	first := performJSONRequest(t, harness.server, http.MethodPut, "/api/local-server/config", map[string]any{
+		"listen":        "127.0.0.1:32323",
+		"auth_password": "pending-secret",
+	}, headers)
+	if first.Code != http.StatusOK || first.Body["need_reload"] != true {
+		t.Fatalf("structural update response = %#v", first)
+	}
+	second := performJSONRequest(t, harness.server, http.MethodPut, "/api/local-server/config", map[string]any{
+		"auth_password": "final-secret",
+	}, headers)
+	if second.Code != http.StatusOK || second.Body["need_reload"] != true {
+		t.Fatalf("follow-up credential response = %#v", second)
+	}
+	credentials := harness.profiles.Credentials()
+	if credentials.Password != "old-secret" || credentials.Generation != 2 {
+		t.Fatalf("pending structural update published credentials early: %#v", credentials)
+	}
+}
+
+func TestLocalServerRejectsEmptyPasswordUpdate(t *testing.T) {
+	harness := newLocalServerMonitor(t, "easyproxy", "secret", 1)
+	headers := make(http.Header)
+	headers.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("easyproxy:secret")))
+	response := performJSONRequest(t, harness.server, http.MethodPut, "/api/local-server/config", map[string]any{
+		"auth_password": "",
+	}, headers)
+	if response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("empty password status = %d body=%#v", response.Code, response.Body)
+	}
+}
+
+func TestLocalServerConfigPreservesPasswordWhenOmitted(t *testing.T) {
+	harness := newLocalServerMonitor(t, "easyproxy", "secret", 4)
+	headers := make(http.Header)
+	headers.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("easyproxy:secret")))
+	response := performJSONRequest(t, harness.server, http.MethodPut, "/api/local-server/config", map[string]any{
+		"auth_username": "rotated-user",
+	}, headers)
+	if response.Code != http.StatusOK || response.Body["need_reload"] != false {
+		t.Fatalf("username rotation response = %#v", response)
+	}
+	credentials := harness.profiles.Credentials()
+	if credentials.Username != "rotated-user" || credentials.Password != "secret" || credentials.Generation != 5 {
+		t.Fatalf("published credentials = %#v", credentials)
+	}
+	harness.config.RLock()
+	defer harness.config.RUnlock()
+	if harness.config.Listener.Username != "rotated-user" || harness.config.Listener.Password != "secret" || harness.config.Management.Password != "secret" {
+		t.Fatalf("derived credentials = listener=%#v management=%q", harness.config.Listener, harness.config.Management.Password)
+	}
+}
+
+func TestLocalServerConfigRejectsInvalidValues(t *testing.T) {
+	tests := []struct {
+		name string
+		body map[string]any
+	}{
+		{name: "username characters", body: map[string]any{"auth_username": "bad user"}},
+		{name: "username length", body: map[string]any{"auth_username": strings.Repeat("a", 65)}},
+		{name: "password nul", body: map[string]any{"auth_password": "bad\x00secret"}},
+		{name: "password length", body: map[string]any{"auth_password": strings.Repeat("a", 257)}},
+		{name: "listen syntax", body: map[string]any{"listen": "not-a-listen"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			harness := newLocalServerMonitor(t, "easyproxy", "secret", 1)
+			headers := make(http.Header)
+			headers.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("easyproxy:secret")))
+			response := performJSONRequest(t, harness.server, http.MethodPut, "/api/local-server/config", tt.body, headers)
+			if response.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("status = %d body=%#v", response.Code, response.Body)
+			}
+		})
+	}
+}
+
+func TestLocalServerConfigRejectsListenConflict(t *testing.T) {
+	harness := newLocalServerMonitor(t, "easyproxy", "secret", 1)
+	harness.config.Lock()
+	harness.config.Routing.Listen = "127.0.0.1:32324"
+	harness.config.Unlock()
+	headers := make(http.Header)
+	headers.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("easyproxy:secret")))
+	response := performJSONRequest(t, harness.server, http.MethodPut, "/api/local-server/config", map[string]any{
+		"listen": "127.0.0.1:32323",
+	}, headers)
+	if response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d body=%#v", response.Code, response.Body)
+	}
+}
+
+func TestLocalServerConfigRejectsReloadWindow(t *testing.T) {
+	harness := newLocalServerMonitor(t, "easyproxy", "secret", 1)
+	harness.server.BeginReloadWindow()
+	defer harness.server.EndReloadWindow()
+	headers := make(http.Header)
+	headers.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("easyproxy:secret")))
+	response := performJSONRequest(t, harness.server, http.MethodPut, "/api/local-server/config", map[string]any{
+		"auth_password": "rotated-secret",
+	}, headers)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status = %d body=%#v", response.Code, response.Body)
+	}
+	if got := harness.profiles.Credentials().Password; got != "secret" {
+		t.Fatalf("credentials changed during reload window: %q", got)
+	}
+}
+
+func TestLocalServerConfigSaveFailureDoesNotPublish(t *testing.T) {
+	harness := newLocalServerMonitor(t, "easyproxy", "secret", 1)
+	harness.config.SetFilePath(filepath.Join(t.TempDir(), "missing", "config.yaml"))
+	headers := make(http.Header)
+	headers.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("easyproxy:secret")))
+	response := performJSONRequest(t, harness.server, http.MethodPut, "/api/local-server/config", map[string]any{
+		"auth_password": "rotated-secret",
+	}, headers)
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d body=%#v", response.Code, response.Body)
+	}
+	credentials := harness.profiles.Credentials()
+	if credentials.Password != "secret" || credentials.Generation != 1 {
+		t.Fatalf("credentials changed after save failure: %#v", credentials)
+	}
+}
+
+func TestLocalServerConfigEnableIncrementsGenerationOnReload(t *testing.T) {
+	harness := newLocalServerMonitorWithEnabled(t, "easyproxy", "secret", 1, false)
+	headers := make(http.Header)
+	headers.Set("Authorization", "Bearer secret")
+	response := performJSONRequest(t, harness.server, http.MethodPut, "/api/local-server/config", map[string]any{
+		"enabled": true,
+	}, headers)
+	if response.Code != http.StatusOK || response.Body["need_reload"] != true {
+		t.Fatalf("enable response = %#v", response)
+	}
+	harness.config.RLock()
+	gotGeneration := harness.config.LocalServer.CredentialGeneration
+	harness.config.RUnlock()
+	if gotGeneration != 2 {
+		t.Fatalf("persisted generation = %d, want 2", gotGeneration)
+	}
+	if credentials := harness.profiles.Credentials(); credentials.Generation != 1 || harness.profiles.LocalServerEnabled() {
+		t.Fatalf("active profile state changed before reload: %#v enabled=%v", credentials, harness.profiles.LocalServerEnabled())
+	}
+}
+
+func TestLocalServerConfigEnableMigratesLegacyCredentials(t *testing.T) {
+	harness := newLocalServerMonitorWithEnabled(t, "placeholder", "legacy-secret", 1, false)
+	harness.config.Lock()
+	harness.config.LocalServer.Auth = config.LocalServerAuthConfig{}
+	harness.config.Listener.Username = "legacy-user"
+	harness.config.Listener.Password = "legacy-secret"
+	harness.config.Management.Password = "legacy-secret"
+	harness.config.Unlock()
+	harness.server.SetConfig(harness.config)
+
+	headers := make(http.Header)
+	headers.Set("Authorization", "Bearer legacy-secret")
+	response := performJSONRequest(t, harness.server, http.MethodPut, "/api/local-server/config", map[string]any{
+		"enabled": true,
+	}, headers)
+	if response.Code != http.StatusOK || response.Body["need_reload"] != true {
+		t.Fatalf("enable response = %#v", response)
+	}
+	harness.config.RLock()
+	defer harness.config.RUnlock()
+	if harness.config.LocalServer.Auth.Username != "legacy-user" || harness.config.LocalServer.Auth.Password != "legacy-secret" {
+		t.Fatalf("canonical credentials = %#v", harness.config.LocalServer.Auth)
+	}
+	if harness.config.LocalServer.CredentialGeneration != 2 {
+		t.Fatalf("credential generation = %d, want 2", harness.config.LocalServer.CredentialGeneration)
+	}
+}
+
+func TestLocalServerConfigEnableRejectsLegacyCredentialConflict(t *testing.T) {
+	harness := newLocalServerMonitorWithEnabled(t, "placeholder", "management-secret", 1, false)
+	harness.config.Lock()
+	harness.config.LocalServer.Auth = config.LocalServerAuthConfig{}
+	harness.config.Listener.Username = "legacy-user"
+	harness.config.Listener.Password = "listener-secret"
+	harness.config.Management.Password = "management-secret"
+	harness.config.Unlock()
+	harness.server.SetConfig(harness.config)
+
+	headers := make(http.Header)
+	headers.Set("Authorization", "Bearer management-secret")
+	response := performJSONRequest(t, harness.server, http.MethodPut, "/api/local-server/config", map[string]any{
+		"enabled": true,
+	}, headers)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status = %d body=%#v", response.Code, response.Body)
+	}
+}
+
+func TestSetConfigDoesNotHoldCfgMuWhileWaitingForConfigRead(t *testing.T) {
+	s := &Server{}
+	cfg := &config.Config{}
+	cfg.Lock()
+	started := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		close(started)
+		s.SetConfig(cfg)
+		close(done)
+	}()
+	<-started
+
+	deadline := time.Now().Add(100 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if !s.cfgMu.TryRLock() {
+			cfg.Unlock()
+			<-done
+			t.Fatal("SetConfig acquired cfgMu before it could read the config")
+		}
+		s.cfgMu.RUnlock()
+		runtime.Gosched()
+	}
+	cfg.Unlock()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("SetConfig did not complete after the config read lock was released")
+	}
+}
+
+func TestNodeHandlerKeepsDependencySnapshotAcrossManagerReplacement(t *testing.T) {
+	mgr, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	defer mgr.Stop()
+	server := NewServer(Config{}, mgr, log.New(io.Discard, "", 0))
+	if server == nil {
+		t.Fatal("NewServer() returned nil")
+	}
+	original := &swappingNodeManager{server: server}
+	replacement := &swappingNodeManager{}
+	original.replacement = replacement
+	server.SetNodeManager(original)
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/nodes/config/node", strings.NewReader(`{"enabled":true}`))
+	rec := httptest.NewRecorder()
+	server.handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PATCH status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if got := original.reloadCalls.Load(); got != 1 {
+		t.Fatalf("original manager reload calls = %d, want 1", got)
+	}
+	if got := replacement.reloadCalls.Load(); got != 0 {
+		t.Fatalf("replacement manager reload calls = %d, want 0", got)
+	}
+}
+
+func TestConnectorHandlerKeepsDependencySnapshotAcrossManagerReplacement(t *testing.T) {
+	mgr, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	defer mgr.Stop()
+	server := NewServer(Config{}, mgr, log.New(io.Discard, "", 0))
+	if server == nil {
+		t.Fatal("NewServer() returned nil")
+	}
+	original := &swappingConnectorManager{server: server}
+	replacement := &swappingConnectorManager{}
+	original.replacement = replacement
+	server.SetConnectorManager(original)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/connectors/config", strings.NewReader(`{"name":"connector","input":"https://example.com/sub"}`))
+	rec := httptest.NewRecorder()
+	server.handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if got := original.createCalls.Load(); got != 1 {
+		t.Fatalf("original manager create calls = %d, want 1", got)
+	}
+	if got := original.refreshCalls.Load(); got != 1 {
+		t.Fatalf("original manager refresh calls = %d, want 1", got)
+	}
+	if got := replacement.refreshCalls.Load(); got != 0 {
+		t.Fatalf("replacement manager refresh calls = %d, want 0", got)
+	}
+}
+
+func TestConnectorMutationIsRejectedDuringReloadWindow(t *testing.T) {
+	mgr, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	defer mgr.Stop()
+	server := NewServer(Config{}, mgr, log.New(io.Discard, "", 0))
+	connectorMgr := &swappingConnectorManager{}
+	server.SetConnectorManager(connectorMgr)
+	server.BeginReloadWindow()
+	defer server.EndReloadWindow()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/connectors/config", strings.NewReader(`{"name":"connector","input":"https://example.com/sub"}`))
+	rec := httptest.NewRecorder()
+	server.handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("POST status = %d, want 409: %s", rec.Code, rec.Body.String())
+	}
+	if got := connectorMgr.createCalls.Load(); got != 0 {
+		t.Fatalf("connector manager create calls = %d, want 0", got)
+	}
+}
+
+func TestListenerTransitionAppliesTargetConfigBeforeActivationAndRestoresOnRollback(t *testing.T) {
+	mgr, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	defer mgr.Stop()
+	oldListen := freeLifecycleListen(t)
+	newListen := freeLifecycleListenDifferent(t, oldListen)
+	enabled := true
+	oldCfg := &config.Config{Management: config.ManagementConfig{
+		Enabled:  &enabled,
+		Listen:   oldListen,
+		Password: "old-password",
+	}}
+	server := NewServer(Config{Enabled: true, Listen: oldListen, Password: "old-password"}, mgr, log.New(io.Discard, "", 0))
+	server.SetConfig(oldCfg)
+	if err := server.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	defer shutdownLifecycleServer(server)
+
+	targetCfg := &config.Config{Management: config.ManagementConfig{
+		Enabled:  &enabled,
+		Listen:   newListen,
+		Password: "new-password",
+	}}
+	transition, err := server.PrepareListener(true, newListen, targetCfg)
+	if err != nil {
+		t.Fatalf("PrepareListener() error = %v", err)
+	}
+	if err := transition.Activate(context.Background()); err != nil {
+		t.Fatalf("Activate() error = %v", err)
+	}
+	waitLifecycleListen(t, newListen, true)
+	if got := monitorRequestStatus(t, newListen, ""); got != http.StatusUnauthorized {
+		t.Fatalf("new listener without auth status = %d, want 401", got)
+	}
+	if got := monitorRequestStatus(t, newListen, "old-password"); got != http.StatusUnauthorized {
+		t.Fatalf("new listener with old password status = %d, want 401", got)
+	}
+	if got := monitorRequestStatus(t, newListen, "new-password"); got != http.StatusOK {
+		t.Fatalf("new listener with target password status = %d, want 200", got)
+	}
+	if err := transition.Rollback(); err != nil {
+		t.Fatalf("Rollback() error = %v", err)
+	}
+	waitLifecycleListen(t, newListen, false)
+	waitLifecycleListen(t, oldListen, true)
+	if got := monitorRequestStatus(t, oldListen, "new-password"); got != http.StatusUnauthorized {
+		t.Fatalf("rolled-back listener with target password status = %d, want 401", got)
+	}
+	if got := monitorRequestStatus(t, oldListen, "old-password"); got != http.StatusOK {
+		t.Fatalf("rolled-back listener with old password status = %d, want 200", got)
+	}
+}
+
+func monitorRequestStatus(t *testing.T, listen, password string) int {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, "http://"+listen+"/api/nodes", nil)
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+	if password != "" {
+		req.Header.Set("Authorization", password)
+	}
+	response, err := (&http.Client{Timeout: time.Second}).Do(req)
+	if err != nil {
+		t.Fatalf("GET monitor listener %s: %v", listen, err)
+	}
+	defer response.Body.Close()
+	return response.StatusCode
+}
+
+type swappingNodeManager struct {
+	server      *Server
+	replacement NodeManager
+	reloadCalls atomic.Int32
+}
+
+type swappingConnectorManager struct {
+	server       *Server
+	replacement  ConnectorManager
+	createCalls  atomic.Int32
+	refreshCalls atomic.Int32
+}
+
+func (m *swappingConnectorManager) ListConfigConnectors(context.Context) ([]config.ConnectorSourceConfig, error) {
+	return nil, nil
+}
+
+func (m *swappingConnectorManager) CreateConnector(
+	_ context.Context,
+	connector config.ConnectorSourceConfig,
+) (config.ConnectorSourceConfig, error) {
+	m.createCalls.Add(1)
+	if m.server != nil && m.replacement != nil {
+		m.server.SetConnectorManager(m.replacement)
+	}
+	return connector, nil
+}
+
+func (m *swappingConnectorManager) UpdateConnector(
+	_ context.Context,
+	_ string,
+	connector config.ConnectorSourceConfig,
+) (config.ConnectorSourceConfig, error) {
+	return connector, nil
+}
+
+func (m *swappingConnectorManager) DeleteConnector(context.Context, string) error { return nil }
+
+func (m *swappingConnectorManager) SetConnectorEnabled(context.Context, string, bool) error {
+	return nil
+}
+
+func (m *swappingConnectorManager) RefreshRuntimeSources(context.Context) error {
+	m.refreshCalls.Add(1)
+	return nil
+}
+
+func (m *swappingConnectorManager) RefreshPreferredEntryIPs(
+	context.Context,
+	string,
+	PreferredIPRefreshOptions,
+) (*PreferredIPRefreshResult, error) {
+	return &PreferredIPRefreshResult{}, nil
+}
+
+func (m *swappingNodeManager) ListConfigNodes(context.Context) ([]config.NodeConfig, error) {
+	return nil, nil
+}
+
+func (m *swappingNodeManager) CreateNode(_ context.Context, node config.NodeConfig) (config.NodeConfig, error) {
+	return node, nil
+}
+
+func (m *swappingNodeManager) UpdateNode(_ context.Context, _ string, node config.NodeConfig) (config.NodeConfig, error) {
+	return node, nil
+}
+
+func (m *swappingNodeManager) DeleteNode(context.Context, string) error { return nil }
+
+func (m *swappingNodeManager) SetNodeEnabled(context.Context, string, bool) error {
+	if m.server != nil && m.replacement != nil {
+		m.server.SetNodeManager(m.replacement)
+	}
+	return nil
+}
+
+func (m *swappingNodeManager) TriggerReload(context.Context) error {
+	m.reloadCalls.Add(1)
+	return nil
+}
+
+func (r *recordingRoutingController) RoutingStatus() RoutingStatus {
+	return RoutingStatus{}
+}
+
+func (r *recordingRoutingController) ApplyHot(cfg *config.Config) bool {
+	r.applyCalls++
+	if cfg != nil {
+		cfg.RLock()
+		r.lastConfig = cfg.Clone()
+		cfg.RUnlock()
+	}
+	return r.applyResult
+}
 
 func TestWithAuthAllowsDirectManagementPassword(t *testing.T) {
 	s := &Server{
@@ -434,6 +1207,64 @@ func TestUpdateAllSettingsPropagatesSkipCertVerifyToManager(t *testing.T) {
 	}
 }
 
+func TestUpdateAllSettingsSaveFailureDoesNotMutateRuntimeConfig(t *testing.T) {
+	cfg := &config.Config{
+		Mode:      "pool",
+		LogLevel:  "info",
+		Listener:  config.ListenerConfig{Address: "0.0.0.0", Port: 8080, Protocol: "http"},
+		MultiPort: config.MultiPortConfig{Address: "0.0.0.0", BasePort: 10000, Protocol: "http"},
+		Pool:      config.PoolConfig{Mode: "auto", BlacklistDuration: time.Minute},
+		SubscriptionRefresh: config.SubscriptionRefreshConfig{
+			Interval:           time.Minute,
+			Timeout:            30 * time.Second,
+			HealthCheckTimeout: 30 * time.Second,
+			DrainTimeout:       10 * time.Second,
+		},
+		SourceSync: config.SourceSyncConfig{RefreshInterval: time.Minute, RequestTimeout: 30 * time.Second},
+		GeoIP:      config.GeoIPConfig{AutoUpdateInterval: time.Hour},
+		Management: config.ManagementConfig{HealthCheckInterval: time.Minute},
+	}
+	cfg.SetFilePath(filepath.Join(t.TempDir(), "missing", "config.yaml"))
+	mgr, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	server := &Server{cfgSrc: cfg, mgr: mgr, logger: log.New(io.Discard, "", 0)}
+
+	_, err = server.updateAllSettingsWithReload(allSettingsRequest{
+		Mode:                          "hybrid",
+		LogLevel:                      "debug",
+		ListenerAddress:               "127.0.0.1",
+		ListenerPort:                  18080,
+		ListenerProtocol:              "http",
+		MultiPortAddress:              "127.0.0.1",
+		MultiPortBasePort:             20000,
+		MultiPortProtocol:             "http",
+		PoolMode:                      "random",
+		PoolBlacklistDuration:         "2m",
+		SubRefreshInterval:            "2m",
+		SubRefreshTimeout:             "40s",
+		SubRefreshHealthCheckTimeout:  "40s",
+		SubRefreshDrainTimeout:        "20s",
+		SourceSyncRefreshInterval:     "2m",
+		SourceSyncRequestTimeout:      "40s",
+		GeoIPAutoUpdateInterval:       "2h",
+		ManagementHealthCheckInterval: "2m",
+		SkipCertVerify:                true,
+	})
+	if err == nil {
+		t.Fatal("updateAllSettingsWithReload() error = nil, want persistence failure")
+	}
+	cfg.RLock()
+	defer cfg.RUnlock()
+	if cfg.Mode != "pool" || cfg.LogLevel != "info" || cfg.Listener.Port != 8080 || cfg.SkipCertVerify {
+		t.Fatalf("failed save mutated runtime config: mode=%q log=%q port=%d skip=%v", cfg.Mode, cfg.LogLevel, cfg.Listener.Port, cfg.SkipCertVerify)
+	}
+	if mgr.SkipCertVerify() {
+		t.Fatal("failed save mutated monitor manager TLS behavior")
+	}
+}
+
 func TestHandleSettingsReportsReloadRequirement(t *testing.T) {
 	makeServer := func(t *testing.T, initialMode string, initialSkip bool) (*Server, *config.Config) {
 		t.Helper()
@@ -519,7 +1350,7 @@ func TestHandleSettingsReportsReloadRequirement(t *testing.T) {
 
 	cases := []testCase{
 		{
-			name:        "skip cert verify only",
+			name:        "skip cert verify requires box reload",
 			initialMode: "pool",
 			initialSkip: false,
 			req: func() allSettingsRequest {
@@ -527,7 +1358,7 @@ func TestHandleSettingsReportsReloadRequirement(t *testing.T) {
 				r.SkipCertVerify = true
 				return r
 			}(),
-			wantReload: false,
+			wantReload: true,
 		},
 		{
 			name:        "mode change",
@@ -578,6 +1409,241 @@ func TestHandleSettingsReportsReloadRequirement(t *testing.T) {
 				t.Fatalf("expected need_reload=%v, got %v", tt.wantReload, got)
 			}
 		})
+	}
+}
+
+func TestUpdateRoutingConfigReloadMatrix(t *testing.T) {
+	baseRequest := routingConfigPayload{
+		Enabled:            true,
+		DefaultStrategy:    "stable",
+		UseDefaultRules:    true,
+		FinalPolicy:        "PROXY",
+		LongLivedMinUptime: "2h",
+		LongLivedMinRate:   0.9,
+		SessionTTL:         "10m",
+	}
+
+	tests := []struct {
+		name        string
+		mutate      func(*routingConfigPayload)
+		wantReload  bool
+		wantApply   bool
+		wantUptime  time.Duration
+		wantRate    float64
+		wantSession time.Duration
+	}{
+		{
+			name: "uptime threshold hot applies",
+			mutate: func(req *routingConfigPayload) {
+				req.LongLivedMinUptime = "45m"
+			},
+			wantApply:   true,
+			wantUptime:  45 * time.Minute,
+			wantRate:    0.9,
+			wantSession: 10 * time.Minute,
+		},
+		{
+			name: "success rate threshold hot applies",
+			mutate: func(req *routingConfigPayload) {
+				req.LongLivedMinRate = 0.75
+			},
+			wantApply:   true,
+			wantUptime:  2 * time.Hour,
+			wantRate:    0.75,
+			wantSession: 10 * time.Minute,
+		},
+		{
+			name: "zero thresholds restore runtime defaults without reload",
+			mutate: func(req *routingConfigPayload) {
+				req.LongLivedMinUptime = ""
+				req.LongLivedMinRate = 0
+			},
+			wantApply:   true,
+			wantUptime:  0,
+			wantRate:    0,
+			wantSession: 10 * time.Minute,
+		},
+		{
+			name: "enabled change requires reload",
+			mutate: func(req *routingConfigPayload) {
+				req.Enabled = false
+			},
+			wantReload:  true,
+			wantUptime:  2 * time.Hour,
+			wantRate:    0.9,
+			wantSession: 10 * time.Minute,
+		},
+		{
+			name: "listen change requires reload",
+			mutate: func(req *routingConfigPayload) {
+				req.Listen = "127.0.0.1:24444"
+			},
+			wantReload:  true,
+			wantUptime:  2 * time.Hour,
+			wantRate:    0.9,
+			wantSession: 10 * time.Minute,
+		},
+		{
+			name: "session ttl change requires reload",
+			mutate: func(req *routingConfigPayload) {
+				req.SessionTTL = "20m"
+			},
+			wantReload:  true,
+			wantUptime:  2 * time.Hour,
+			wantRate:    0.9,
+			wantSession: 20 * time.Minute,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			useDefaults := true
+			cfg := &config.Config{}
+			cfg.Routing.Enabled = true
+			cfg.Routing.DefaultStrategy = "stable"
+			cfg.Routing.UseDefaultRules = &useDefaults
+			cfg.Routing.FinalPolicy = "PROXY"
+			cfg.Routing.LongLived.MinUptime = 2 * time.Hour
+			cfg.Routing.LongLived.MinSuccessRate = 0.9
+			cfg.Routing.Session.TTL = 10 * time.Minute
+
+			configPath := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(configPath, []byte("{}\n"), 0o644); err != nil {
+				t.Fatalf("WriteFile() error = %v", err)
+			}
+			cfg.SetFilePath(configPath)
+
+			routing := &recordingRoutingController{applyResult: true}
+			server := &Server{
+				cfgSrc:  cfg,
+				routing: routing,
+				logger:  log.New(io.Discard, "", 0),
+			}
+
+			req := baseRequest
+			tt.mutate(&req)
+			gotReload, err := server.updateRoutingConfig(req)
+			if err != nil {
+				t.Fatalf("updateRoutingConfig() error = %v", err)
+			}
+			if gotReload != tt.wantReload {
+				t.Fatalf("reload = %v, want %v", gotReload, tt.wantReload)
+			}
+			if gotApply := routing.applyCalls > 0; gotApply != tt.wantApply {
+				t.Fatalf("hot apply = %v (%d calls), want %v", gotApply, routing.applyCalls, tt.wantApply)
+			}
+			if cfg.Routing.LongLived.MinUptime != tt.wantUptime {
+				t.Fatalf("uptime = %s, want %s", cfg.Routing.LongLived.MinUptime, tt.wantUptime)
+			}
+			if cfg.Routing.LongLived.MinSuccessRate != tt.wantRate {
+				t.Fatalf("rate = %.2f, want %.2f", cfg.Routing.LongLived.MinSuccessRate, tt.wantRate)
+			}
+			if cfg.Routing.Session.TTL != tt.wantSession {
+				t.Fatalf("session ttl = %s, want %s", cfg.Routing.Session.TTL, tt.wantSession)
+			}
+		})
+	}
+}
+
+func TestUpdateRoutingConfigRejectsMalformedProviderBeforePersistence(t *testing.T) {
+	useDefaults := true
+	cfg := &config.Config{}
+	cfg.Routing.Enabled = true
+	cfg.Routing.DefaultStrategy = "stable"
+	cfg.Routing.UseDefaultRules = &useDefaults
+	cfg.Routing.FinalPolicy = "PROXY"
+	cfg.Routing.RuleProviders = []config.RuleProvider{{
+		URL:      "https://rules.example/direct.txt",
+		Policy:   "DIRECT",
+		Behavior: "domain",
+		Interval: time.Hour,
+	}}
+	cfg.Routing.LongLived.MinUptime = 2 * time.Hour
+	cfg.Routing.LongLived.MinSuccessRate = 0.9
+	cfg.Routing.Session.TTL = 10 * time.Minute
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	originalFile := []byte("{}\n")
+	if err := os.WriteFile(configPath, originalFile, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	cfg.SetFilePath(configPath)
+
+	routing := &recordingRoutingController{applyResult: true}
+	server := &Server{
+		cfgSrc:  cfg,
+		routing: routing,
+		logger:  log.New(io.Discard, "", 0),
+	}
+
+	_, err := server.updateRoutingConfig(routingConfigPayload{
+		Enabled:            true,
+		DefaultStrategy:    "stable",
+		UseDefaultRules:    true,
+		FinalPolicy:        "PROXY",
+		RuleProviders:      []routingProviderConfig{{URL: "://invalid", Policy: "DIRECT", Behavior: "domain", Interval: "1h"}},
+		LongLivedMinUptime: "2h",
+		LongLivedMinRate:   0.9,
+		SessionTTL:         "10m",
+	})
+	if err == nil {
+		t.Error("updateRoutingConfig() error = nil, want malformed provider rejection")
+	}
+	if routing.applyCalls != 0 {
+		t.Errorf("hot apply calls = %d, want 0", routing.applyCalls)
+	}
+
+	cfg.RLock()
+	providers := append([]config.RuleProvider(nil), cfg.Routing.RuleProviders...)
+	cfg.RUnlock()
+	if len(providers) != 1 || providers[0].URL != "https://rules.example/direct.txt" {
+		t.Errorf("runtime providers mutated after rejected update: %+v", providers)
+	}
+
+	persisted, readErr := os.ReadFile(configPath)
+	if readErr != nil {
+		t.Fatalf("ReadFile() error = %v", readErr)
+	}
+	if !bytes.Equal(persisted, originalFile) {
+		t.Errorf("config file changed after rejected update:\n%s", persisted)
+	}
+}
+
+func TestUpdateRoutingConfigSaveFailureDoesNotMutateRuntimeConfig(t *testing.T) {
+	useDefaults := true
+	cfg := &config.Config{Routing: config.RoutingConfig{
+		Enabled:         true,
+		DefaultStrategy: "stable",
+		UseDefaultRules: &useDefaults,
+		FinalPolicy:     "PROXY",
+		Rules:           []string{"DOMAIN,old.example,DIRECT"},
+		LongLived:       config.LongLivedConfig{MinUptime: 2 * time.Hour, MinSuccessRate: 0.9},
+		Session:         config.SessionConfig{TTL: 10 * time.Minute},
+	}}
+	cfg.SetFilePath(filepath.Join(t.TempDir(), "missing", "config.yaml"))
+	routing := &recordingRoutingController{applyResult: true}
+	server := &Server{cfgSrc: cfg, routing: routing, logger: log.New(io.Discard, "", 0)}
+
+	_, err := server.updateRoutingConfig(routingConfigPayload{
+		Enabled:            true,
+		DefaultStrategy:    "session",
+		UseDefaultRules:    false,
+		FinalPolicy:        "DIRECT",
+		Rules:              []string{"DOMAIN,new.example,PROXY"},
+		LongLivedMinUptime: "45m",
+		LongLivedMinRate:   0.8,
+		SessionTTL:         "10m",
+	})
+	if err == nil {
+		t.Fatal("updateRoutingConfig() error = nil, want persistence failure")
+	}
+	cfg.RLock()
+	defer cfg.RUnlock()
+	if cfg.Routing.DefaultStrategy != "stable" || cfg.Routing.FinalPolicy != "PROXY" || len(cfg.Routing.Rules) != 1 || cfg.Routing.Rules[0] != "DOMAIN,old.example,DIRECT" {
+		t.Fatalf("failed save mutated routing config: %+v", cfg.Routing)
+	}
+	if routing.applyCalls != 0 {
+		t.Fatalf("failed save hot-applied routing %d times", routing.applyCalls)
 	}
 }
 
@@ -712,6 +1778,84 @@ func TestProxyCompatCheckoutLifecycle(t *testing.T) {
 	}
 	if postReleaseResp.Lease.Status != "released" {
 		t.Fatalf("expected released lease, got %s", postReleaseResp.Lease.Status)
+	}
+}
+
+func TestProxyCompatCheckoutUsesCanonicalDeviceCredentialsInLocalServerMode(t *testing.T) {
+	harness := newLocalServerMonitor(t, "easyproxy", "secret", 1)
+	entry := harness.server.mgr.Register(NodeInfo{
+		Tag:           "local-node",
+		Name:          "Local Node",
+		ListenAddress: "127.0.0.1",
+		Port:          34001,
+	})
+	entry.MarkInitialCheckDone(true)
+
+	body, err := json.Marshal(proxyCompatCheckoutRequest{
+		HostID:        "Laptop-Work",
+		ProvisionMode: "reuse-only",
+		BindingMode:   "shared-instance",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/proxy/leases/checkout", bytes.NewReader(body))
+	req.Host = "easy-proxy.local:29888"
+	recorder := httptest.NewRecorder()
+	harness.server.handleProxyCheckout(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("checkout status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		Result proxyCompatCheckoutResult `json:"result"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Result.Lease.Username != "easyproxy+dev=laptop-work" || response.Result.Lease.Password != "secret" {
+		t.Fatalf("lease credentials = %q/%q", response.Result.Lease.Username, response.Result.Lease.Password)
+	}
+}
+
+func TestProxyCompatCheckoutKeepsActiveCredentialsDuringPendingEnable(t *testing.T) {
+	harness := newLocalServerMonitorWithEnabled(t, "easyproxy", "old-secret", 1, false)
+	headers := make(http.Header)
+	headers.Set("Authorization", "Bearer old-secret")
+	update := performJSONRequest(t, harness.server, http.MethodPut, "/api/local-server/config", map[string]any{
+		"enabled":       true,
+		"auth_username": "new-user",
+		"auth_password": "new-secret",
+	}, headers)
+	if update.Code != http.StatusOK || update.Body["need_reload"] != true {
+		t.Fatalf("pending enable = %#v", update)
+	}
+	entry := harness.server.mgr.Register(NodeInfo{
+		Tag:           "legacy-node",
+		Name:          "Legacy Node",
+		ListenAddress: "127.0.0.1",
+		Port:          34001,
+	})
+	entry.MarkInitialCheckDone(true)
+
+	body, err := json.Marshal(proxyCompatCheckoutRequest{HostID: "Laptop-Work", ProvisionMode: "reuse-only", BindingMode: "shared-instance"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/proxy/leases/checkout", bytes.NewReader(body))
+	req.Host = "easy-proxy.local:29888"
+	recorder := httptest.NewRecorder()
+	harness.server.handleProxyCheckout(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("checkout status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		Result proxyCompatCheckoutResult `json:"result"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Result.Lease.Username != "easyproxy" || response.Result.Lease.Password != "old-secret" {
+		t.Fatalf("pending lease credentials = %q/%q", response.Result.Lease.Username, response.Result.Lease.Password)
 	}
 }
 

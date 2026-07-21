@@ -115,6 +115,41 @@ ALTER TABLE node_stats ADD COLUMN last_probe_at TEXT NOT NULL DEFAULT '';
 ALTER TABLE node_stats ADD COLUMN last_probe_success_at TEXT NOT NULL DEFAULT '';
 `,
 		},
+		{
+			Version:     4,
+			Description: "add local server devices, profiles, mappings, and session generation",
+			Up: `
+CREATE TABLE devices (
+    device_id TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE device_profiles (
+    device_id TEXT PRIMARY KEY REFERENCES devices(device_id) ON DELETE CASCADE,
+    profile_json TEXT NOT NULL,
+    schema_version INTEGER NOT NULL,
+    revision INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE device_ip_mappings (
+    mapping_id TEXT PRIMARY KEY,
+    cidr TEXT NOT NULL UNIQUE,
+    device_id TEXT NOT NULL REFERENCES devices(device_id) ON DELETE RESTRICT,
+    priority INTEGER NOT NULL,
+    enabled INTEGER NOT NULL,
+    revision INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+ALTER TABLE sessions ADD COLUMN credential_generation INTEGER NOT NULL DEFAULT 1;
+`,
+		},
 	}
 }
 

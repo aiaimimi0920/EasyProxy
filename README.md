@@ -63,6 +63,56 @@ as:
 - `upstreams/misub/.env`
 - `workers/ech-workers-cloudflare/.dev.vars`
 
+The root `config.yaml` remains canonical for script-driven deployments. The
+rendered `deploy/service/base/config.yaml` is a derived runtime file: settings
+saved through the WebUI persist there, but the next root render/deploy can
+replace them with `serviceBase.runtime` from the root config. Promote durable
+WebUI changes back into the root config before redeploying.
+
+### Local Server Device Profiles
+
+Local Server is the standard trusted-LAN entry for multiple devices. It uses
+one mixed proxy listener, one canonical username/password shared by proxy and
+management access, a shared forwarding Profile, and optional independent
+per-device Profiles. Clients use normal HTTP/CONNECT/SOCKS5 settings; no
+standalone device client is required.
+
+Enable it with `serviceBase.runtime.mode: pool`,
+`listener.protocol: mixed`, and `local_server.enabled: true`. The root renderer
+derives the listener and management credentials from `local_server.auth`.
+Local Server is intentionally incompatible with legacy multi-port, hybrid, and
+extra-listener topologies. See [`docs/local-server.md`](docs/local-server.md)
+for configuration, device identity, API/CAS, firewall, and troubleshooting
+guidance.
+
+### Smart Routing Docker Entry
+
+Smart routing is disabled in the example config. To enable the default Docker
+path, set `serviceBase.runtime.routing.enabled: true` and leave
+`routing.listen` empty. This is route A: the dispatcher takes over the existing
+`listener` address and port, so the standard `22323:22323` publication remains
+valid.
+
+Setting `routing.listen` to another port selects route B. The plain pool entry
+continues on `listener.port`, while the dispatcher uses the custom port. Add a
+matching Docker `ports` entry through a Compose override or deployment-specific
+compose file; changing YAML alone does not publish that port on the host.
+
+Runtime config source precedence is deliberate:
+
+1. An existing file at `EASY_PROXY_CONFIG_PATH` is used at startup and skips
+   the initial R2 download.
+2. If that config is missing, an existing bootstrap JSON is used before an
+   `EASY_PROXY_IMPORT_CODE`; the import code only creates a bootstrap file when
+   one is not already present.
+3. When bootstrap sync is enabled, the background R2 sync can later replace the
+   runtime config with a newer published artifact.
+
+For normal root-script deployment, use the root config plus renderer as the
+authority. Use import-code/R2 bootstrap for source-less hosts, and avoid
+enabling R2 sync on the same runtime unless R2 is intended to own subsequent
+config updates.
+
 ## Repository Layout
 
 ```text
@@ -207,6 +257,8 @@ Read the module-specific deployment notes:
 ## Documentation
 
 - `docs/architecture.md`
+- `docs/local-server.md`
+- `docs/smart-routing.md`
 - `docs/quickstart.md`
 - `docs/release-checklist.md`
 - `docs/release-notes-template.md`
@@ -517,12 +569,16 @@ python -m unittest discover -s "tests" -p "test_*.py" -v
 # Aggregator regression tests
 python -m unittest discover -s "upstreams/aggregator/tests" -p "test_*.py" -v
 
-# service/base critical Go regression packages
+# Complete service/base Go regression suite
 Set-Location service/base
-go test ./internal/monitor
-go test ./internal/boxmgr
-go test ./internal/config
-go test ./internal/subscription
+go test -count=1 ./...
+
+# Embedded service/base frontend
+Set-Location frontend
+npm ci
+npm run test
+npm run lint
+npm run build
 ```
 
 Repository CI coverage:
@@ -558,12 +614,13 @@ for the current secret matrix covering:
 Before publishing a public release:
 
 1. Confirm `config.example.yaml` still contains placeholders only, and no real secrets were introduced.
-2. Run the local validation matrix or confirm `.github/workflows/validate.yml` passed on the target commit.
-3. Confirm the embedded frontend assets in `service/base/internal/monitor/assets` match the current frontend source when WebUI code changed.
-4. Confirm GHCR owner/image names are correct for the target repository or organization.
-5. If `upstreams/*` changed, note whether each change is an upstream sync import or a local carried patch.
-6. If deploy behavior changed, update the corresponding `deploy/*/README.md` notes.
-7. Publish via tag push or GitHub Actions only after validation is green.
+2. If Local Server is enabled, confirm `mode: pool`, `listener.protocol: mixed`, one non-placeholder canonical credential, and trusted-LAN firewall restrictions for `22323/29888`.
+3. Run the local validation matrix or confirm `.github/workflows/validate.yml` passed on the target commit.
+4. Confirm the embedded frontend assets in `service/base/internal/monitor/assets` match the current frontend source when WebUI code changed.
+5. Confirm GHCR owner/image names are correct for the target repository or organization.
+6. If `upstreams/*` changed, note whether each change is an upstream sync import or a local carried patch.
+7. If deploy behavior changed, update the corresponding `deploy/*/README.md` notes.
+8. Publish via tag push or GitHub Actions only after validation is green.
 
 For release body drafting, start from
 [release-notes-template.md](/C:/Users/Public/nas_home/AI/GameEditor/EasyProxy/docs/release-notes-template.md).

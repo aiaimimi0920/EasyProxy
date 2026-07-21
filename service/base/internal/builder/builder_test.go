@@ -5,9 +5,216 @@ import (
 	"strings"
 	"testing"
 
+	"easy_proxies/internal/config"
+	poolout "easy_proxies/internal/outbound/pool"
+
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
 )
+
+func TestBuildMultiPortRoutingIncludesGlobalPoolWithoutPlainPoolInbound(t *testing.T) {
+	cfg := multiPortBuildConfig(true)
+
+	opts, err := Build(cfg)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	outboundTags := make(map[string]bool, len(opts.Outbounds))
+	for _, outbound := range opts.Outbounds {
+		outboundTags[outbound.Tag] = true
+	}
+	if !outboundTags[poolout.Tag] {
+		t.Fatalf("outbounds = %#v, want global %q outbound for smart routing", outboundTags, poolout.Tag)
+	}
+	if !outboundTags[poolout.Tag+"-node-one"] {
+		t.Fatalf("outbounds = %#v, want per-node pool outbound", outboundTags)
+	}
+
+	inboundTags := make(map[string]bool, len(opts.Inbounds))
+	for _, inbound := range opts.Inbounds {
+		inboundTags[inbound.Tag] = true
+	}
+	if inboundTags["http-in"] {
+		t.Fatalf("inbounds = %#v, pure multi-port mode must not add the plain pool inbound", inboundTags)
+	}
+	if !inboundTags["in-node-one"] {
+		t.Fatalf("inbounds = %#v, want per-node multi-port inbound", inboundTags)
+	}
+
+	if opts.Route == nil {
+		t.Fatal("route options are nil")
+	}
+	if opts.Route.Final != "" {
+		t.Fatalf("route final = %q, pure multi-port mode must not set the global sing-box final", opts.Route.Final)
+	}
+	if len(opts.Route.Rules) != 1 {
+		t.Fatalf("route rules = %d, want one per-node inbound route", len(opts.Route.Rules))
+	}
+	if got := opts.Route.Rules[0].DefaultOptions.RouteOptions.Outbound; got != poolout.Tag+"-node-one" {
+		t.Fatalf("per-node route outbound = %q, want %q", got, poolout.Tag+"-node-one")
+	}
+}
+
+func TestBuildMultiPortWithoutRoutingOmitsGlobalPool(t *testing.T) {
+	cfg := multiPortBuildConfig(false)
+
+	opts, err := Build(cfg)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	outboundTags := make(map[string]bool, len(opts.Outbounds))
+	for _, outbound := range opts.Outbounds {
+		outboundTags[outbound.Tag] = true
+	}
+	if outboundTags[poolout.Tag] {
+		t.Fatalf("outbounds = %#v, routing-disabled multi-port mode must not add global %q", outboundTags, poolout.Tag)
+	}
+	if !outboundTags[poolout.Tag+"-node-one"] {
+		t.Fatalf("outbounds = %#v, want per-node pool outbound", outboundTags)
+	}
+
+	inboundTags := make(map[string]bool, len(opts.Inbounds))
+	for _, inbound := range opts.Inbounds {
+		inboundTags[inbound.Tag] = true
+	}
+	if !inboundTags["in-node-one"] {
+		t.Fatalf("inbounds = %#v, want per-node multi-port inbound", inboundTags)
+	}
+
+	if opts.Route == nil {
+		t.Fatal("route options are nil")
+	}
+	if opts.Route.Final != "" {
+		t.Fatalf("route final = %q, pure multi-port mode must not set the global sing-box final", opts.Route.Final)
+	}
+}
+
+func TestBuildLocalServerSuppressesPlainInboundAndKeepsPoolOutbound(t *testing.T) {
+	cfg := localServerBuildConfig()
+
+	opts, err := Build(cfg)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	inboundTags := inboundTagSet(opts.Inbounds)
+	if inboundTags["http-in"] {
+		t.Fatalf("inbounds = %#v, Local Server must suppress the plain pool inbound", inboundTags)
+	}
+
+	outboundTags := outboundTagSet(opts.Outbounds)
+	if !outboundTags[poolout.Tag] {
+		t.Fatalf("outbounds = %#v, want global %q outbound for Local Server dispatcher", outboundTags, poolout.Tag)
+	}
+
+	if opts.Route == nil {
+		t.Fatal("route options are nil")
+	}
+	if got, want := opts.Route.Final, poolout.Tag; got != want {
+		t.Fatalf("route final = %q, want %q", got, want)
+	}
+}
+
+func TestBuildLegacyRoutingRouteBKeepsPlainInbound(t *testing.T) {
+	cfg := localServerBuildConfig()
+	cfg.LocalServer.Enabled = false
+	cfg.Routing = config.RoutingConfig{
+		Enabled: true,
+		Listen:  "127.0.0.1:22324",
+	}
+
+	opts, err := Build(cfg)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	inboundTags := inboundTagSet(opts.Inbounds)
+	if !inboundTags["http-in"] {
+		t.Fatalf("inbounds = %#v, legacy route-B routing must keep the plain pool inbound", inboundTags)
+	}
+
+	outboundTags := outboundTagSet(opts.Outbounds)
+	if !outboundTags[poolout.Tag] {
+		t.Fatalf("outbounds = %#v, want global %q outbound for smart routing", outboundTags, poolout.Tag)
+	}
+}
+
+func multiPortBuildConfig(routingEnabled bool) *config.Config {
+	return &config.Config{
+		Mode: "multi-port",
+		Listener: config.ListenerConfig{
+			Address:  "127.0.0.1",
+			Port:     22323,
+			Protocol: config.InboundProtocolHTTP,
+		},
+		MultiPort: config.MultiPortConfig{
+			Address:  "127.0.0.1",
+			Protocol: config.InboundProtocolHTTP,
+		},
+		Pool: config.PoolConfig{
+			Mode: "auto",
+		},
+		Routing: config.RoutingConfig{
+			Enabled: routingEnabled,
+		},
+		Nodes: []config.NodeConfig{
+			{
+				Name: "node-one",
+				URI:  "socks5://127.0.0.1:1080",
+				Port: 25001,
+			},
+		},
+	}
+}
+
+func localServerBuildConfig() *config.Config {
+	return &config.Config{
+		Mode: "pool",
+		Listener: config.ListenerConfig{
+			Address:  "127.0.0.1",
+			Port:     22323,
+			Protocol: config.InboundProtocolMixed,
+			Username: "easyproxy",
+			Password: "shared-secret",
+		},
+		Pool: config.PoolConfig{
+			Mode: "auto",
+		},
+		LocalServer: config.LocalServerConfig{
+			Enabled: true,
+			Listen:  "127.0.0.1:32323",
+			Auth: config.LocalServerAuthConfig{
+				Username: "easyproxy",
+				Password: "shared-secret",
+			},
+		},
+		Nodes: []config.NodeConfig{
+			{
+				Name: "node-one",
+				URI:  "socks5://127.0.0.1:1080",
+				Port: 25001,
+			},
+		},
+	}
+}
+
+func inboundTagSet(inbounds []option.Inbound) map[string]bool {
+	tags := make(map[string]bool, len(inbounds))
+	for _, inbound := range inbounds {
+		tags[inbound.Tag] = true
+	}
+	return tags
+}
+
+func outboundTagSet(outbounds []option.Outbound) map[string]bool {
+	tags := make(map[string]bool, len(outbounds))
+	for _, outbound := range outbounds {
+		tags[outbound.Tag] = true
+	}
+	return tags
+}
 
 func TestBuildNodeOutboundSupportsSOCKS5(t *testing.T) {
 	outbound, err := buildNodeOutbound("socks-node", "socks5://demo:secret@99.144.123.135:30350", false)

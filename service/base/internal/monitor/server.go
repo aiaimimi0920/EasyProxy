@@ -3,6 +3,7 @@ package monitor
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"embed"
 	"encoding/hex"
@@ -25,6 +26,7 @@ import (
 	"time"
 
 	"easy_proxies/internal/config"
+	"easy_proxies/internal/profile"
 	"easy_proxies/internal/store"
 
 	"golang.org/x/sync/semaphore"
@@ -35,9 +37,10 @@ var embeddedFS embed.FS
 
 // Session represents a user session with expiration.
 type Session struct {
-	Token     string
-	CreatedAt time.Time
-	ExpiresAt time.Time
+	Token                string
+	CreatedAt            time.Time
+	ExpiresAt            time.Time
+	CredentialGeneration uint64
 }
 
 // NodeManager exposes config node CRUD and reload operations.
@@ -67,6 +70,39 @@ type SourceSyncReporter interface {
 	SourceSyncStatus() SourceSyncStatus
 }
 
+// RoutingReporter exposes read-only smart-dispatch routing state for the
+// management API. Implemented by the routing controller when routing is active.
+type RoutingReporter interface {
+	RoutingStatus() RoutingStatus
+}
+
+// RoutingController is the management surface for the smart dispatch entry. It
+// extends the read-only reporter with a hot-apply hook: after the routing
+// config is edited and persisted, ApplyHot pushes rule/strategy changes onto
+// the running engine without a full sing-box reload. It returns false when the
+// change could not be hot-applied (e.g. routing is not currently running, or an
+// enable/listen edit needs a full reload), in which case the caller signals
+// need_reload to the client.
+type RoutingController interface {
+	RoutingReporter
+	ApplyHot(cfg *config.Config) bool
+}
+
+// RoutingStatus is the observability view of the smart dispatch entry.
+type RoutingStatus struct {
+	Enabled         bool              `json:"enabled"`
+	DispatcherReady bool              `json:"dispatcher_ready"`
+	SharedEnabled   bool              `json:"shared_enabled"`
+	SharedRevision  int64             `json:"shared_revision,omitempty"`
+	ProfileScope    string            `json:"profile_scope,omitempty"`
+	Listen          string            `json:"listen,omitempty"`
+	DefaultStrategy string            `json:"default_strategy,omitempty"`
+	FinalPolicy     string            `json:"final_policy,omitempty"`
+	RuleCount       int               `json:"rule_count"`
+	StickyBuckets   map[string]string `json:"sticky_buckets,omitempty"`  // filter bucket → pinned node tag
+	StickySessions  map[string]string `json:"sticky_sessions,omitempty"` // session key → bound node tag
+}
+
 // SubscriptionStatus represents subscription refresh status.
 type SubscriptionStatus struct {
 	Enabled          bool      `json:"enabled"`           // Whether auto-refresh is enabled in config
@@ -82,13 +118,27 @@ type SubscriptionStatus struct {
 
 // Server exposes HTTP endpoints for monitoring.
 type Server struct {
-	cfg    Config
-	cfgMu  sync.RWMutex   // protects cfgSrc pointer assignment and local cfg fields
-	cfgSrc *config.Config // 可持久化的配置对象; fields protected by cfgSrc.mu
-	mgr    *Manager
-	srv    *http.Server
-	logger *log.Logger
-	store  store.Store // 数据存储
+	cfg                      Config
+	cfgMu                    sync.RWMutex   // protects cfgSrc pointer assignment and local cfg fields
+	cfgSrc                   *config.Config // 可持久化的配置对象; fields protected by cfgSrc.mu
+	configUpdateMu           sync.Mutex     // serializes cfgSrc swaps with persisted config edits
+	reloadWindowCount        int            // nested reload intents that reject persisted edits
+	localServerReloadPending bool           // persisted Local Server edit awaits reload publication
+	mgr                      *Manager
+	handler                  http.Handler
+
+	lifecycleMu sync.Mutex
+	srv         *http.Server
+	listener    net.Listener
+	listen      string
+	shutdown    bool
+	watchOnce   sync.Once
+	doneOnce    sync.Once
+	logger      *log.Logger
+
+	depsMu   sync.RWMutex
+	store    store.Store // 数据存储
+	profiles *profile.Manager
 
 	// Session management
 	sessionMu  sync.RWMutex
@@ -105,6 +155,7 @@ type Server struct {
 	nodeMgr      NodeManager
 	connectorMgr ConnectorManager
 	sourceSync   SourceSyncReporter
+	routing      RoutingController
 	proxyCompat  *proxyCompatState
 
 	// Serializes compatibility checkout selection/store so concurrent callers
@@ -112,9 +163,16 @@ type Server struct {
 	proxyCompatCheckoutMu sync.Mutex
 }
 
-// NewServer constructs a server; it can be nil when disabled.
+var (
+	errReloadInProgress              = errors.New("configuration update deferred while reload is in progress")
+	errInvalidLocalServerConfig      = errors.New("invalid local server config")
+	errLocalServerCredentialConflict = errors.New("local server credential conflict")
+)
+
+// NewServer constructs the reusable monitor runtime. A disabled config creates
+// a dormant server so integrations can be wired before management is enabled.
 func NewServer(cfg Config, mgr *Manager, logger *log.Logger) *Server {
-	if !cfg.Enabled || mgr == nil {
+	if mgr == nil {
 		return nil
 	}
 	if logger == nil {
@@ -168,6 +226,9 @@ func NewServer(cfg Config, mgr *Manager, logger *log.Logger) *Server {
 	mux.HandleFunc("/api/subscription/refresh", s.withAuth(s.handleSubscriptionRefresh))
 	mux.HandleFunc("/api/source-sync/status", s.withAuth(s.handleSourceSyncStatus))
 	mux.HandleFunc("/api/source-sync/source-health", s.withAuth(s.handleSourceSyncSourceHealth))
+	mux.HandleFunc("/api/routing/status", s.withAuth(s.handleRoutingStatus))
+	mux.HandleFunc("/api/routing/config", s.withAuth(s.handleRoutingConfig))
+	s.registerLocalServerRoutes(mux)
 	mux.HandleFunc("/api/reload", s.withAuth(s.handleReload))
 	mux.HandleFunc("/proxy/catalog", s.withAuth(s.handleProxyCatalog))
 	mux.HandleFunc("/proxy/snapshot", s.withAuth(s.handleProxySnapshot))
@@ -179,35 +240,406 @@ func NewServer(cfg Config, mgr *Manager, logger *log.Logger) *Server {
 
 	// Default handler for static assets (React App)
 	mux.HandleFunc("/", s.handleIndex)
-	s.srv = &http.Server{Addr: cfg.Listen, Handler: mux}
+	s.handler = mux
 	return s
+}
+
+const listenerShutdownTimeout = 2 * time.Second
+
+// ListenerTransition holds a pre-bound listener change. The old listener keeps
+// serving until Finalize, which makes activation rollback-safe and prevents a
+// reload handler from synchronously shutting down the server handling itself.
+type ListenerTransition struct {
+	server *Server
+
+	oldServer   *http.Server
+	oldListener net.Listener
+	oldListen   string
+
+	newServer   *http.Server
+	newListener net.Listener
+	newListen   string
+	enabled     bool
+	noChange    bool
+
+	oldConfigSource  *config.Config
+	oldRuntimeConfig Config
+	targetConfig     *config.Config
+	targetRuntime    persistedServerConfig
+	hasTargetConfig  bool
+	configApplied    bool
+
+	mu               sync.Mutex
+	activated        bool
+	done             bool
+	configUpdateHeld bool
+}
+
+func (t *ListenerTransition) releaseConfigUpdateLocked() {
+	if t == nil || !t.configUpdateHeld || t.server == nil {
+		return
+	}
+	t.configUpdateHeld = false
+	t.server.configUpdateMu.Unlock()
+}
+
+// PrepareListener synchronously binds a replacement address without disturbing
+// the active listener. Bind failures therefore leave the old endpoint intact.
+func (s *Server) PrepareListener(enabled bool, listen string, targetConfigs ...*config.Config) (*ListenerTransition, error) {
+	if s == nil {
+		return nil, errors.New("monitor server is nil")
+	}
+	listen = strings.TrimSpace(listen)
+	if enabled && listen == "" {
+		return nil, errors.New("monitor listen address is empty")
+	}
+	s.configUpdateMu.Lock()
+	var targetConfig *config.Config
+	if len(targetConfigs) > 0 {
+		targetConfig = targetConfigs[0]
+	}
+	targetRuntime, hasTargetConfig := snapshotPersistedServerConfig(targetConfig)
+	s.cfgMu.RLock()
+	oldConfigSource := s.cfgSrc
+	oldRuntimeConfig := cloneRuntimeConfig(s.cfg)
+	s.cfgMu.RUnlock()
+
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.shutdown {
+		s.configUpdateMu.Unlock()
+		return nil, errors.New("monitor server is shut down")
+	}
+	transition := &ListenerTransition{
+		server:           s,
+		oldServer:        s.srv,
+		oldListener:      s.listener,
+		oldListen:        s.listen,
+		enabled:          enabled,
+		newListen:        listen,
+		oldConfigSource:  oldConfigSource,
+		oldRuntimeConfig: oldRuntimeConfig,
+		targetConfig:     targetConfig,
+		targetRuntime:    targetRuntime,
+		hasTargetConfig:  hasTargetConfig,
+		configUpdateHeld: true,
+	}
+	if enabled && s.srv != nil && s.listen == listen {
+		transition.noChange = true
+		return transition, nil
+	}
+	if !enabled {
+		return transition, nil
+	}
+
+	listener, err := net.Listen("tcp", listen)
+	if err != nil {
+		s.configUpdateMu.Unlock()
+		return nil, fmt.Errorf("bind monitor listener %s: %w", listen, err)
+	}
+	transition.newListener = listener
+	transition.newServer = &http.Server{Addr: listen, Handler: s.handler}
+	return transition, nil
+}
+
+// Activate publishes the prepared listener while deliberately leaving the old
+// listener alive. Call Finalize after the surrounding reload commits, or
+// Rollback if a later transaction step fails.
+func (t *ListenerTransition) Activate(ctx context.Context) error {
+	if t == nil || t.server == nil {
+		return errors.New("monitor listener transition is nil")
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.done {
+		return errors.New("monitor listener transition already completed")
+	}
+	if t.activated {
+		return nil
+	}
+
+	s := t.server
+	s.lifecycleMu.Lock()
+	if s.shutdown {
+		s.lifecycleMu.Unlock()
+		t.releaseConfigUpdateLocked()
+		return errors.New("monitor server is shut down")
+	}
+	if s.srv != t.oldServer || s.listener != t.oldListener || s.listen != t.oldListen {
+		s.lifecycleMu.Unlock()
+		t.releaseConfigUpdateLocked()
+		return errors.New("monitor listener changed after transition preparation")
+	}
+	if t.hasTargetConfig {
+		s.applyPreparedConfigLocked(t.targetConfig, t.targetRuntime)
+		t.configApplied = true
+	}
+	if !t.noChange {
+		if t.enabled {
+			s.srv = t.newServer
+			s.listener = t.newListener
+			s.listen = t.newListen
+			s.serveLocked(t.newServer, t.newListener, t.newListen)
+		} else {
+			s.srv = nil
+			s.listener = nil
+			s.listen = ""
+		}
+	}
+	s.watchContextLocked(ctx)
+	s.lifecycleMu.Unlock()
+	t.activated = true
+	return nil
+}
+
+// Finalize commits the transition and drains the old HTTP server asynchronously
+// with a bounded timeout, allowing a request served by the old listener to
+// finish after triggering its own reload.
+func (t *ListenerTransition) Finalize() {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	if t.done {
+		t.mu.Unlock()
+		return
+	}
+	if !t.activated {
+		listener := t.newListener
+		t.done = true
+		t.releaseConfigUpdateLocked()
+		t.mu.Unlock()
+		if listener != nil {
+			_ = listener.Close()
+		}
+		return
+	}
+	if t.noChange {
+		t.done = true
+		t.releaseConfigUpdateLocked()
+		t.mu.Unlock()
+		return
+	}
+	oldServer := t.oldServer
+	newServer := t.newServer
+	t.done = true
+	t.releaseConfigUpdateLocked()
+	t.mu.Unlock()
+	if oldServer != nil && oldServer != newServer {
+		shutdownHTTPServerAsync(oldServer)
+	}
+}
+
+// Rollback restores the still-serving old listener and closes the prepared or
+// activated candidate listener.
+func (t *ListenerTransition) Rollback() error {
+	if t == nil || t.server == nil {
+		return errors.New("monitor listener transition is nil")
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.done {
+		return errors.New("monitor listener transition already completed")
+	}
+
+	s := t.server
+	if !t.activated {
+		t.done = true
+		t.releaseConfigUpdateLocked()
+		if t.newListener != nil {
+			_ = t.newListener.Close()
+		}
+		return nil
+	}
+	if t.activated {
+		s.lifecycleMu.Lock()
+		if !t.noChange {
+			currentMatches := false
+			if t.enabled {
+				currentMatches = s.srv == t.newServer && s.listener == t.newListener && s.listen == t.newListen
+			} else {
+				currentMatches = s.srv == nil && s.listener == nil && s.listen == ""
+			}
+			if !currentMatches {
+				s.lifecycleMu.Unlock()
+				t.releaseConfigUpdateLocked()
+				return errors.New("monitor listener changed after transition activation")
+			}
+			s.srv = t.oldServer
+			s.listener = t.oldListener
+			s.listen = t.oldListen
+		}
+		if t.configApplied {
+			s.restorePreparedConfigLocked(t.oldConfigSource, t.oldRuntimeConfig)
+		}
+		s.lifecycleMu.Unlock()
+	}
+	t.done = true
+	t.releaseConfigUpdateLocked()
+	if t.newServer != nil && t.newServer != t.oldServer {
+		shutdownHTTPServerAsync(t.newServer)
+	} else if t.newListener != nil {
+		_ = t.newListener.Close()
+	}
+	return nil
+}
+
+// Abort releases a prepared transition. It is safe before or after Activate.
+func (t *ListenerTransition) Abort() {
+	if t != nil {
+		_ = t.Rollback()
+	}
+}
+
+func (s *Server) serveLocked(server *http.Server, listener net.Listener, listen string) {
+	if server == nil || listener == nil {
+		return
+	}
+	s.logger.Printf("Starting monitor server on %s", listen)
+	go func() {
+		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
+			s.logger.Printf("❌ Monitor server error: %v", err)
+		}
+	}()
+	s.logger.Printf("✅ Monitor server started on http://%s", listen)
+}
+
+func (s *Server) watchContextLocked(ctx context.Context) {
+	if ctx == nil || ctx.Done() == nil {
+		return
+	}
+	s.watchOnce.Do(func() {
+		go func() {
+			<-ctx.Done()
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), listenerShutdownTimeout)
+			defer cancel()
+			s.Shutdown(shutdownCtx)
+		}()
+	})
+}
+
+func shutdownHTTPServerAsync(server *http.Server) {
+	if server == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), listenerShutdownTimeout)
+		defer cancel()
+		if err := server.Shutdown(ctx); err != nil {
+			_ = server.Close()
+		}
+	}()
 }
 
 // SetSubscriptionRefresher sets the subscription refresher for API endpoints.
 func (s *Server) SetSubscriptionRefresher(sr SubscriptionRefresher) {
 	if s != nil {
+		s.depsMu.Lock()
 		s.subRefresher = sr
+		s.depsMu.Unlock()
 	}
 }
 
 func (s *Server) SetSourceSyncReporter(sr SourceSyncReporter) {
 	if s != nil {
+		s.depsMu.Lock()
 		s.sourceSync = sr
+		s.depsMu.Unlock()
+	}
+}
+
+// SetRoutingController enables the /api/routing/* endpoints (status + config
+// read/write). The controller provides both the read-only status and the
+// hot-apply hook used after a routing config edit.
+func (s *Server) SetRoutingController(rc RoutingController) {
+	if s != nil {
+		s.depsMu.Lock()
+		s.routing = rc
+		s.depsMu.Unlock()
 	}
 }
 
 // SetNodeManager enables config-node CRUD endpoints.
 func (s *Server) SetNodeManager(nm NodeManager) {
 	if s != nil {
+		s.depsMu.Lock()
 		s.nodeMgr = nm
+		s.depsMu.Unlock()
 	}
 }
 
 // SetStore sets the data store for session persistence and other operations.
 func (s *Server) SetStore(st store.Store) {
 	if s != nil {
+		s.depsMu.Lock()
 		s.store = st
+		s.depsMu.Unlock()
 	}
+}
+
+// SetProfileManager publishes the Local Server profile/auth dependency used by
+// management authentication and profile APIs.
+func (s *Server) SetProfileManager(manager *profile.Manager) {
+	if s == nil {
+		return
+	}
+	s.depsMu.Lock()
+	s.profiles = manager
+	s.depsMu.Unlock()
+}
+
+func (s *Server) profileManagerSnapshot() *profile.Manager {
+	if s == nil {
+		return nil
+	}
+	s.depsMu.RLock()
+	defer s.depsMu.RUnlock()
+	return s.profiles
+}
+
+func (s *Server) subscriptionRefresherSnapshot() SubscriptionRefresher {
+	if s == nil {
+		return nil
+	}
+	s.depsMu.RLock()
+	defer s.depsMu.RUnlock()
+	return s.subRefresher
+}
+
+func (s *Server) sourceSyncSnapshot() SourceSyncReporter {
+	if s == nil {
+		return nil
+	}
+	s.depsMu.RLock()
+	defer s.depsMu.RUnlock()
+	return s.sourceSync
+}
+
+func (s *Server) routingSnapshot() RoutingController {
+	if s == nil {
+		return nil
+	}
+	s.depsMu.RLock()
+	defer s.depsMu.RUnlock()
+	return s.routing
+}
+
+func (s *Server) nodeManagerSnapshot() NodeManager {
+	if s == nil {
+		return nil
+	}
+	s.depsMu.RLock()
+	defer s.depsMu.RUnlock()
+	return s.nodeMgr
+}
+
+func (s *Server) storeSnapshot() store.Store {
+	if s == nil {
+		return nil
+	}
+	s.depsMu.RLock()
+	defer s.depsMu.RUnlock()
+	return s.store
 }
 
 // SetConfig binds the persistable config object for settings API.
@@ -215,27 +647,122 @@ func (s *Server) SetConfig(cfg *config.Config) {
 	if s == nil {
 		return
 	}
+	s.configUpdateMu.Lock()
+	defer s.configUpdateMu.Unlock()
+	runtimeCfg, hasConfig := snapshotPersistedServerConfig(cfg)
 	s.cfgMu.Lock()
 	defer s.cfgMu.Unlock()
 	s.cfgSrc = cfg
-	if cfg != nil {
-		cfg.RLock()
-		s.cfg.Enabled = cfg.ManagementEnabled()
-		s.cfg.Listen = cfg.Management.Listen
-		s.cfg.ExternalIP = cfg.ExternalIP
-		s.cfg.ProbeTarget = cfg.Management.ProbeTarget
-		s.cfg.ProbeTargets = append([]string(nil), cfg.Management.ProbeTargets...)
-		s.cfg.Password = cfg.Management.Password
-		if cfg.Mode == "hybrid" || cfg.Mode == "multi-port" {
-			s.cfg.ProxyUsername = cfg.MultiPort.Username
-			s.cfg.ProxyPassword = cfg.MultiPort.Password
-		} else {
-			s.cfg.ProxyUsername = cfg.Listener.Username
-			s.cfg.ProxyPassword = cfg.Listener.Password
-		}
-		s.cfg.SkipCertVerify = cfg.SkipCertVerify
-		cfg.RUnlock()
+	if hasConfig {
+		applyPersistedServerConfig(&s.cfg, runtimeCfg)
 	}
+	s.localServerReloadPending = false
+}
+
+// BeginReloadWindow rejects persisted edits while a reload intent is capturing
+// and committing a target configuration. Windows are nestable because a
+// subscription refresh may hold an outer intent while calling ReloadWithPortMap.
+func (s *Server) BeginReloadWindow() {
+	if s == nil {
+		return
+	}
+	s.configUpdateMu.Lock()
+	s.reloadWindowCount++
+	s.configUpdateMu.Unlock()
+}
+
+// EndReloadWindow releases one nested reload window.
+func (s *Server) EndReloadWindow() {
+	if s == nil {
+		return
+	}
+	s.configUpdateMu.Lock()
+	if s.reloadWindowCount > 0 {
+		s.reloadWindowCount--
+	}
+	s.configUpdateMu.Unlock()
+}
+
+type persistedServerConfig struct {
+	enabled        bool
+	listen         string
+	externalIP     string
+	probeTarget    string
+	probeTargets   []string
+	password       string
+	proxyUsername  string
+	proxyPassword  string
+	skipCertVerify bool
+}
+
+func snapshotPersistedServerConfig(cfg *config.Config) (persistedServerConfig, bool) {
+	if cfg == nil {
+		return persistedServerConfig{}, false
+	}
+	cfg.RLock()
+	defer cfg.RUnlock()
+	snapshot := persistedServerConfig{
+		enabled:        cfg.ManagementEnabled(),
+		listen:         cfg.Management.Listen,
+		externalIP:     cfg.ExternalIP,
+		probeTarget:    cfg.Management.ProbeTarget,
+		probeTargets:   append([]string(nil), cfg.Management.ProbeTargets...),
+		password:       cfg.Management.Password,
+		skipCertVerify: cfg.SkipCertVerify,
+	}
+	if cfg.Mode == "hybrid" || cfg.Mode == "multi-port" {
+		snapshot.proxyUsername = cfg.MultiPort.Username
+		snapshot.proxyPassword = cfg.MultiPort.Password
+	} else {
+		snapshot.proxyUsername = cfg.Listener.Username
+		snapshot.proxyPassword = cfg.Listener.Password
+	}
+	return snapshot, true
+}
+
+func applyPersistedServerConfig(dst *Config, snapshot persistedServerConfig) {
+	dst.Enabled = snapshot.enabled
+	dst.Listen = snapshot.listen
+	dst.ExternalIP = snapshot.externalIP
+	dst.ProbeTarget = snapshot.probeTarget
+	dst.ProbeTargets = append([]string(nil), snapshot.probeTargets...)
+	dst.Password = snapshot.password
+	dst.ProxyUsername = snapshot.proxyUsername
+	dst.ProxyPassword = snapshot.proxyPassword
+	dst.SkipCertVerify = snapshot.skipCertVerify
+}
+
+func cloneRuntimeConfig(cfg Config) Config {
+	cfg.ProbeTargets = append([]string(nil), cfg.ProbeTargets...)
+	return cfg
+}
+
+func (s *Server) applyPreparedConfig(source *config.Config, snapshot persistedServerConfig) {
+	s.configUpdateMu.Lock()
+	defer s.configUpdateMu.Unlock()
+	s.applyPreparedConfigLocked(source, snapshot)
+}
+
+func (s *Server) applyPreparedConfigLocked(source *config.Config, snapshot persistedServerConfig) {
+	s.cfgMu.Lock()
+	s.cfgSrc = source
+	applyPersistedServerConfig(&s.cfg, snapshot)
+	s.cfgMu.Unlock()
+	s.localServerReloadPending = false
+}
+
+func (s *Server) restorePreparedConfig(source *config.Config, runtimeCfg Config) {
+	s.configUpdateMu.Lock()
+	defer s.configUpdateMu.Unlock()
+	s.restorePreparedConfigLocked(source, runtimeCfg)
+}
+
+func (s *Server) restorePreparedConfigLocked(source *config.Config, runtimeCfg Config) {
+	s.cfgMu.Lock()
+	s.cfgSrc = source
+	s.cfg = cloneRuntimeConfig(runtimeCfg)
+	s.cfgMu.Unlock()
+	s.localServerReloadPending = false
 }
 
 func settingsChangeRequiresReload(c *config.Config, req allSettingsRequest) bool {
@@ -260,6 +787,8 @@ func settingsChangeRequiresReload(c *config.Config, req allSettingsRequest) bool
 	}
 
 	if c.Mode != req.Mode ||
+		c.LogLevel != req.LogLevel ||
+		c.SkipCertVerify != req.SkipCertVerify ||
 		c.Listener.Address != req.ListenerAddress ||
 		c.Listener.Port != req.ListenerPort ||
 		c.Listener.Protocol != normalizedListenerProtocol ||
@@ -279,7 +808,12 @@ func settingsChangeRequiresReload(c *config.Config, req allSettingsRequest) bool
 		c.SourceSync.ManifestToken != sourceManifestToken ||
 		c.SourceSync.DefaultDirectProxyScheme != defaultDirectProxyScheme ||
 		!reflect.DeepEqual(c.SourceSync.FallbackSubscriptions, req.SourceSyncFallbackSubscriptions) ||
-		!reflect.DeepEqual(c.Subscriptions, req.Subscriptions) {
+		!reflect.DeepEqual(c.Subscriptions, req.Subscriptions) ||
+		c.SubscriptionRefresh.Enabled != req.SubRefreshEnabled ||
+		c.SubscriptionRefresh.MinAvailableNodes != req.SubRefreshMinAvailableNodes ||
+		c.GeoIP.Enabled != req.GeoIPEnabled ||
+		strings.TrimSpace(c.GeoIP.DatabasePath) != strings.TrimSpace(req.GeoIPDatabasePath) ||
+		c.GeoIP.AutoUpdateEnabled != req.GeoIPAutoUpdateEnabled {
 		return true
 	}
 
@@ -512,8 +1046,137 @@ func (s *Server) getAllSettings() allSettingsResponse {
 	}
 }
 
+func (s *Server) getLocalServerSettings() map[string]any {
+	legacy := s.getAllSettings()
+	encoded, err := json.Marshal(legacy)
+	if err != nil {
+		return map[string]any{}
+	}
+	response := make(map[string]any)
+	if err := json.Unmarshal(encoded, &response); err != nil {
+		return map[string]any{}
+	}
+	delete(response, "listener_password")
+	delete(response, "management_password")
+	delete(response, "multi_port_password")
+	view := s.getLocalServerConfig()
+	response["local_server_enabled"] = view.Enabled
+	response["local_server_auth_username"] = view.AuthUsername
+	response["local_server_password_set"] = view.PasswordSet
+	return response
+}
+
+func applyAllSettingsRequest(c *config.Config, req allSettingsRequest) {
+	if c == nil {
+		return
+	}
+	c.Mode = req.Mode
+	c.LogLevel = req.LogLevel
+	c.ExternalIP = strings.TrimSpace(req.ExternalIP)
+	c.SkipCertVerify = req.SkipCertVerify
+
+	c.Listener.Address = req.ListenerAddress
+	c.Listener.Port = req.ListenerPort
+	if protocol, err := config.NormalizeInboundProtocol(req.ListenerProtocol); err == nil {
+		c.Listener.Protocol = protocol
+	}
+	c.Listener.Username = req.ListenerUsername
+	c.Listener.Password = req.ListenerPassword
+
+	c.MultiPort.Address = req.MultiPortAddress
+	c.MultiPort.BasePort = req.MultiPortBasePort
+	if protocol, err := config.NormalizeInboundProtocol(req.MultiPortProtocol); err == nil {
+		c.MultiPort.Protocol = protocol
+	}
+	c.MultiPort.Username = req.MultiPortUsername
+	c.MultiPort.Password = req.MultiPortPassword
+
+	c.Pool.Mode = req.PoolMode
+	c.Pool.FailureThreshold = req.PoolFailureThreshold
+	if duration, err := time.ParseDuration(req.PoolBlacklistDuration); err == nil && duration > 0 {
+		c.Pool.BlacklistDuration = duration
+	}
+
+	if req.ManagementEnabled != nil {
+		enabled := *req.ManagementEnabled
+		c.Management.Enabled = &enabled
+	}
+	c.Management.Listen = req.ManagementListen
+	c.Management.ProbeTarget = strings.TrimSpace(req.ManagementProbeTarget)
+	if c.Management.ProbeTarget != "" {
+		c.Management.ProbeTargets = nil
+	}
+	c.Management.Password = req.ManagementPassword
+	if duration, err := time.ParseDuration(req.ManagementHealthCheckInterval); err == nil && duration > 0 {
+		c.Management.HealthCheckInterval = duration
+	}
+
+	c.SubscriptionRefresh.Enabled = req.SubRefreshEnabled
+	if duration, err := time.ParseDuration(req.SubRefreshInterval); err == nil && duration > 0 {
+		c.SubscriptionRefresh.Interval = duration
+	}
+	if duration, err := time.ParseDuration(req.SubRefreshTimeout); err == nil && duration > 0 {
+		c.SubscriptionRefresh.Timeout = duration
+	}
+	if duration, err := time.ParseDuration(req.SubRefreshHealthCheckTimeout); err == nil && duration > 0 {
+		c.SubscriptionRefresh.HealthCheckTimeout = duration
+	}
+	if duration, err := time.ParseDuration(req.SubRefreshDrainTimeout); err == nil && duration > 0 {
+		c.SubscriptionRefresh.DrainTimeout = duration
+	}
+	c.SubscriptionRefresh.MinAvailableNodes = req.SubRefreshMinAvailableNodes
+
+	c.SourceSync.Enabled = req.SourceSyncEnabled
+	c.SourceSync.ManifestURL = strings.TrimSpace(req.SourceSyncManifestURL)
+	c.SourceSync.ManifestToken = strings.TrimSpace(req.SourceSyncManifestToken)
+	if duration, err := time.ParseDuration(req.SourceSyncRefreshInterval); err == nil && duration > 0 {
+		c.SourceSync.RefreshInterval = duration
+	}
+	if duration, err := time.ParseDuration(req.SourceSyncRequestTimeout); err == nil && duration > 0 {
+		c.SourceSync.RequestTimeout = duration
+	}
+	c.SourceSync.FallbackSubscriptions = append([]string(nil), req.SourceSyncFallbackSubscriptions...)
+	c.SourceSync.DefaultDirectProxyScheme = strings.TrimSpace(req.SourceSyncDefaultDirectProxyScheme)
+	if c.SourceSync.DefaultDirectProxyScheme == "" {
+		c.SourceSync.DefaultDirectProxyScheme = "http"
+	}
+
+	c.GeoIP.Enabled = req.GeoIPEnabled
+	c.GeoIP.DatabasePath = req.GeoIPDatabasePath
+	c.GeoIP.AutoUpdateEnabled = req.GeoIPAutoUpdateEnabled
+	if duration, err := time.ParseDuration(req.GeoIPAutoUpdateInterval); err == nil && duration > 0 {
+		c.GeoIP.AutoUpdateInterval = duration
+	}
+	c.Subscriptions = append([]string(nil), req.Subscriptions...)
+}
+
+// commitAllSettings copies only fields owned by PUT /api/settings. The target
+// config remains the object shared by BoxManager and the monitor server.
+func commitAllSettings(target, candidate *config.Config) {
+	if target == nil || candidate == nil {
+		return
+	}
+	target.Mode = candidate.Mode
+	target.LogLevel = candidate.LogLevel
+	target.ExternalIP = candidate.ExternalIP
+	target.SkipCertVerify = candidate.SkipCertVerify
+	target.Listener = candidate.Listener
+	target.MultiPort = candidate.MultiPort
+	target.Pool = candidate.Pool
+	target.Management = candidate.Management
+	target.SubscriptionRefresh = candidate.SubscriptionRefresh
+	target.SourceSync = candidate.SourceSync
+	target.GeoIP = candidate.GeoIP
+	target.Subscriptions = candidate.Subscriptions
+}
+
 // updateAllSettings applies all settings from request and persists to config file.
 func (s *Server) updateAllSettings(req allSettingsRequest) error {
+	_, err := s.updateAllSettingsWithReload(req)
+	return err
+}
+
+func (s *Server) updateAllSettingsWithReload(req allSettingsRequest) (bool, error) {
 	// Validate request before applying
 	if err := config.ValidateSettingsRequest(
 		req.Mode, req.ListenerPort, req.MultiPortBasePort,
@@ -523,183 +1186,128 @@ func (s *Server) updateAllSettings(req allSettingsRequest) error {
 		req.SourceSyncRefreshInterval, req.SourceSyncRequestTimeout,
 		req.GeoIPAutoUpdateInterval, req.ManagementHealthCheckInterval,
 	); err != nil {
-		return fmt.Errorf("参数验证失败: %w", err)
+		return false, fmt.Errorf("参数验证失败: %w", err)
 	}
 
+	s.configUpdateMu.Lock()
+	defer s.configUpdateMu.Unlock()
 	s.cfgMu.RLock()
 	c := s.cfgSrc
 	s.cfgMu.RUnlock()
 
 	if c == nil {
-		return errors.New("配置存储未初始化")
+		return false, errors.New("配置存储未初始化")
+	}
+	if s.reloadWindowCount > 0 {
+		return false, errReloadInProgress
 	}
 
-	// Lock the config object for writing
+	// Build and persist an isolated candidate before changing the live config.
+	// SaveSettings can fail (read-only/missing path); committing only afterward
+	// keeps the in-memory source, monitor runtime, and YAML in one state.
 	c.Lock()
-	defer c.Unlock()
+	effectiveReq := req
+	preserveLocalServerCredentials := c.LocalServer.Enabled
+	if profiles := s.profileManagerSnapshot(); profiles != nil && profiles.LocalServerEnabled() {
+		preserveLocalServerCredentials = true
+	}
+	if preserveLocalServerCredentials {
+		effectiveReq.ListenerUsername = c.LocalServer.Auth.Username
+		effectiveReq.ListenerPassword = c.LocalServer.Auth.Password
+		effectiveReq.ManagementPassword = c.LocalServer.Auth.Password
+	}
+	needReload := settingsChangeRequiresReload(c, effectiveReq)
+	candidate := c.Clone()
+	applyAllSettingsRequest(candidate, effectiveReq)
+	candidate.Lock()
+	err := candidate.SaveSettings()
+	candidate.Unlock()
+	if err != nil {
+		c.Unlock()
+		return false, fmt.Errorf("保存配置失败: %w", err)
+	}
+	commitAllSettings(c, candidate)
+	c.Unlock()
 
-	// Global
-	c.Mode = req.Mode
-	c.LogLevel = req.LogLevel
-	c.ExternalIP = strings.TrimSpace(req.ExternalIP)
-	c.SkipCertVerify = req.SkipCertVerify
-
-	// Listener
-	c.Listener.Address = req.ListenerAddress
-	c.Listener.Port = req.ListenerPort
-	if p, err := config.NormalizeInboundProtocol(req.ListenerProtocol); err == nil {
-		c.Listener.Protocol = p
-	}
-	c.Listener.Username = req.ListenerUsername
-	c.Listener.Password = req.ListenerPassword
-
-	// Multi-port
-	c.MultiPort.Address = req.MultiPortAddress
-	c.MultiPort.BasePort = req.MultiPortBasePort
-	if p, err := config.NormalizeInboundProtocol(req.MultiPortProtocol); err == nil {
-		c.MultiPort.Protocol = p
-	}
-	c.MultiPort.Username = req.MultiPortUsername
-	c.MultiPort.Password = req.MultiPortPassword
-
-	// Pool
-	c.Pool.Mode = req.PoolMode
-	c.Pool.FailureThreshold = req.PoolFailureThreshold
-	if d, err := time.ParseDuration(req.PoolBlacklistDuration); err == nil && d > 0 {
-		c.Pool.BlacklistDuration = d
-	}
-
-	// Management
-	if req.ManagementEnabled != nil {
-		c.Management.Enabled = req.ManagementEnabled
-	}
-	c.Management.Listen = req.ManagementListen
-	c.Management.ProbeTarget = strings.TrimSpace(req.ManagementProbeTarget)
-	if c.Management.ProbeTarget != "" {
-		c.Management.ProbeTargets = nil
-	}
-	c.Management.Password = req.ManagementPassword
-	if d, err := time.ParseDuration(req.ManagementHealthCheckInterval); err == nil && d > 0 {
-		c.Management.HealthCheckInterval = d
-	}
-
-	// Subscription refresh
-	c.SubscriptionRefresh.Enabled = req.SubRefreshEnabled
-	if d, err := time.ParseDuration(req.SubRefreshInterval); err == nil && d > 0 {
-		c.SubscriptionRefresh.Interval = d
-	}
-	if d, err := time.ParseDuration(req.SubRefreshTimeout); err == nil && d > 0 {
-		c.SubscriptionRefresh.Timeout = d
-	}
-	if d, err := time.ParseDuration(req.SubRefreshHealthCheckTimeout); err == nil && d > 0 {
-		c.SubscriptionRefresh.HealthCheckTimeout = d
-	}
-	if d, err := time.ParseDuration(req.SubRefreshDrainTimeout); err == nil && d > 0 {
-		c.SubscriptionRefresh.DrainTimeout = d
-	}
-	c.SubscriptionRefresh.MinAvailableNodes = req.SubRefreshMinAvailableNodes
-
-	// Source sync
-	c.SourceSync.Enabled = req.SourceSyncEnabled
-	c.SourceSync.ManifestURL = strings.TrimSpace(req.SourceSyncManifestURL)
-	c.SourceSync.ManifestToken = strings.TrimSpace(req.SourceSyncManifestToken)
-	if d, err := time.ParseDuration(req.SourceSyncRefreshInterval); err == nil && d > 0 {
-		c.SourceSync.RefreshInterval = d
-	}
-	if d, err := time.ParseDuration(req.SourceSyncRequestTimeout); err == nil && d > 0 {
-		c.SourceSync.RequestTimeout = d
-	}
-	c.SourceSync.FallbackSubscriptions = req.SourceSyncFallbackSubscriptions
-	c.SourceSync.DefaultDirectProxyScheme = strings.TrimSpace(req.SourceSyncDefaultDirectProxyScheme)
-	if c.SourceSync.DefaultDirectProxyScheme == "" {
-		c.SourceSync.DefaultDirectProxyScheme = "http"
-	}
-
-	// GeoIP
-	c.GeoIP.Enabled = req.GeoIPEnabled
-	c.GeoIP.DatabasePath = req.GeoIPDatabasePath
-	c.GeoIP.AutoUpdateEnabled = req.GeoIPAutoUpdateEnabled
-	if d, err := time.ParseDuration(req.GeoIPAutoUpdateInterval); err == nil && d > 0 {
-		c.GeoIP.AutoUpdateInterval = d
-	}
-
-	// Subscriptions
-	c.Subscriptions = req.Subscriptions
-
-	// Sync ALL monitor-level config fields for runtime effect
-	s.cfg.Enabled = c.ManagementEnabled()
-	s.cfg.Listen = c.Management.Listen
-	s.cfg.ExternalIP = c.ExternalIP
-	s.cfg.ProbeTarget = c.Management.ProbeTarget
-	s.cfg.ProbeTargets = append([]string(nil), c.Management.ProbeTargets...)
-	s.cfg.SkipCertVerify = c.SkipCertVerify
-	s.cfg.Password = c.Management.Password    // 密码立即生效
-	s.cfg.ProxyUsername = c.Listener.Username // 代理认证立即生效
-	s.cfg.ProxyPassword = c.Listener.Password
-
-	if err := c.SaveSettings(); err != nil {
-		return fmt.Errorf("保存配置失败: %w", err)
-	}
+	// Sync ALL monitor-level config fields only after persistence succeeds.
+	runtimeCfg, _ := snapshotPersistedServerConfig(candidate)
+	s.cfgMu.Lock()
+	applyPersistedServerConfig(&s.cfg, runtimeCfg)
+	s.cfgMu.Unlock()
 
 	// 动态更新 Manager 的探测目标，使其立即生效
-	if (c.Management.ProbeTarget != "" || len(c.Management.ProbeTargets) > 0) && s.mgr != nil {
-		if err := s.mgr.UpdateProbeTargets(c.Management.ProbeTargets, c.Management.ProbeTarget); err != nil {
+	if (candidate.Management.ProbeTarget != "" || len(candidate.Management.ProbeTargets) > 0) && s.mgr != nil {
+		if err := s.mgr.UpdateProbeTargets(candidate.Management.ProbeTargets, candidate.Management.ProbeTarget); err != nil {
 			s.logger.Printf("更新探测目标失败: %v", err)
 		}
 	}
 	if s.mgr != nil {
-		s.mgr.SetSkipCertVerify(c.SkipCertVerify)
+		s.mgr.SetSkipCertVerify(candidate.SkipCertVerify)
 	}
 	// 动态更新周期健康检查间隔，使其立即生效
-	if c.Management.HealthCheckInterval > 0 && s.mgr != nil {
-		s.mgr.SetHealthCheckInterval(c.Management.HealthCheckInterval)
+	if candidate.Management.HealthCheckInterval > 0 && s.mgr != nil {
+		s.mgr.SetHealthCheckInterval(candidate.Management.HealthCheckInterval)
 	}
 
 	s.logger.Printf("✅ 设置已保存并同步到运行时")
-	return nil
+	return needReload, nil
 }
 
-// Start launches the HTTP server.
-func (s *Server) Start(ctx context.Context) {
-	if s == nil || s.srv == nil {
-		return
+// Start synchronously binds and activates the configured HTTP listener.
+func (s *Server) Start(ctx context.Context) error {
+	if s == nil {
+		return nil
 	}
-	s.logger.Printf("Starting monitor server on %s", s.cfg.Listen)
-	go func() {
-		if err := s.srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			s.logger.Printf("❌ Monitor server error: %v", err)
-		}
-	}()
-	// Wait for server to actually start listening
-	for i := 0; i < 10; i++ {
-		conn, err := net.DialTimeout("tcp", s.cfg.Listen, 50*time.Millisecond)
-		if err == nil {
-			conn.Close()
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
+	s.cfgMu.RLock()
+	enabled := s.cfg.Enabled
+	listen := s.cfg.Listen
+	s.cfgMu.RUnlock()
+	if !enabled {
+		return nil
 	}
-	s.logger.Printf("✅ Monitor server started on http://%s", s.cfg.Listen)
-
-	go func() {
-		<-ctx.Done()
-		s.Shutdown(context.Background())
-	}()
+	transition, err := s.PrepareListener(true, listen)
+	if err != nil {
+		return err
+	}
+	if err := transition.Activate(ctx); err != nil {
+		transition.Abort()
+		return err
+	}
+	transition.Finalize()
+	return nil
 }
 
 // Shutdown stops the server gracefully.
 func (s *Server) Shutdown(ctx context.Context) {
-	if s == nil || s.srv == nil {
+	if s == nil {
 		return
 	}
-	// Signal background goroutines to stop
-	select {
-	case <-s.done:
-		// already closed
-	default:
-		close(s.done)
+	s.lifecycleMu.Lock()
+	if s.shutdown {
+		s.lifecycleMu.Unlock()
+		return
 	}
-	_ = s.srv.Shutdown(ctx)
+	s.shutdown = true
+	server := s.srv
+	s.srv = nil
+	s.listener = nil
+	s.listen = ""
+	s.doneOnce.Do(func() { close(s.done) })
+	s.lifecycleMu.Unlock()
+	if server == nil {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, listenerShutdownTimeout)
+		defer cancel()
+	}
+	if err := server.Shutdown(ctx); err != nil {
+		_ = server.Close()
+	}
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -1239,8 +1847,10 @@ func writeJSON(w http.ResponseWriter, payload any) {
 // withAuth 认证中间件，如果配置了密码则需要验证
 func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		credentials := s.credentialSnapshot()
+		password := credentials.Password
 		// 如果没有配置密码，直接放行
-		if s.cfg.Password == "" {
+		if password == "" {
 			next(w, r)
 			return
 		}
@@ -1260,6 +1870,17 @@ func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
 			if token, ok := bearerTokenFromHeader(authHeader); ok && s.validateSession(token) {
 				next(w, r)
 				return
+			}
+			if credentials.Username != "" {
+				if username, suppliedPassword, ok := r.BasicAuth(); ok && secureComparePair(
+					username,
+					suppliedPassword,
+					credentials.Username,
+					credentials.Password,
+				) {
+					next(w, r)
+					return
+				}
 			}
 			if s.validateManagementPassword(authHeader) {
 				next(w, r)
@@ -1282,11 +1903,12 @@ func bearerTokenFromHeader(authHeader string) (string, bool) {
 }
 
 func (s *Server) validateManagementPassword(authHeader string) bool {
-	if s == nil || s.cfg.Password == "" {
+	password := s.credentialSnapshot().Password
+	if password == "" {
 		return false
 	}
 
-	if secureCompareStrings(authHeader, s.cfg.Password) {
+	if secureCompareStrings(authHeader, password) {
 		return true
 	}
 
@@ -1295,20 +1917,62 @@ func (s *Server) validateManagementPassword(authHeader string) bool {
 		return false
 	}
 
-	return secureCompareStrings(token, s.cfg.Password)
+	return secureCompareStrings(token, password)
+}
+
+func (s *Server) credentialSnapshot() profile.CredentialSnapshot {
+	if manager := s.profileManagerSnapshot(); manager != nil && manager.LocalServerEnabled() {
+		credentials := manager.Credentials()
+		if credentials.Generation == 0 {
+			credentials.Generation = 1
+		}
+		return credentials
+	}
+	return profile.CredentialSnapshot{Password: s.managementPassword(), Generation: 1}
+}
+
+func (s *Server) managementPassword() string {
+	if s == nil {
+		return ""
+	}
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	return s.cfg.Password
+}
+
+func (s *Server) runtimeConfig() Config {
+	if s == nil {
+		return Config{}
+	}
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	cfg := s.cfg
+	cfg.ProbeTargets = append([]string(nil), s.cfg.ProbeTargets...)
+	return cfg
 }
 
 // handleAuth 处理登录认证
 func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
+	credentials := s.credentialSnapshot()
+	password := credentials.Password
 	// 如果没有配置密码，直接返回成功（不需要token）
-	if s.cfg.Password == "" {
+	if password == "" {
 		writeJSON(w, map[string]any{"message": "无需密码", "no_password": true})
 		return
 	}
 
 	// GET 请求用于检查是否需要密码（供前端初始化时使用）
 	if r.Method == http.MethodGet {
-		writeJSON(w, map[string]any{"message": "需要密码", "no_password": false})
+		if credentials.Username != "" {
+			writeJSON(w, map[string]any{
+				"message":           "需要用户名和密码",
+				"auth_mode":         "canonical_pair",
+				"username_required": true,
+				"no_password":       false,
+			})
+			return
+		}
+		writeJSON(w, map[string]any{"message": "需要密码", "auth_mode": "password", "username_required": false, "no_password": false})
 		return
 	}
 
@@ -1318,6 +1982,7 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
+		Username string `json:"username"`
 		Password string `json:"password"`
 	}
 
@@ -1328,7 +1993,11 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 使用 constant-time 比较防止时序攻击
-	if !secureCompareStrings(req.Password, s.cfg.Password) {
+	valid := secureCompareStrings(req.Password, password)
+	if credentials.Username != "" {
+		valid = secureComparePair(req.Username, req.Password, credentials.Username, credentials.Password)
+	}
+	if !valid {
 		// 添加随机延迟防止暴力破解
 		time.Sleep(time.Duration(100+mathrand.Intn(200)) * time.Millisecond)
 		w.WriteHeader(http.StatusUnauthorized)
@@ -1395,7 +2064,8 @@ func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	if !s.ensureNodeManager(w) {
+	nodeManager, ok := s.requireNodeManager(w)
+	if !ok {
 		return
 	}
 
@@ -1451,7 +2121,7 @@ func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
 			URI:  line,
 		}
 
-		if _, err := s.nodeMgr.CreateNode(r.Context(), node); err != nil {
+		if _, err := nodeManager.CreateNode(r.Context(), node); err != nil {
 			errs = append(errs, fmt.Sprintf("添加节点 %q 失败: %v", name, err))
 			continue
 		}
@@ -1480,22 +2150,48 @@ func truncateStr(s string, maxLen int) string {
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
+		if s.localServerSettingsMode() {
+			writeJSON(w, s.getLocalServerSettings())
+			return
+		}
 		resp := s.getAllSettings()
 		writeJSON(w, resp)
 	case http.MethodPut:
-		var req allSettingsRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		body, err := io.ReadAll(io.LimitReader(r.Body, 10<<20))
+		if err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			writeJSON(w, map[string]any{"error": "请求格式错误"})
 			return
 		}
+		var req allSettingsRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			writeJSON(w, map[string]any{"error": "请求格式错误"})
+			return
+		}
+		if s.localServerSettingsMode() {
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(body, &fields); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				writeJSON(w, map[string]any{"error": "请求格式错误"})
+				return
+			}
+			if nonEmptyJSONField(fields, "listener_password") ||
+				nonEmptyJSONField(fields, "management_password") ||
+				nonEmptyJSONField(fields, "multi_port_password") {
+				w.WriteHeader(http.StatusConflict)
+				writeJSON(w, map[string]any{"error": "credential_source_conflict"})
+				return
+			}
+		}
 
-		s.cfgMu.RLock()
-		current := s.cfgSrc
-		s.cfgMu.RUnlock()
-		needReload := settingsChangeRequiresReload(current, req)
-
-		if err := s.updateAllSettings(req); err != nil {
+		needReload, err := s.updateAllSettingsWithReload(req)
+		if err != nil {
+			if errors.Is(err, errReloadInProgress) {
+				w.WriteHeader(http.StatusConflict)
+				writeJSON(w, map[string]any{"error": "配置正在重载，请稍后重试", "need_reload": true})
+				return
+			}
 			w.WriteHeader(http.StatusInternalServerError)
 			writeJSON(w, map[string]any{"error": err.Error()})
 			return
@@ -1510,6 +2206,329 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func nonEmptyJSONField(fields map[string]json.RawMessage, key string) bool {
+	raw, ok := fields[key]
+	if !ok {
+		return false
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return true
+	}
+	return strings.TrimSpace(value) != ""
+}
+
+func (s *Server) localServerSettingsMode() bool {
+	return s.localServerConfigured() || s.localServerCompatEnabled()
+}
+
+type localServerConfigUpdate struct {
+	Enabled      *bool   `json:"enabled,omitempty"`
+	Listen       *string `json:"listen,omitempty"`
+	AuthUsername *string `json:"auth_username,omitempty"`
+	AuthPassword *string `json:"auth_password,omitempty"`
+}
+
+type localServerConfigView struct {
+	Enabled              bool   `json:"enabled"`
+	Listen               string `json:"listen"`
+	AuthUsername         string `json:"auth_username"`
+	PasswordSet          bool   `json:"password_set"`
+	CredentialGeneration uint64 `json:"credential_generation"`
+	SharedRevision       int64  `json:"shared_revision"`
+}
+
+func (s *Server) handleLocalServerConfig(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, s.getLocalServerConfig())
+	case http.MethodPut:
+		var req localServerConfigUpdate
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			writeJSON(w, map[string]any{"error": "invalid request body: " + err.Error()})
+			return
+		}
+		releaseBarrier, err := s.beginConfigMutation(r.Context())
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			writeJSON(w, map[string]any{"error": err.Error()})
+			return
+		}
+		view, needReload, err := s.updateLocalServerConfig(req)
+		releaseBarrier()
+		if err != nil {
+			switch {
+			case errors.Is(err, errReloadInProgress), errors.Is(err, errLocalServerCredentialConflict):
+				w.WriteHeader(http.StatusConflict)
+			case errors.Is(err, errInvalidLocalServerConfig):
+				w.WriteHeader(http.StatusUnprocessableEntity)
+			default:
+				w.WriteHeader(http.StatusInternalServerError)
+			}
+			writeJSON(w, map[string]any{"error": err.Error()})
+			return
+		}
+		registryRevision := uint64(0)
+		if profiles := s.profileManagerSnapshot(); profiles != nil {
+			registryRevision = profiles.RuntimeStatus().RegistryRevision
+		}
+		writeJSON(w, mutationEnvelope{
+			Revision:         view.SharedRevision,
+			RegistryRevision: registryRevision,
+			NeedReload:       needReload,
+			Resource:         view,
+		})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) getLocalServerConfig() localServerConfigView {
+	s.cfgMu.RLock()
+	c := s.cfgSrc
+	s.cfgMu.RUnlock()
+	if c == nil {
+		return localServerConfigView{}
+	}
+	c.RLock()
+	defer c.RUnlock()
+	return localServerConfigViewFromConfig(c)
+}
+
+func localServerConfigViewFromConfig(c *config.Config) localServerConfigView {
+	if c == nil {
+		return localServerConfigView{}
+	}
+	generation := c.LocalServer.CredentialGeneration
+	if generation == 0 {
+		generation = 1
+	}
+	sharedRevision := c.LocalServer.SharedRevision
+	if sharedRevision == 0 {
+		sharedRevision = 1
+	}
+	return localServerConfigView{
+		Enabled:              c.LocalServer.Enabled,
+		Listen:               strings.TrimSpace(c.LocalServer.Listen),
+		AuthUsername:         strings.TrimSpace(c.LocalServer.Auth.Username),
+		PasswordSet:          c.LocalServer.Auth.Password != "",
+		CredentialGeneration: generation,
+		SharedRevision:       sharedRevision,
+	}
+}
+
+func (s *Server) updateLocalServerConfig(req localServerConfigUpdate) (localServerConfigView, bool, error) {
+	s.configUpdateMu.Lock()
+	defer s.configUpdateMu.Unlock()
+
+	s.cfgMu.RLock()
+	c := s.cfgSrc
+	s.cfgMu.RUnlock()
+	if c == nil {
+		return localServerConfigView{}, false, errors.New("config storage is not initialized")
+	}
+	if s.reloadWindowCount > 0 {
+		return localServerConfigView{}, false, errReloadInProgress
+	}
+
+	c.Lock()
+	pendingReload := s.localServerReloadPending
+	currentEnabled := c.LocalServer.Enabled
+	currentListen := strings.TrimSpace(c.LocalServer.Listen)
+	currentUsername := strings.TrimSpace(c.LocalServer.Auth.Username)
+	currentPassword := c.LocalServer.Auth.Password
+	candidate := c.Clone()
+
+	if req.Enabled != nil {
+		candidate.LocalServer.Enabled = *req.Enabled
+	}
+	if req.Listen != nil {
+		candidate.LocalServer.Listen = strings.TrimSpace(*req.Listen)
+	}
+	if req.AuthUsername != nil {
+		candidate.LocalServer.Auth.Username = strings.TrimSpace(*req.AuthUsername)
+	} else if candidate.LocalServer.Enabled && strings.TrimSpace(candidate.LocalServer.Auth.Username) == "" {
+		legacyUsername := strings.TrimSpace(candidate.Listener.Username)
+		if validLocalServerUsername(legacyUsername) {
+			candidate.LocalServer.Auth.Username = legacyUsername
+		} else {
+			candidate.LocalServer.Auth.Username = "easyproxy"
+		}
+	}
+	if req.AuthPassword != nil {
+		if *req.AuthPassword == "" {
+			c.Unlock()
+			return localServerConfigView{}, false, fmt.Errorf("%w: auth_password must not be empty", errInvalidLocalServerConfig)
+		}
+		candidate.LocalServer.Auth.Password = *req.AuthPassword
+	} else if candidate.LocalServer.Enabled && candidate.LocalServer.Auth.Password == "" {
+		listenerPassword := candidate.Listener.Password
+		managementPassword := candidate.Management.Password
+		switch {
+		case listenerPassword != "" && managementPassword != "" && listenerPassword != managementPassword:
+			c.Unlock()
+			return localServerConfigView{}, false, fmt.Errorf("%w: legacy listener and management passwords differ", errLocalServerCredentialConflict)
+		case listenerPassword != "":
+			candidate.LocalServer.Auth.Password = listenerPassword
+		case managementPassword != "":
+			candidate.LocalServer.Auth.Password = managementPassword
+		}
+	}
+
+	if err := validateLocalServerConfigCandidate(candidate, req.AuthUsername != nil); err != nil {
+		c.Unlock()
+		return localServerConfigView{}, false, err
+	}
+
+	credentialChanged := currentUsername != candidate.LocalServer.Auth.Username ||
+		currentPassword != candidate.LocalServer.Auth.Password
+	enabledCredentialChange := !currentEnabled && candidate.LocalServer.Enabled
+	if credentialChanged || enabledCredentialChange {
+		generation := c.LocalServer.CredentialGeneration
+		if generation == 0 {
+			generation = 1
+		}
+		if generation == ^uint64(0) {
+			c.Unlock()
+			return localServerConfigView{}, false, fmt.Errorf("%w: credential generation overflow", errInvalidLocalServerConfig)
+		}
+		candidate.LocalServer.CredentialGeneration = generation + 1
+	}
+
+	if candidate.LocalServer.Auth.Username != "" {
+		candidate.Listener.Username = candidate.LocalServer.Auth.Username
+	}
+	if candidate.LocalServer.Auth.Password != "" {
+		candidate.Listener.Password = candidate.LocalServer.Auth.Password
+		candidate.Management.Password = candidate.LocalServer.Auth.Password
+	}
+
+	listenChanged := currentListen != candidate.LocalServer.Listen
+	needReload := pendingReload || currentEnabled != candidate.LocalServer.Enabled || listenChanged || (!currentEnabled && credentialChanged)
+
+	candidate.Lock()
+	err := candidate.SaveSettings()
+	candidate.Unlock()
+	if err != nil {
+		c.Unlock()
+		return localServerConfigView{}, false, fmt.Errorf("save config: %w", err)
+	}
+	commitLocalServerConfig(c, candidate)
+	c.Unlock()
+	s.localServerReloadPending = needReload
+
+	if !needReload {
+		runtimeCfg, _ := snapshotPersistedServerConfig(candidate)
+		s.cfgMu.Lock()
+		applyPersistedServerConfig(&s.cfg, runtimeCfg)
+		s.cfgMu.Unlock()
+
+		if currentEnabled && candidate.LocalServer.Enabled && credentialChanged {
+			if profiles := s.profileManagerSnapshot(); profiles != nil {
+				profiles.PublishCredentials(profile.CredentialSnapshot{
+					Username:   candidate.LocalServer.Auth.Username,
+					Password:   candidate.LocalServer.Auth.Password,
+					Generation: candidate.LocalServer.CredentialGeneration,
+				})
+			}
+			if routing := s.routingSnapshot(); routing != nil {
+				_ = routing.ApplyHot(candidate)
+			}
+		}
+	}
+
+	return localServerConfigViewFromConfig(candidate), needReload, nil
+}
+
+func commitLocalServerConfig(target, candidate *config.Config) {
+	target.LocalServer = candidate.LocalServer
+	target.Listener.Username = candidate.Listener.Username
+	target.Listener.Password = candidate.Listener.Password
+	target.Management.Password = candidate.Management.Password
+}
+
+func validateLocalServerConfigCandidate(candidate *config.Config, usernameExplicit bool) error {
+	if candidate == nil {
+		return fmt.Errorf("%w: config is nil", errInvalidLocalServerConfig)
+	}
+	username := strings.TrimSpace(candidate.LocalServer.Auth.Username)
+	if usernameExplicit || candidate.LocalServer.Enabled || username != "" {
+		if !validLocalServerUsername(username) {
+			return fmt.Errorf("%w: auth_username must be 1-64 ASCII letters, digits, '.', '_' or '-'", errInvalidLocalServerConfig)
+		}
+	}
+	candidate.LocalServer.Auth.Username = username
+
+	password := candidate.LocalServer.Auth.Password
+	if candidate.LocalServer.Enabled && password == "" {
+		return fmt.Errorf("%w: auth_password is required while Local Server is enabled", errInvalidLocalServerConfig)
+	}
+	if strings.IndexByte(password, 0) >= 0 {
+		return fmt.Errorf("%w: auth_password must not contain NUL", errInvalidLocalServerConfig)
+	}
+	if len(password) > 256 {
+		return fmt.Errorf("%w: auth_password must be at most 256 bytes", errInvalidLocalServerConfig)
+	}
+
+	listen := strings.TrimSpace(candidate.LocalServer.Listen)
+	if err := validateLocalServerListen(listen); err != nil {
+		return fmt.Errorf("%w: %v", errInvalidLocalServerConfig, err)
+	}
+	candidate.LocalServer.Listen = listen
+
+	if !candidate.LocalServer.Enabled {
+		return nil
+	}
+	if candidate.Mode != "pool" {
+		return fmt.Errorf("%w: enabled Local Server requires mode %q", errInvalidLocalServerConfig, "pool")
+	}
+	if candidate.Listener.Protocol != config.InboundProtocolMixed {
+		return fmt.Errorf("%w: enabled Local Server requires listener.protocol %q", errInvalidLocalServerConfig, config.InboundProtocolMixed)
+	}
+	if len(candidate.ExtraListeners) > 0 {
+		return fmt.Errorf("%w: enabled Local Server does not support extra_listeners", errInvalidLocalServerConfig)
+	}
+	routingListen := strings.TrimSpace(candidate.Routing.Listen)
+	if listen != "" && routingListen != "" && listen != routingListen {
+		return fmt.Errorf("%w: local_server.listen %q conflicts with routing.listen %q", errInvalidLocalServerConfig, listen, routingListen)
+	}
+	return nil
+}
+
+func validLocalServerUsername(username string) bool {
+	if username == "" || len(username) > 64 {
+		return false
+	}
+	for idx := 0; idx < len(username); idx++ {
+		ch := username[idx]
+		switch {
+		case ch >= 'a' && ch <= 'z':
+		case ch >= 'A' && ch <= 'Z':
+		case ch >= '0' && ch <= '9':
+		case ch == '.', ch == '_', ch == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func validateLocalServerListen(listen string) error {
+	if listen == "" {
+		return nil
+	}
+	_, portText, err := net.SplitHostPort(listen)
+	if err != nil {
+		return fmt.Errorf("listen must be a valid host:port: %w", err)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port < 1 || port > 65535 {
+		return fmt.Errorf("listen port must be between 1 and 65535")
+	}
+	return nil
+}
+
 // handleSubscriptionStatus returns the current subscription refresh status.
 // Works even when subRefresher is nil by reading config directly.
 func (s *Server) handleSubscriptionStatus(w http.ResponseWriter, r *http.Request) {
@@ -1518,7 +2537,8 @@ func (s *Server) handleSubscriptionStatus(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if s.subRefresher == nil {
+	subRefresher := s.subscriptionRefresherSnapshot()
+	if subRefresher == nil {
 		// No subscription manager — read config directly to provide accurate status
 		s.cfgMu.RLock()
 		c := s.cfgSrc
@@ -1539,7 +2559,7 @@ func (s *Server) handleSubscriptionStatus(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	status := s.subRefresher.Status()
+	status := subRefresher.Status()
 	writeJSON(w, map[string]any{
 		"enabled":           status.Enabled,
 		"has_subscriptions": status.HasSubscriptions,
@@ -1559,19 +2579,20 @@ func (s *Server) handleSubscriptionRefresh(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if s.subRefresher == nil {
+	subRefresher := s.subscriptionRefresherSnapshot()
+	if subRefresher == nil {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		writeJSON(w, map[string]any{"error": "订阅管理器未初始化，请重启程序"})
 		return
 	}
 
-	if err := s.subRefresher.RefreshNow(); err != nil {
+	if err := subRefresher.RefreshNow(); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		writeJSON(w, map[string]any{"error": err.Error()})
 		return
 	}
 
-	status := s.subRefresher.Status()
+	status := subRefresher.Status()
 	writeJSON(w, map[string]any{
 		"message":    "刷新成功",
 		"node_count": status.NodeCount,
@@ -1584,12 +2605,231 @@ func (s *Server) handleSourceSyncStatus(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if s.sourceSync == nil {
+	sourceSync := s.sourceSyncSnapshot()
+	if sourceSync == nil {
 		writeJSON(w, SourceSyncStatus{})
 		return
 	}
 
-	writeJSON(w, s.sourceSync.SourceSyncStatus())
+	writeJSON(w, sourceSync.SourceSyncStatus())
+}
+
+func (s *Server) handleRoutingStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if manager := s.profileManagerSnapshot(); manager != nil && manager.LocalServerEnabled() {
+		writeJSON(w, s.localServerRoutingStatus(manager))
+		return
+	}
+	routing := s.routingSnapshot()
+	if routing == nil {
+		writeJSON(w, RoutingStatus{Enabled: false})
+		return
+	}
+	writeJSON(w, routing.RoutingStatus())
+}
+
+// routingConfigPayload is the editable smart-routing configuration exchanged by
+// GET/PUT /api/routing/config. Durations are expressed as Go duration strings
+// (e.g. "2h", "10m") for human-friendly editing in the UI.
+type routingConfigPayload struct {
+	Enabled            bool                    `json:"enabled"`
+	Listen             string                  `json:"listen"`
+	DefaultStrategy    string                  `json:"default_strategy"`
+	UseDefaultRules    bool                    `json:"use_default_rules"`
+	FinalPolicy        string                  `json:"final_policy"`
+	Rules              []string                `json:"rules"`
+	RuleProviders      []routingProviderConfig `json:"rule_providers"`
+	LongLivedMinUptime string                  `json:"long_lived_min_uptime"`
+	LongLivedMinRate   float64                 `json:"long_lived_min_success_rate"`
+	SessionTTL         string                  `json:"session_ttl"`
+}
+
+type routingProviderConfig struct {
+	URL      string `json:"url"`
+	Policy   string `json:"policy"`
+	Behavior string `json:"behavior"`
+	Interval string `json:"interval"`
+}
+
+// handleRoutingConfig reads (GET) or updates (PUT) the smart-routing config.
+//
+// On PUT the config is validated, persisted to YAML, and then applied with the
+// cheapest sufficient mechanism: rule/strategy/final-policy edits are hot-applied
+// to the running engine; enable/disable or listen-address edits set need_reload
+// so the client can trigger a full reload (which rebinds the entry port and
+// rebuilds sing-box).
+func (s *Server) handleRoutingConfig(w http.ResponseWriter, r *http.Request) {
+	if manager := s.profileManagerSnapshot(); manager != nil && manager.LocalServerEnabled() {
+		s.handleLocalServerRoutingConfig(w, r, manager)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, s.getRoutingConfig())
+	case http.MethodPut:
+		var req routingConfigPayload
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			writeJSON(w, map[string]any{"error": "无效的请求体: " + err.Error()})
+			return
+		}
+		needReload, err := s.updateRoutingConfig(req)
+		if err != nil {
+			if errors.Is(err, errReloadInProgress) {
+				w.WriteHeader(http.StatusConflict)
+				writeJSON(w, map[string]any{"error": "配置正在重载，请稍后重试", "need_reload": true})
+				return
+			}
+			w.WriteHeader(http.StatusInternalServerError)
+			writeJSON(w, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, map[string]any{
+			"message":     "分流配置已保存",
+			"need_reload": needReload,
+		})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+// getRoutingConfig snapshots the current routing config into the editable payload.
+func (s *Server) getRoutingConfig() routingConfigPayload {
+	s.cfgMu.RLock()
+	c := s.cfgSrc
+	s.cfgMu.RUnlock()
+	if c == nil {
+		return routingConfigPayload{}
+	}
+	c.RLock()
+	defer c.RUnlock()
+
+	providers := make([]routingProviderConfig, 0, len(c.Routing.RuleProviders))
+	for _, p := range c.Routing.RuleProviders {
+		providers = append(providers, routingProviderConfig{
+			URL:      p.URL,
+			Policy:   p.Policy,
+			Behavior: p.Behavior,
+			Interval: p.Interval.String(),
+		})
+	}
+	return routingConfigPayload{
+		Enabled:            c.Routing.Enabled,
+		Listen:             c.Routing.Listen,
+		DefaultStrategy:    c.Routing.DefaultStrategy,
+		UseDefaultRules:    c.RoutingUseDefaultRules(),
+		FinalPolicy:        c.Routing.FinalPolicy,
+		Rules:              append([]string(nil), c.Routing.Rules...),
+		RuleProviders:      providers,
+		LongLivedMinUptime: c.Routing.LongLived.MinUptime.String(),
+		LongLivedMinRate:   c.Routing.LongLived.MinSuccessRate,
+		SessionTTL:         c.Routing.Session.TTL.String(),
+	}
+}
+
+// updateRoutingConfig validates, persists, and applies a routing config edit.
+// Returns whether a full reload is required for the change to fully take effect.
+func (s *Server) updateRoutingConfig(req routingConfigPayload) (bool, error) {
+	// Parse/validate durations up front so a bad value fails cleanly before we
+	// mutate anything.
+	var llUptime, sessionTTL time.Duration
+	if v := strings.TrimSpace(req.LongLivedMinUptime); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d < 0 {
+			return false, fmt.Errorf("长效判定时长无效: %q", req.LongLivedMinUptime)
+		}
+		llUptime = d
+	}
+	if v := strings.TrimSpace(req.SessionTTL); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d < 0 {
+			return false, fmt.Errorf("会话 TTL 无效: %q", req.SessionTTL)
+		}
+		sessionTTL = d
+	}
+	if req.LongLivedMinRate < 0 || req.LongLivedMinRate > 1 {
+		return false, fmt.Errorf("长效成功率需在 0~1 之间: %v", req.LongLivedMinRate)
+	}
+	providers := make([]config.RuleProvider, 0, len(req.RuleProviders))
+	for _, p := range req.RuleProviders {
+		if strings.TrimSpace(p.URL) == "" {
+			continue
+		}
+		var interval time.Duration
+		if v := strings.TrimSpace(p.Interval); v != "" {
+			d, err := time.ParseDuration(v)
+			if err != nil || d < 0 {
+				return false, fmt.Errorf("规则订阅刷新间隔无效: %q", p.Interval)
+			}
+			interval = d
+		}
+		providers = append(providers, config.RuleProvider{
+			URL:      strings.TrimSpace(p.URL),
+			Policy:   strings.TrimSpace(p.Policy),
+			Behavior: strings.TrimSpace(p.Behavior),
+			Interval: interval,
+		})
+	}
+	if err := config.ValidateRuleProviders(providers); err != nil {
+		return false, err
+	}
+
+	s.configUpdateMu.Lock()
+	defer s.configUpdateMu.Unlock()
+	s.cfgMu.RLock()
+	c := s.cfgSrc
+	s.cfgMu.RUnlock()
+	if c == nil {
+		return false, errors.New("配置存储未初始化")
+	}
+	if s.reloadWindowCount > 0 {
+		return false, errReloadInProgress
+	}
+
+	// Determine whether the change needs a full reload BEFORE mutating config:
+	// enable/disable and listen-address edits change whether the pool inbound
+	// binds the entry port, while session TTL changes rebuild sticky state.
+	// Long-lived thresholds are propagated directly to existing monitor entries.
+	c.Lock()
+	reloadNeeded := c.Routing.Enabled != req.Enabled ||
+		strings.TrimSpace(c.Routing.Listen) != strings.TrimSpace(req.Listen) ||
+		c.Routing.Session.TTL != sessionTTL
+	candidate := c.Clone()
+	candidate.Routing.Enabled = req.Enabled
+	candidate.Routing.Listen = strings.TrimSpace(req.Listen)
+	candidate.Routing.DefaultStrategy = strings.TrimSpace(req.DefaultStrategy)
+	useDefaults := req.UseDefaultRules
+	candidate.Routing.UseDefaultRules = &useDefaults
+	candidate.Routing.FinalPolicy = strings.TrimSpace(req.FinalPolicy)
+	candidate.Routing.Rules = append([]string(nil), req.Rules...)
+	candidate.Routing.RuleProviders = providers
+	candidate.Routing.LongLived.MinUptime = llUptime
+	candidate.Routing.LongLived.MinSuccessRate = req.LongLivedMinRate
+	candidate.Routing.Session.TTL = sessionTTL
+	candidate.Lock()
+	err := candidate.SaveSettings()
+	candidate.Unlock()
+	if err != nil {
+		c.Unlock()
+		return false, fmt.Errorf("保存配置失败: %w", err)
+	}
+	c.Routing = candidate.Routing
+	c.Unlock()
+
+	// Hot-apply rules, strategy, final policy, providers, and long-lived
+	// thresholds when no structural change forces a reload.
+	routing := s.routingSnapshot()
+	if !reloadNeeded && routing != nil {
+		if applied := routing.ApplyHot(c); applied {
+			return false, nil
+		}
+		// Not hot-appliable (e.g. routing running-state mismatch) → reload.
+		return true, nil
+	}
+	return reloadNeeded, nil
 }
 
 func (s *Server) handleSourceSyncSourceHealth(w http.ResponseWriter, r *http.Request) {
@@ -1674,13 +2914,14 @@ func (p nodePayload) toConfig() config.NodeConfig {
 
 // handleConfigNodes handles GET (list) and POST (create) for config nodes.
 func (s *Server) handleConfigNodes(w http.ResponseWriter, r *http.Request) {
-	if !s.ensureNodeManager(w) {
+	nodeManager, ok := s.requireNodeManager(w)
+	if !ok {
 		return
 	}
 
 	switch r.Method {
 	case http.MethodGet:
-		nodes, err := s.nodeMgr.ListConfigNodes(r.Context())
+		nodes, err := nodeManager.ListConfigNodes(r.Context())
 		if err != nil {
 			s.respondNodeError(w, err)
 			return
@@ -1693,7 +2934,7 @@ func (s *Server) handleConfigNodes(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, map[string]any{"error": "请求格式错误"})
 			return
 		}
-		node, err := s.nodeMgr.CreateNode(r.Context(), payload.toConfig())
+		node, err := nodeManager.CreateNode(r.Context(), payload.toConfig())
 		if err != nil {
 			s.respondNodeError(w, err)
 			return
@@ -1706,7 +2947,8 @@ func (s *Server) handleConfigNodes(w http.ResponseWriter, r *http.Request) {
 
 // handleConfigNodeItem handles PUT (update) and DELETE for a specific config node.
 func (s *Server) handleConfigNodeItem(w http.ResponseWriter, r *http.Request) {
-	if !s.ensureNodeManager(w) {
+	nodeManager, ok := s.requireNodeManager(w)
+	if !ok {
 		return
 	}
 
@@ -1726,7 +2968,7 @@ func (s *Server) handleConfigNodeItem(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, map[string]any{"error": "请求格式错误"})
 			return
 		}
-		node, err := s.nodeMgr.UpdateNode(r.Context(), nodeName, payload.toConfig())
+		node, err := nodeManager.UpdateNode(r.Context(), nodeName, payload.toConfig())
 		if err != nil {
 			s.respondNodeError(w, err)
 			return
@@ -1746,7 +2988,7 @@ func (s *Server) handleConfigNodeItem(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, map[string]any{"error": "缺少 enabled 字段"})
 			return
 		}
-		if err := s.nodeMgr.SetNodeEnabled(r.Context(), nodeName, *body.Enabled); err != nil {
+		if err := nodeManager.SetNodeEnabled(r.Context(), nodeName, *body.Enabled); err != nil {
 			s.respondNodeError(w, err)
 			return
 		}
@@ -1756,7 +2998,7 @@ func (s *Server) handleConfigNodeItem(w http.ResponseWriter, r *http.Request) {
 		}
 		// Auto-reload after toggle
 		reloadMsg := ""
-		if err := s.nodeMgr.TriggerReload(r.Context()); err != nil {
+		if err := nodeManager.TriggerReload(r.Context()); err != nil {
 			s.logger.Printf("auto-reload after toggle failed: %v", err)
 			reloadMsg = "（自动重载失败，请手动重载）"
 		} else {
@@ -1764,7 +3006,7 @@ func (s *Server) handleConfigNodeItem(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, map[string]any{"message": fmt.Sprintf("节点 %s %s%s", nodeName, action, reloadMsg)})
 	case http.MethodDelete:
-		if err := s.nodeMgr.DeleteNode(r.Context(), nodeName); err != nil {
+		if err := nodeManager.DeleteNode(r.Context(), nodeName); err != nil {
 			s.respondNodeError(w, err)
 			return
 		}
@@ -1780,7 +3022,8 @@ func (s *Server) handleConfigNodesBatchToggle(w http.ResponseWriter, r *http.Req
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	if !s.ensureNodeManager(w) {
+	nodeManager, ok := s.requireNodeManager(w)
+	if !ok {
 		return
 	}
 
@@ -1802,7 +3045,7 @@ func (s *Server) handleConfigNodesBatchToggle(w http.ResponseWriter, r *http.Req
 	var errs []string
 	successCount := 0
 	for _, name := range body.Names {
-		if err := s.nodeMgr.SetNodeEnabled(r.Context(), name, body.Enabled); err != nil {
+		if err := nodeManager.SetNodeEnabled(r.Context(), name, body.Enabled); err != nil {
 			errs = append(errs, fmt.Sprintf("%s: %v", name, err))
 		} else {
 			successCount++
@@ -1817,7 +3060,7 @@ func (s *Server) handleConfigNodesBatchToggle(w http.ResponseWriter, r *http.Req
 	// Auto-reload after batch toggle
 	reloadMsg := ""
 	if successCount > 0 {
-		if err := s.nodeMgr.TriggerReload(r.Context()); err != nil {
+		if err := nodeManager.TriggerReload(r.Context()); err != nil {
 			s.logger.Printf("auto-reload after batch toggle failed: %v", err)
 			reloadMsg = "（自动重载失败，请手动重载）"
 		} else {
@@ -1842,7 +3085,8 @@ func (s *Server) handleConfigNodesBatchDelete(w http.ResponseWriter, r *http.Req
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	if !s.ensureNodeManager(w) {
+	nodeManager, ok := s.requireNodeManager(w)
+	if !ok {
 		return
 	}
 
@@ -1863,7 +3107,7 @@ func (s *Server) handleConfigNodesBatchDelete(w http.ResponseWriter, r *http.Req
 	var errs []string
 	successCount := 0
 	for _, name := range body.Names {
-		if err := s.nodeMgr.DeleteNode(r.Context(), name); err != nil {
+		if err := nodeManager.DeleteNode(r.Context(), name); err != nil {
 			errs = append(errs, fmt.Sprintf("%s: %v", name, err))
 		} else {
 			successCount++
@@ -1873,7 +3117,7 @@ func (s *Server) handleConfigNodesBatchDelete(w http.ResponseWriter, r *http.Req
 	// Auto-reload after batch delete
 	reloadMsg := ""
 	if successCount > 0 {
-		if err := s.nodeMgr.TriggerReload(r.Context()); err != nil {
+		if err := nodeManager.TriggerReload(r.Context()); err != nil {
 			s.logger.Printf("auto-reload after batch delete failed: %v", err)
 			reloadMsg = "（自动重载失败，请手动重载）"
 		} else {
@@ -1898,11 +3142,12 @@ func (s *Server) handleReload(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	if !s.ensureNodeManager(w) {
+	nodeManager, ok := s.requireNodeManager(w)
+	if !ok {
 		return
 	}
 
-	if err := s.nodeMgr.TriggerReload(r.Context()); err != nil {
+	if err := nodeManager.TriggerReload(r.Context()); err != nil {
 		s.respondNodeError(w, err)
 		return
 	}
@@ -1911,13 +3156,14 @@ func (s *Server) handleReload(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) ensureNodeManager(w http.ResponseWriter) bool {
-	if s.nodeMgr == nil {
+func (s *Server) requireNodeManager(w http.ResponseWriter) (NodeManager, bool) {
+	nodeManager := s.nodeManagerSnapshot()
+	if nodeManager == nil {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		writeJSON(w, map[string]any{"error": "节点管理未启用"})
-		return false
+		return nil, false
 	}
-	return true
+	return nodeManager, true
 }
 
 func (s *Server) respondNodeError(w http.ResponseWriter, err error) {
@@ -1951,20 +3197,27 @@ func (s *Server) createSession() (*Session, error) {
 	}
 
 	now := time.Now()
+	generation := s.credentialSnapshot().Generation
+	if generation == 0 {
+		generation = 1
+	}
 	session := &Session{
-		Token:     token,
-		CreatedAt: now,
-		ExpiresAt: now.Add(s.sessionTTL),
+		Token:                token,
+		CreatedAt:            now,
+		ExpiresAt:            now.Add(s.sessionTTL),
+		CredentialGeneration: generation,
 	}
 
 	// Persist to Store if available
-	if s.store != nil {
+	storeRef := s.storeSnapshot()
+	if storeRef != nil {
 		storeSession := &store.Session{
-			Token:     session.Token,
-			CreatedAt: session.CreatedAt,
-			ExpiresAt: session.ExpiresAt,
+			Token:                session.Token,
+			CreatedAt:            session.CreatedAt,
+			ExpiresAt:            session.ExpiresAt,
+			CredentialGeneration: session.CredentialGeneration,
 		}
-		if err := s.store.CreateSession(context.Background(), storeSession); err != nil {
+		if err := storeRef.CreateSession(context.Background(), storeSession); err != nil {
 			s.logger.Printf("Failed to persist session to store: %v", err)
 		}
 	}
@@ -1979,19 +3232,28 @@ func (s *Server) createSession() (*Session, error) {
 
 // validateSession checks if a session token is valid and not expired.
 func (s *Server) validateSession(token string) bool {
+	storeRef := s.storeSnapshot()
+	currentGeneration := s.credentialSnapshot().Generation
+	if currentGeneration == 0 {
+		currentGeneration = 1
+	}
 	// Check in-memory cache first
 	s.sessionMu.RLock()
 	session, exists := s.sessions[token]
 	s.sessionMu.RUnlock()
 
 	if exists {
-		if time.Now().After(session.ExpiresAt) {
+		sessionGeneration := session.CredentialGeneration
+		if sessionGeneration == 0 {
+			sessionGeneration = 1
+		}
+		if time.Now().After(session.ExpiresAt) || sessionGeneration != currentGeneration {
 			s.sessionMu.Lock()
 			delete(s.sessions, token)
 			s.sessionMu.Unlock()
 			// Also delete from store
-			if s.store != nil {
-				_ = s.store.DeleteSession(context.Background(), token)
+			if storeRef != nil {
+				_ = storeRef.DeleteSession(context.Background(), token)
 			}
 			return false
 		}
@@ -1999,21 +3261,26 @@ func (s *Server) validateSession(token string) bool {
 	}
 
 	// Fallback: check Store (e.g., after restart)
-	if s.store != nil {
-		storeSess, err := s.store.GetSession(context.Background(), token)
+	if storeRef != nil {
+		storeSess, err := storeRef.GetSession(context.Background(), token)
 		if err != nil || storeSess == nil {
 			return false
 		}
-		if time.Now().After(storeSess.ExpiresAt) {
-			_ = s.store.DeleteSession(context.Background(), token)
+		storeGeneration := storeSess.CredentialGeneration
+		if storeGeneration == 0 {
+			storeGeneration = 1
+		}
+		if time.Now().After(storeSess.ExpiresAt) || storeGeneration != currentGeneration {
+			_ = storeRef.DeleteSession(context.Background(), token)
 			return false
 		}
 		// Restore to in-memory cache
 		s.sessionMu.Lock()
 		s.sessions[token] = &Session{
-			Token:     storeSess.Token,
-			CreatedAt: storeSess.CreatedAt,
-			ExpiresAt: storeSess.ExpiresAt,
+			Token:                storeSess.Token,
+			CreatedAt:            storeSess.CreatedAt,
+			ExpiresAt:            storeSess.ExpiresAt,
+			CredentialGeneration: storeGeneration,
 		}
 		s.sessionMu.Unlock()
 		return true
@@ -2042,8 +3309,8 @@ func (s *Server) cleanupExpiredSessions() {
 			s.sessionMu.Unlock()
 
 			// Also cleanup in Store
-			if s.store != nil {
-				_ = s.store.CleanupExpiredSessions(context.Background())
+			if storeRef := s.storeSnapshot(); storeRef != nil {
+				_ = storeRef.CleanupExpiredSessions(context.Background())
 			}
 		}
 	}
@@ -2051,5 +3318,13 @@ func (s *Server) cleanupExpiredSessions() {
 
 // secureCompareStrings performs constant-time string comparison to prevent timing attacks.
 func secureCompareStrings(a, b string) bool {
-	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
+	aHash := sha256.Sum256([]byte(a))
+	bHash := sha256.Sum256([]byte(b))
+	return subtle.ConstantTimeCompare(aHash[:], bHash[:]) == 1
+}
+
+func secureComparePair(username, password, expectedUsername, expectedPassword string) bool {
+	usernameOK := secureCompareStrings(username, expectedUsername)
+	passwordOK := secureCompareStrings(password, expectedPassword)
+	return usernameOK && passwordOK
 }

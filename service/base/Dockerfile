@@ -7,7 +7,7 @@ RUN npm config set registry ${NPM_REGISTRY}
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ .
-RUN npx vite build --outDir /frontend-dist
+RUN npm run build -- --outDir /frontend-dist
 
 # ── Stage 2: Build Go binary ───────────────────────────────────
 FROM --platform=$BUILDPLATFORM golang:1.24 AS builder
@@ -35,7 +35,8 @@ RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debia
 WORKDIR /app
 COPY --from=builder /src/easy-proxy /usr/local/bin/easy-proxy
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
+    && chmod +x /usr/local/bin/docker-entrypoint.sh
 COPY --chown=easy:easy config.example.yaml /etc/easy-proxy/config.yaml
 # Pool/Hybrid mode: 22323, Management: 29888, Multi-port/Hybrid mode: 25000-25500
 EXPOSE 22323 29888 25000-25500

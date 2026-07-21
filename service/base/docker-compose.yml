@@ -10,15 +10,15 @@ services:
     network_mode: host
     # 方式二：手动映射端口（注释掉 network_mode，启用下面的 ports）
     # ports:
-    #   # Pool 模式入口（pool/hybrid 模式使用）
+    #   # Local Server mixed entry（disabled Local Server keeps legacy pool behavior）
     #   - "22323:22323"
-    #   # Web 监控面板
+    #   # Shared Web Console and management API
     #   - "29888:29888"
-    #   # Multi-port 端口范围（multi-port/hybrid 模式使用，根据节点数量调整）
+    #   # Legacy-only multi-port range（Local Server incompatible）
     #   - "25000-25500:25000-25500"
     #
     # 支持的运行模式（在 config.yaml 中配置）：
-    #   - pool: 单端口代理池，所有节点共享 22323 端口
+    #   - pool: 单端口代理池；启用 Local Server 时 22323 是 mixed 入口
     #   - multi-port: 多端口模式，每个节点独立端口
     #   - hybrid: 混合模式，同时启用 pool (22323) + multi-port (25000+)
     #

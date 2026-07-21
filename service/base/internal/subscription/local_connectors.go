@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -35,11 +36,57 @@ func (m *Manager) ListConfigConnectors(_ context.Context) ([]config.ConnectorSou
 	return connectors, nil
 }
 
-func (m *Manager) CreateConnector(_ context.Context, connector config.ConnectorSourceConfig) (config.ConnectorSourceConfig, error) {
-	cfg, err := m.configRef()
+func (m *Manager) beginConnectorMutation(ctx context.Context) (func(), error) {
+	m.mu.RLock()
+	boxMgr := m.boxMgr
+	m.mu.RUnlock()
+	if boxMgr == nil {
+		return func() {}, nil
+	}
+	return boxMgr.BeginConfigMutation(ctx)
+}
+
+func (m *Manager) beginConnectorCommit(ctx context.Context, expectedCfg *config.Config) (*config.Config, func(), error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	release, err := m.beginConnectorMutation(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	currentCfg, err := m.configRef()
+	if err != nil {
+		release()
+		return nil, nil, err
+	}
+	if expectedCfg != nil && currentCfg != expectedCfg {
+		release()
+		return nil, nil, fmt.Errorf("%w: 配置已更新，请重试", monitor.ErrConnectorConflict)
+	}
+	return currentCfg, release, nil
+}
+
+// saveConnectorCandidate persists a candidate while the caller holds cfg's
+// write lock; failed writes therefore leave the active in-memory connectors untouched.
+func saveConnectorCandidate(cfg *config.Config, connectors []config.ConnectorSourceConfig) error {
+	candidate := cfg.Clone()
+	candidate.Connectors = cloneConnectorConfigs(connectors)
+	candidate.Lock()
+	err := candidate.SaveSettings()
+	candidate.Unlock()
+	if err != nil {
+		return err
+	}
+	cfg.Connectors = cloneConnectorConfigs(connectors)
+	return nil
+}
+
+func (m *Manager) CreateConnector(ctx context.Context, connector config.ConnectorSourceConfig) (config.ConnectorSourceConfig, error) {
+	cfg, release, err := m.beginConnectorCommit(ctx, nil)
 	if err != nil {
 		return config.ConnectorSourceConfig{}, err
 	}
+	defer release()
 
 	normalized, err := normalizeManagedConnector(connector)
 	if err != nil {
@@ -52,18 +99,19 @@ func (m *Manager) CreateConnector(_ context.Context, connector config.ConnectorS
 	if connectorIndexByName(cfg.Connectors, normalized.Name) >= 0 {
 		return config.ConnectorSourceConfig{}, fmt.Errorf("%w: %s", monitor.ErrConnectorConflict, normalized.Name)
 	}
-	cfg.Connectors = append(cfg.Connectors, normalized)
-	if err := cfg.SaveSettings(); err != nil {
+	connectors := append(cloneConnectorConfigs(cfg.Connectors), normalized)
+	if err := saveConnectorCandidate(cfg, connectors); err != nil {
 		return config.ConnectorSourceConfig{}, fmt.Errorf("保存连接器配置失败: %w", err)
 	}
 	return cloneConnectorConfig(normalized), nil
 }
 
-func (m *Manager) UpdateConnector(_ context.Context, name string, connector config.ConnectorSourceConfig) (config.ConnectorSourceConfig, error) {
-	cfg, err := m.configRef()
+func (m *Manager) UpdateConnector(ctx context.Context, name string, connector config.ConnectorSourceConfig) (config.ConnectorSourceConfig, error) {
+	cfg, release, err := m.beginConnectorCommit(ctx, nil)
 	if err != nil {
 		return config.ConnectorSourceConfig{}, err
 	}
+	defer release()
 
 	normalized, err := normalizeManagedConnector(connector)
 	if err != nil {
@@ -80,18 +128,20 @@ func (m *Manager) UpdateConnector(_ context.Context, name string, connector conf
 	if normalized.Name != name && connectorIndexByName(cfg.Connectors, normalized.Name) >= 0 {
 		return config.ConnectorSourceConfig{}, fmt.Errorf("%w: %s", monitor.ErrConnectorConflict, normalized.Name)
 	}
-	cfg.Connectors[index] = normalized
-	if err := cfg.SaveSettings(); err != nil {
+	connectors := cloneConnectorConfigs(cfg.Connectors)
+	connectors[index] = normalized
+	if err := saveConnectorCandidate(cfg, connectors); err != nil {
 		return config.ConnectorSourceConfig{}, fmt.Errorf("保存连接器配置失败: %w", err)
 	}
 	return cloneConnectorConfig(normalized), nil
 }
 
-func (m *Manager) DeleteConnector(_ context.Context, name string) error {
-	cfg, err := m.configRef()
+func (m *Manager) DeleteConnector(ctx context.Context, name string) error {
+	cfg, release, err := m.beginConnectorCommit(ctx, nil)
 	if err != nil {
 		return err
 	}
+	defer release()
 
 	cfg.Lock()
 	defer cfg.Unlock()
@@ -100,18 +150,19 @@ func (m *Manager) DeleteConnector(_ context.Context, name string) error {
 	if index < 0 {
 		return fmt.Errorf("%w: %s", monitor.ErrConnectorNotFound, name)
 	}
-	cfg.Connectors = append(cfg.Connectors[:index], cfg.Connectors[index+1:]...)
-	if err := cfg.SaveSettings(); err != nil {
+	connectors := append(cloneConnectorConfigs(cfg.Connectors[:index]), cloneConnectorConfigs(cfg.Connectors[index+1:])...)
+	if err := saveConnectorCandidate(cfg, connectors); err != nil {
 		return fmt.Errorf("保存连接器配置失败: %w", err)
 	}
 	return nil
 }
 
-func (m *Manager) SetConnectorEnabled(_ context.Context, name string, enabled bool) error {
-	cfg, err := m.configRef()
+func (m *Manager) SetConnectorEnabled(ctx context.Context, name string, enabled bool) error {
+	cfg, release, err := m.beginConnectorCommit(ctx, nil)
 	if err != nil {
 		return err
 	}
+	defer release()
 
 	cfg.Lock()
 	defer cfg.Unlock()
@@ -120,8 +171,9 @@ func (m *Manager) SetConnectorEnabled(_ context.Context, name string, enabled bo
 	if index < 0 {
 		return fmt.Errorf("%w: %s", monitor.ErrConnectorNotFound, name)
 	}
-	cfg.Connectors[index].Enabled = enabled
-	if err := cfg.SaveSettings(); err != nil {
+	connectors := cloneConnectorConfigs(cfg.Connectors)
+	connectors[index].Enabled = enabled
+	if err := saveConnectorCandidate(cfg, connectors); err != nil {
 		return fmt.Errorf("保存连接器配置失败: %w", err)
 	}
 	return nil
@@ -135,8 +187,13 @@ func (m *Manager) RefreshRuntimeSources(ctx context.Context) error {
 	m.mu.RLock()
 	cfg := m.baseCfg
 	boxMgr := m.boxMgr
-	hasSources := hasRuntimeRefreshSources(cfg)
 	m.mu.RUnlock()
+	hasSources := false
+	if cfg != nil {
+		cfg.RLock()
+		hasSources = hasRuntimeRefreshSources(cfg)
+		cfg.RUnlock()
+	}
 
 	if hasSources {
 		return m.RefreshNow()
@@ -144,58 +201,85 @@ func (m *Manager) RefreshRuntimeSources(ctx context.Context) error {
 	if boxMgr == nil {
 		return nil
 	}
-	boxMgr.SetEphemeralNodes(nil)
-	return boxMgr.TriggerReload(ctx)
+	return boxMgr.TriggerReloadWithEphemeralNodes(ctx, nil)
 }
 
 func (m *Manager) RefreshPreferredEntryIPs(ctx context.Context, name string, options monitor.PreferredIPRefreshOptions) (*monitor.PreferredIPRefreshResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	cfg, err := m.configRef()
 	if err != nil {
 		return nil, err
 	}
 
 	cfg.RLock()
-	index := connectorIndexByName(cfg.Connectors, name)
+	snapshot := cfg.Clone()
+	cfg.RUnlock()
+	index := connectorIndexByName(snapshot.Connectors, name)
 	if index < 0 {
-		cfg.RUnlock()
 		return nil, fmt.Errorf("%w: %s", monitor.ErrConnectorNotFound, name)
 	}
-	template := cloneConnectorConfig(cfg.Connectors[index])
-	runtimeCfg := cfg.SourceSync.ConnectorRuntime
-	configPath := cfg.FilePath()
-	cfg.RUnlock()
+	template := cloneConnectorConfig(snapshot.Connectors[index])
+	runtimeCfg := snapshot.SourceSync.ConnectorRuntime
+	configPath := snapshot.FilePath()
+	initialConnectors := cloneConnectorConfigs(snapshot.Connectors)
 
 	if strings.TrimSpace(template.ConnectorType) != connectorTypeECHWorker {
 		return nil, fmt.Errorf("%w: 仅支持 ech_worker 模板", monitor.ErrInvalidConnector)
 	}
 
-	selected, artifactDir, resultCSV, err := runPreferredIPSelection(ctx, configPath, runtimeCfg, template, options)
+	selector := m.preferredIPSelector
+	if selector == nil {
+		selector = runPreferredIPSelection
+	}
+	selected, artifactDir, resultCSV, err := selector(ctx, configPath, runtimeCfg, template, options)
 	if err != nil {
 		return nil, err
 	}
 
 	generated := buildPreferredConnectorSet(template, selected)
-
-	cfg.Lock()
-	filtered := make([]config.ConnectorSourceConfig, 0, len(cfg.Connectors)+len(generated))
-	prefix := preferredConnectorNamePrefix(template.Name)
-	for _, existing := range cfg.Connectors {
-		if existing.Name == template.Name {
+	currentCfg, release, err := m.beginConnectorCommit(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	var commitErr error
+	func() {
+		defer release()
+		currentCfg.Lock()
+		defer currentCfg.Unlock()
+		currentSnapshot := currentCfg.Clone()
+		if !reflect.DeepEqual(initialConnectors, currentSnapshot.Connectors) ||
+			!reflect.DeepEqual(runtimeCfg, currentSnapshot.SourceSync.ConnectorRuntime) ||
+			configPath != currentSnapshot.FilePath() {
+			commitErr = fmt.Errorf("%w: 连接器配置已在优选期间更新，请重试", monitor.ErrConnectorConflict)
+			return
+		}
+		index = connectorIndexByName(currentSnapshot.Connectors, name)
+		if index < 0 {
+			commitErr = fmt.Errorf("%w: %s", monitor.ErrConnectorNotFound, name)
+			return
+		}
+		filtered := make([]config.ConnectorSourceConfig, 0, len(currentSnapshot.Connectors)+len(generated))
+		prefix := preferredConnectorNamePrefix(template.Name)
+		for _, existing := range currentSnapshot.Connectors {
+			if existing.Name == template.Name {
+				filtered = append(filtered, existing)
+				continue
+			}
+			if strings.HasPrefix(existing.Name, prefix) {
+				continue
+			}
 			filtered = append(filtered, existing)
-			continue
 		}
-		if strings.HasPrefix(existing.Name, prefix) {
-			continue
+		filtered = append(filtered, generated...)
+		if err := saveConnectorCandidate(currentCfg, filtered); err != nil {
+			commitErr = fmt.Errorf("保存连接器配置失败: %w", err)
 		}
-		filtered = append(filtered, existing)
+	}()
+	if commitErr != nil {
+		return nil, commitErr
 	}
-	filtered = append(filtered, generated...)
-	cfg.Connectors = filtered
-	if err := cfg.SaveSettings(); err != nil {
-		cfg.Unlock()
-		return nil, fmt.Errorf("保存连接器配置失败: %w", err)
-	}
-	cfg.Unlock()
 
 	result := &monitor.PreferredIPRefreshResult{
 		TemplateName:        template.Name,
@@ -516,6 +600,14 @@ func normalizeManagedConnector(connector config.ConnectorSourceConfig) (config.C
 func cloneConnectorConfig(connector config.ConnectorSourceConfig) config.ConnectorSourceConfig {
 	cloned := connector
 	cloned.ConnectorConfig = cloneConnectorOptions(connector.ConnectorConfig)
+	return cloned
+}
+
+func cloneConnectorConfigs(connectors []config.ConnectorSourceConfig) []config.ConnectorSourceConfig {
+	cloned := make([]config.ConnectorSourceConfig, len(connectors))
+	for index, connector := range connectors {
+		cloned[index] = cloneConnectorConfig(connector)
+	}
 	return cloned
 }
 

@@ -2,16 +2,153 @@ package subscription
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"easy_proxies/internal/config"
 	"easy_proxies/internal/store"
 )
+
+type fakeRefreshReloadIntent struct {
+	once sync.Once
+	end  func()
+}
+
+func (i *fakeRefreshReloadIntent) End() {
+	i.once.Do(i.end)
+}
+
+type fakeRefreshReloader struct {
+	mu             sync.Mutex
+	ephemeralNodes []config.NodeConfig
+	beginCount     int
+	endCount       int
+	reloadCount    int
+}
+
+func (r *fakeRefreshReloader) BeginReloadIntent(context.Context) (refreshReloadIntent, error) {
+	r.mu.Lock()
+	r.beginCount++
+	r.mu.Unlock()
+	return &fakeRefreshReloadIntent{end: func() {
+		r.mu.Lock()
+		r.endCount++
+		r.mu.Unlock()
+	}}, nil
+}
+
+func (r *fakeRefreshReloader) CurrentPortMap() map[string]uint16 {
+	return nil
+}
+
+func (r *fakeRefreshReloader) ReloadWithPortMapAndEphemeralNodes(
+	_ *config.Config,
+	_ map[string]uint16,
+	ephemeralNodes []config.NodeConfig,
+) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.reloadCount++
+	r.ephemeralNodes = append([]config.NodeConfig(nil), ephemeralNodes...)
+	return nil
+}
+
+func (r *fakeRefreshReloader) snapshot() ([]config.NodeConfig, int, int, int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]config.NodeConfig(nil), r.ephemeralNodes...), r.beginCount, r.endCount, r.reloadCount
+}
+
+func TestDoRefreshRetryFetchFailureKeepsPublishedEphemeralNodes(t *testing.T) {
+	oldEphemeral := []config.NodeConfig{{Name: "old-runtime", URI: "http://old-runtime.example:80"}}
+	reloader := &fakeRefreshReloader{ephemeralNodes: append([]config.NodeConfig(nil), oldEphemeral...)}
+
+	failingServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "second fetch failed", http.StatusBadGateway)
+	}))
+	defer failingServer.Close()
+
+	var manager *Manager
+	firstServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		manager.OnConfigUpdate(refreshRetryTestConfig(failingServer.URL, "second"))
+		_, _ = w.Write([]byte("http://127.0.0.1:18080#first-runtime\n"))
+	}))
+	defer firstServer.Close()
+
+	manager = New(
+		refreshRetryTestConfig(firstServer.URL, "first"),
+		nil,
+		WithConnectorRuntime(&fakeConnectorRuntime{}),
+		withRefreshReloader(reloader),
+	)
+	manager.doRefresh()
+
+	got, begins, ends, reloads := reloader.snapshot()
+	if !reflect.DeepEqual(got, oldEphemeral) {
+		t.Fatalf("published ephemeral nodes changed after retry fetch failure: got %+v, want %+v", got, oldEphemeral)
+	}
+	if begins != 1 || ends != 1 || reloads != 0 {
+		t.Fatalf("reload boundary calls = begin:%d end:%d reload:%d, want 1/1/0", begins, ends, reloads)
+	}
+	if status := manager.Status(); !strings.Contains(status.LastError, "status 502") {
+		t.Fatalf("refresh status error = %q, want second fetch failure", status.LastError)
+	}
+}
+
+func TestDoRefreshRepeatedConfigChangesKeepPublishedEphemeralNodes(t *testing.T) {
+	oldEphemeral := []config.NodeConfig{{Name: "old-runtime", URI: "http://old-runtime.example:80"}}
+	reloader := &fakeRefreshReloader{ephemeralNodes: append([]config.NodeConfig(nil), oldEphemeral...)}
+
+	var manager *Manager
+	requestCount := 0
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requestCount++
+		nextURL := fmt.Sprintf("%s?revision=%d", server.URL, requestCount)
+		manager.OnConfigUpdate(refreshRetryTestConfig(nextURL, fmt.Sprintf("revision-%d", requestCount)))
+		_, _ = w.Write([]byte(fmt.Sprintf("http://127.0.0.1:%d#runtime-%d\n", 18080+requestCount, requestCount)))
+	}))
+	defer server.Close()
+
+	manager = New(
+		refreshRetryTestConfig(server.URL+"?revision=0", "initial"),
+		nil,
+		WithConnectorRuntime(&fakeConnectorRuntime{}),
+		withRefreshReloader(reloader),
+	)
+	manager.doRefresh()
+
+	got, begins, ends, reloads := reloader.snapshot()
+	if !reflect.DeepEqual(got, oldEphemeral) {
+		t.Fatalf("published ephemeral nodes changed after unstable retries: got %+v, want %+v", got, oldEphemeral)
+	}
+	if requestCount != 3 || begins != 3 || ends != 3 || reloads != 0 {
+		t.Fatalf("retry calls = requests:%d begin:%d end:%d reload:%d, want 3/3/3/0", requestCount, begins, ends, reloads)
+	}
+	if status := manager.Status(); !strings.Contains(status.LastError, "configuration changed repeatedly") {
+		t.Fatalf("refresh status error = %q, want repeated configuration change", status.LastError)
+	}
+}
+
+func refreshRetryTestConfig(subscriptionURL, revision string) *config.Config {
+	return &config.Config{
+		Mode:          "pool",
+		Subscriptions: []string{subscriptionURL},
+		SubscriptionRefresh: config.SubscriptionRefreshConfig{
+			Enabled:  true,
+			Timeout:  time.Second,
+			Interval: time.Hour,
+		},
+		Routing: config.RoutingConfig{FinalPolicy: revision},
+	}
+}
 
 func TestFetchSubscriptionSourcesParsesClashYAML(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -144,6 +281,36 @@ func TestCreateNewConfigAssignsHybridPortsAndCredentials(t *testing.T) {
 		if node.Username != "hybrid-user" || node.Password != "hybrid-pass" {
 			t.Fatalf("expected hybrid credentials to be applied to %q, got %+v", node.Name, node)
 		}
+	}
+}
+
+func TestBaseConfigSnapshotWaitsForConfigWriter(t *testing.T) {
+	cfg := &config.Config{Nodes: []config.NodeConfig{{URI: "ss://node#snapshot", Port: 31000}}}
+	manager := New(cfg, nil)
+	cfg.Lock()
+	started := make(chan struct{})
+	done := make(chan *config.Config, 1)
+	go func() {
+		close(started)
+		done <- manager.baseConfigSnapshot()
+	}()
+	<-started
+
+	select {
+	case <-done:
+		cfg.Unlock()
+		t.Fatal("baseConfigSnapshot read config while the write lock was held")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	cfg.Unlock()
+	select {
+	case snapshot := <-done:
+		if snapshot == nil || snapshot.Nodes[0].URI != "ss://node#snapshot" {
+			t.Fatalf("unexpected config snapshot: %+v", snapshot)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("baseConfigSnapshot did not resume after the config write lock was released")
 	}
 }
 

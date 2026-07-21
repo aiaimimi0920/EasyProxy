@@ -484,9 +484,21 @@ def main() -> int:
             "EASYPROXY_AGGREGATOR_ISSUE91_SUB_URL",
             aggregator_issue91_upstream_url,
         )
-    service_base_management_password = get_or_generate(
-        config, ("serviceBase", "runtime", "management", "password"), lambda: secrets.token_urlsafe(24)
+    service_base_canonical_username = str(
+        get_nested(config, "serviceBase", "runtime", "local_server", "auth", "username", default="easyproxy")
+    ).strip() or "easyproxy"
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", service_base_canonical_username):
+        raise SystemExit("serviceBase.runtime.local_server.auth.username must match [A-Za-z0-9._-]{1,64}.")
+    service_base_canonical_password = get_or_generate(
+        config,
+        ("serviceBase", "runtime", "local_server", "auth", "password"),
+        lambda: get_or_generate(
+            config,
+            ("serviceBase", "runtime", "management", "password"),
+            lambda: secrets.token_urlsafe(24),
+        ),
     )
+    service_base_management_password = service_base_canonical_password
 
     cloudflare_api_token = str(get_nested(config, "cloudflare", "apiToken", default="")).strip()
     if not cloudflare_api_token or is_placeholder(cloudflare_api_token):
@@ -628,6 +640,17 @@ def main() -> int:
     if not isinstance(existing_dns_servers, list) or len(existing_dns_servers) == 0:
         existing_dns_servers = service_base_dns_servers
     set_nested(config, ("serviceBase", "dnsServers"), existing_dns_servers)
+    set_nested(config, ("serviceBase", "runtime", "mode"), "pool")
+    set_nested(config, ("serviceBase", "runtime", "listener", "protocol"), "mixed")
+    set_nested(config, ("serviceBase", "runtime", "listener", "username"), service_base_canonical_username)
+    set_nested(config, ("serviceBase", "runtime", "listener", "password"), service_base_canonical_password)
+    set_nested(config, ("serviceBase", "runtime", "routing", "enabled"), True)
+    set_nested(config, ("serviceBase", "runtime", "local_server", "enabled"), True)
+    set_nested(config, ("serviceBase", "runtime", "local_server", "listen"), "")
+    set_nested(config, ("serviceBase", "runtime", "local_server", "auth", "username"), service_base_canonical_username)
+    set_nested(config, ("serviceBase", "runtime", "local_server", "auth", "password"), service_base_canonical_password)
+    set_nested(config, ("serviceBase", "runtime", "local_server", "shared_revision"), 1)
+    set_nested(config, ("serviceBase", "runtime", "local_server", "credential_generation"), 2)
     set_nested(config, ("serviceBase", "runtime", "management", "password"), service_base_management_password)
     if shared_management_probe_targets:
         set_nested(config, ("serviceBase", "runtime", "management", "probe_targets"), shared_management_probe_targets)

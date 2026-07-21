@@ -67,23 +67,11 @@ jobs:
         run: |
           python -m unittest discover -s "upstreams/aggregator/tests" -p "test_*.py" -v
 
-      - name: Run service/base monitor tests
+      - name: Run all service/base Go tests
         shell: pwsh
         working-directory: service/base
         run: |
-          go test ./internal/monitor
-
-      - name: Run service/base boxmgr tests
-        shell: pwsh
-        working-directory: service/base
-        run: |
-          go test ./internal/boxmgr
-
-      - name: Run service/base config tests
-        shell: pwsh
-        working-directory: service/base
-        run: |
-          go test ./internal/config
+          go test -count=1 ./...
 
   deploy:
     name: Run native aggregator publish
