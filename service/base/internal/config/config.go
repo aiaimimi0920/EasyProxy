@@ -51,6 +51,7 @@ type Config struct {
 	ExtraListeners      []ExtraListenerConfig     `yaml:"extra_listeners"`  // 额外监听端口（不同选择策略）
 	LocalServer         LocalServerConfig         `yaml:"local_server"`     // 局域网本地服务器统一入口
 	Routing             RoutingConfig             `yaml:"routing"`          // 智能分流 + 多策略选节点入口
+	Gateway             GatewayConfig             `yaml:"gateway"`          // 原生透明网关入口
 
 	filePath string `yaml:"-"` // 配置文件路径，用于保存
 }
@@ -70,6 +71,46 @@ type RoutingConfig struct {
 	NodeFilter      RoutingNodeFilterConfig `yaml:"node_filter"`       // 节点筛选条件
 	LongLived       LongLivedConfig         `yaml:"long_lived"`        // 长效节点判定阈值
 	Session         SessionConfig           `yaml:"session"`           // 会话粘性参数
+}
+
+// GatewayConfig controls the provider-neutral transparent ingress. Overlay
+// products only contribute interfaces, routes, and source CIDRs; EasyProxy
+// does not depend on their APIs or names.
+type GatewayConfig struct {
+	Enabled bool                           `yaml:"enabled"`
+	Mode    string                         `yaml:"mode"`
+	Listen  string                         `yaml:"listen"`
+	Ingress GatewayIngressConfig           `yaml:"ingress"`
+	Capture GatewayCaptureConfig           `yaml:"capture"`
+	Routing GatewayRoutingConfig           `yaml:"routing"`
+	DNS     GatewayDNSConfig               `yaml:"dns"`
+	Devices map[string]GatewayDeviceConfig `yaml:"devices"`
+}
+
+type GatewayIngressConfig struct {
+	Interfaces        []string `yaml:"interfaces"`
+	InterfacePatterns []string `yaml:"interface_patterns"`
+	TrustedCIDRs      []string `yaml:"trusted_cidrs"`
+}
+
+type GatewayCaptureConfig struct {
+	TCP                         string `yaml:"tcp"`
+	UDP                         string `yaml:"udp"`
+	PreserveOriginalDestination bool   `yaml:"preserve_original_destination"`
+}
+
+type GatewayRoutingConfig struct {
+	FinalPolicy            string `yaml:"final_policy"`
+	NoAvailableProxyPolicy string `yaml:"no_available_proxy_policy"`
+}
+
+type GatewayDNSConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	Listen  string `yaml:"listen"`
+}
+
+type GatewayDeviceConfig struct {
+	Addresses []string `yaml:"addresses"`
 }
 
 type LocalServerConfig struct {
@@ -608,10 +649,93 @@ func (c *Config) applyDefaults() error {
 		}
 	}
 
+	if c.Gateway.Mode == "" {
+		c.Gateway.Mode = "transparent"
+	}
+	if c.Gateway.Listen == "" {
+		c.Gateway.Listen = "0.0.0.0:15001"
+	}
+	if c.Gateway.Capture.TCP == "" {
+		c.Gateway.Capture.TCP = "tproxy"
+	}
+	if c.Gateway.Capture.UDP == "" {
+		c.Gateway.Capture.UDP = "disabled"
+	}
+	// Preserving the original destination is an invariant of the transparent
+	// TCP path, so enabled gateways always force it on.
+	if c.Gateway.Enabled {
+		c.Gateway.Capture.PreserveOriginalDestination = true
+	}
+	if c.Gateway.Routing.FinalPolicy == "" {
+		c.Gateway.Routing.FinalPolicy = "PROXY"
+	}
+	if c.Gateway.Routing.NoAvailableProxyPolicy == "" {
+		c.Gateway.Routing.NoAvailableProxyPolicy = "DIRECT"
+	}
+	if c.Gateway.DNS.Listen == "" {
+		c.Gateway.DNS.Listen = "0.0.0.0:53"
+	}
+	if err := c.normalizeGateway(); err != nil {
+		return err
+	}
+
 	if c.LogLevel == "" {
 		c.LogLevel = "info"
 	}
 
+	return nil
+}
+
+func (c *Config) normalizeGateway() error {
+	if c == nil {
+		return nil
+	}
+	g := &c.Gateway
+	if strings.TrimSpace(g.Mode) != "transparent" {
+		return fmt.Errorf("unsupported gateway mode %q (use %q)", g.Mode, "transparent")
+	}
+	if _, _, err := net.SplitHostPort(strings.TrimSpace(g.Listen)); err != nil {
+		return fmt.Errorf("gateway.listen must be host:port: %w", err)
+	}
+	for _, value := range []struct {
+		name  string
+		value string
+	}{
+		{name: "gateway.capture.tcp", value: g.Capture.TCP},
+		{name: "gateway.capture.udp", value: g.Capture.UDP},
+	} {
+		mode := strings.ToLower(strings.TrimSpace(value.value))
+		if mode != "tproxy" && mode != "disabled" {
+			return fmt.Errorf("unsupported %s mode %q", value.name, value.value)
+		}
+	}
+	for _, value := range []struct {
+		name  string
+		value string
+	}{
+		{name: "gateway.routing.final_policy", value: g.Routing.FinalPolicy},
+		{name: "gateway.routing.no_available_proxy_policy", value: g.Routing.NoAvailableProxyPolicy},
+	} {
+		policy := strings.ToUpper(strings.TrimSpace(value.value))
+		if policy != "DIRECT" && policy != "PROXY" {
+			return fmt.Errorf("unsupported %s %q", value.name, value.value)
+		}
+	}
+	for _, cidr := range g.Ingress.TrustedCIDRs {
+		if _, _, err := net.ParseCIDR(strings.TrimSpace(cidr)); err != nil {
+			return fmt.Errorf("invalid gateway trusted CIDR %q: %w", cidr, err)
+		}
+	}
+	for name, device := range g.Devices {
+		if strings.TrimSpace(name) == "" {
+			return errors.New("gateway device name cannot be empty")
+		}
+		for _, address := range device.Addresses {
+			if net.ParseIP(strings.TrimSpace(address)) == nil {
+				return fmt.Errorf("invalid gateway device address %q for %q", address, name)
+			}
+		}
+	}
 	return nil
 }
 
@@ -1877,6 +2001,7 @@ func (c *Config) Clone() *Config {
 		ExtraListeners:      cloneConfigSlice(c.ExtraListeners),
 		LocalServer:         c.LocalServer,
 		Routing:             c.Routing,
+		Gateway:             c.Gateway,
 		filePath:            c.filePath,
 	}
 
@@ -1888,6 +2013,15 @@ func (c *Config) Clone() *Config {
 	cloned.Routing.NodeFilter.Countries = cloneConfigSlice(c.Routing.NodeFilter.Countries)
 	cloned.Routing.NodeFilter.Regions = cloneConfigSlice(c.Routing.NodeFilter.Regions)
 	cloned.Routing.NodeFilter.LongLived = cloneConfigBool(c.Routing.NodeFilter.LongLived)
+	cloned.Gateway.Ingress.Interfaces = cloneConfigSlice(c.Gateway.Ingress.Interfaces)
+	cloned.Gateway.Ingress.InterfacePatterns = cloneConfigSlice(c.Gateway.Ingress.InterfacePatterns)
+	cloned.Gateway.Ingress.TrustedCIDRs = cloneConfigSlice(c.Gateway.Ingress.TrustedCIDRs)
+	if c.Gateway.Devices != nil {
+		cloned.Gateway.Devices = make(map[string]GatewayDeviceConfig, len(c.Gateway.Devices))
+		for name, device := range c.Gateway.Devices {
+			cloned.Gateway.Devices[name] = GatewayDeviceConfig{Addresses: cloneConfigSlice(device.Addresses)}
+		}
+	}
 	cloned.SourceSync.FallbackSubscriptions = cloneConfigSlice(c.SourceSync.FallbackSubscriptions)
 	cloned.SourceSync.ConnectorRuntime.Enabled = cloneConfigBool(c.SourceSync.ConnectorRuntime.Enabled)
 	for idx := range cloned.Connectors {

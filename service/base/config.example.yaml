@@ -151,6 +151,34 @@ geoip:
 #   可观测:    GET /api/routing/status  查看规则数 / 默认策略 / 当前粘性绑定
 
 # ───────────────────────────────────────────────────────────────
+# 原生透明网关 gateway（Linux/NAS，默认关闭）
+# ───────────────────────────────────────────────────────────────
+# 启用后由宿主机/网络命名空间的 TPROXY 规则把可信 LAN/虚拟局域网流量
+# 送入 EasyProxy。接口名只是示例，不能假设 tailscale0 或任意产品名一定存在。
+#
+# gateway:
+#   enabled: false
+#   mode: transparent
+#   listen: 0.0.0.0:15001
+#   ingress:
+#     interfaces: [eth0, tailscale0, xingkong0]
+#     interface_patterns: [ts-*, star-*]
+#     trusted_cidrs: [192.168.15.0/24, 100.64.0.0/10, 10.66.0.0/16]
+#   capture:
+#     tcp: tproxy
+#     udp: disabled                 # Phase 2
+#     preserve_original_destination: true
+#   routing:
+#     final_policy: PROXY
+#     no_available_proxy_policy: DIRECT  # fail-open，节点池为空仍可直连
+#   dns:
+#     enabled: false                # DNS/DoH/DoT 边界见透明网关文档
+#     listen: 0.0.0.0:53
+#   devices:
+#     laptop:
+#       addresses: [192.168.15.100, 100.64.0.20, 10.66.0.20]
+
+# ───────────────────────────────────────────────────────────────
 # 订阅自动刷新配置（可选）
 # ───────────────────────────────────────────────────────────────
 # subscription_refresh:

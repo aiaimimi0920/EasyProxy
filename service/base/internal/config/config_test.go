@@ -1268,3 +1268,38 @@ func TestDisabledLocalServerPreservesLegacyDispatchTopology(t *testing.T) {
 		})
 	}
 }
+
+func TestGatewayDefaultsFailOpen(t *testing.T) {
+	cfg := &Config{}
+	if err := cfg.applyDefaults(); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := cfg.Gateway.Routing.NoAvailableProxyPolicy, "DIRECT"; got != want {
+		t.Fatalf("no_available_proxy_policy = %q, want %q", got, want)
+	}
+	if got, want := cfg.Gateway.Listen, "0.0.0.0:15001"; got != want {
+		t.Fatalf("gateway listen = %q, want %q", got, want)
+	}
+}
+
+func TestGatewayRejectsInvalidCIDRAndPolicy(t *testing.T) {
+	cfg := &Config{Gateway: GatewayConfig{
+		Enabled: true,
+		Routing: GatewayRoutingConfig{NoAvailableProxyPolicy: "DROP"},
+		Ingress: GatewayIngressConfig{TrustedCIDRs: []string{"not-a-cidr"}},
+	}}
+	if err := cfg.normalize(); err == nil {
+		t.Fatal("expected gateway validation error")
+	}
+}
+
+func TestGatewayDeviceAliasesClone(t *testing.T) {
+	cfg := &Config{Gateway: GatewayConfig{Devices: map[string]GatewayDeviceConfig{
+		"laptop": {Addresses: []string{"192.168.15.100", "100.64.0.20"}},
+	}}}
+	clone := cfg.Clone()
+	clone.Gateway.Devices["laptop"].Addresses[0] = "10.0.0.1"
+	if got := cfg.Gateway.Devices["laptop"].Addresses[0]; got != "192.168.15.100" {
+		t.Fatalf("device aliases were not deep-cloned: got %q", got)
+	}
+}
