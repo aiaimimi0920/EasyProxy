@@ -30,6 +30,16 @@ class CheckGoFormatTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, msg=result.stderr or result.stdout)
             self.assertIn("1 Go files are gofmt-clean", result.stdout)
 
+    def test_accepts_formatted_non_ascii_source(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / "formatted.go"
+            source.write_text("package sample\n\n// Value returns a value. 中文注释\nfunc Value() int {\n\treturn 1\n}\n", encoding="utf-8")
+
+            result = self.run_checker(source)
+
+            self.assertEqual(result.returncode, 0, msg=result.stderr or result.stdout)
+            self.assertIn("1 Go files are gofmt-clean", result.stdout)
+
     def test_rejects_truly_unformatted_source(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             source = Path(temp_dir) / "unformatted.go"
