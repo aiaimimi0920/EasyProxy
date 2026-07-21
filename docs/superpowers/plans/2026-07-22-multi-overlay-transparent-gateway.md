@@ -8,6 +8,8 @@
 
 **Tech Stack:** Go 1.24, net, Linux syscall/x/sys/unix, existing routerule.Engine and outbound/pool, YAML config, nftables/ip command supervisor, Go unit tests, Linux integration smoke script.
 
+**Current Status:** Phase 1 code, configuration, lifecycle, API, console, image dependencies, and read-only validation scripts are implemented and pushed to `main`. A real Linux/NAS TPROXY smoke run and GHCR release image publication remain deployment-stage work because the current Windows Docker Desktop cannot reach Docker Hub and the NAS host capabilities/interfaces still need to be verified.
+
 ---
 
 ### Task 1: Add gateway configuration and validation
