@@ -1809,6 +1809,38 @@ func TestStartEntersIdleWhenAllProxyNodesAreInvalid(t *testing.T) {
 	}
 }
 
+func TestReloadEntersIdleWhenAllProxyNodesBecomeInvalid(t *testing.T) {
+	managementDisabled := false
+	oldCfg := &config.Config{
+		Mode:       "pool",
+		Management: config.ManagementConfig{Enabled: &managementDisabled},
+		Routing:    config.RoutingConfig{Enabled: true},
+		Nodes:      []config.NodeConfig{{Name: "working", URI: "socks5://127.0.0.1:1080"}},
+	}
+	oldBox := &fakeManagedBox{name: "old"}
+	manager := New(oldCfg, monitor.Config{})
+	manager.portReleaseDelay = 0
+	manager.boxFactory = func(context.Context, *config.Config) (managedBox, error) {
+		return oldBox, nil
+	}
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+
+	invalidCfg := oldCfg.Clone()
+	invalidCfg.Nodes = []config.NodeConfig{{Name: "broken", URI: "unsupported://node.example"}}
+	if err := manager.Reload(invalidCfg); err != nil {
+		t.Fatalf("Reload() error = %v, want idle success", err)
+	}
+	if oldBox.closes != 1 {
+		t.Fatalf("old box close count = %d, want 1", oldBox.closes)
+	}
+	if manager.currentBox != nil || !manager.idle || !manager.lastAppliedIdle {
+		t.Fatalf("manager state = current=%T idle=%v lastIdle=%v, want idle", manager.currentBox, manager.idle, manager.lastAppliedIdle)
+	}
+}
+
 func TestRecordAppliedConfigRefreshesIndependentRollbackSnapshot(t *testing.T) {
 	oldUseDefaults := true
 	appliedUseDefaults := false

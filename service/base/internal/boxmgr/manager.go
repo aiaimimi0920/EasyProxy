@@ -339,6 +339,9 @@ func (m *Manager) reloadLockedWithEphemeralNodes(
 	if targetCfg == nil {
 		return errors.New("new config is nil")
 	}
+	if targetCfg.DispatchEnabled() && len(targetCfg.Nodes) > 0 && !builder.HasValidNode(targetCfg) {
+		return m.enterIdleLockedWithEphemeralNodes(targetCfg, ephemeralNodes, publishEphemeral)
+	}
 
 	m.mu.Lock()
 	if m.currentBox == nil && !m.idle {

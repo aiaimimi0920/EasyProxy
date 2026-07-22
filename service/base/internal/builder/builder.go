@@ -535,6 +535,21 @@ func nodeEndpointDomain(rawURI string) string {
 	return host
 }
 
+// HasValidNode reports whether at least one configured node can be materialized
+// into a sing-box outbound. It is intentionally a short-circuiting preflight
+// used by the box manager before a reload can tear down a working instance.
+func HasValidNode(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	for _, node := range cfg.Nodes {
+		if _, err := buildNodeOutbound("validation", node.URI, cfg.SkipCertVerify); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
 func buildDNSOptions(cfg config.DNSConfig, nodeDomains []string, hasProxy bool) (*option.DNSOptions, error) {
 	if cfg.Enabled != nil && !*cfg.Enabled {
 		return nil, nil

@@ -19,9 +19,25 @@ func TestBuildReportsNoValidNodesWithSentinel(t *testing.T) {
 		Nodes: []config.NodeConfig{{Name: "broken", URI: "unsupported://node.example"}},
 	}
 
+	if HasValidNode(cfg) {
+		t.Fatal("HasValidNode() = true for an entirely invalid node set")
+	}
 	_, err := Build(cfg)
 	if !errors.Is(err, ErrNoValidNodes) {
 		t.Fatalf("Build error = %v, want ErrNoValidNodes", err)
+	}
+}
+
+func TestHasValidNodeStopsAtFirstBuildableNode(t *testing.T) {
+	cfg := &config.Config{
+		Mode: "pool",
+		Nodes: []config.NodeConfig{
+			{Name: "broken", URI: "unsupported://node.example"},
+			{Name: "working", URI: "socks5://127.0.0.1:1080"},
+		},
+	}
+	if !HasValidNode(cfg) {
+		t.Fatal("HasValidNode() = false with a buildable node")
 	}
 }
 
