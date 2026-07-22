@@ -130,8 +130,9 @@ export default function MonitorPanel() {
   const allNodes = useMemo(() => data?.nodes || [], [data])
   const allConfigNodes = useMemo(() => configData?.nodes || [], [configData])
 
-  // Config-level counts (includes disabled nodes)
-  const totalConfigNodes = allConfigNodes.length
+  // The monitor is sourced from the runtime snapshot. Static config nodes can
+  // be empty when nodes come from subscriptions or other runtime sources.
+  const totalRuntimeNodes = data?.total_nodes ?? allNodes.length
   const disabledNodes = useMemo(
     () => allConfigNodes.filter((n: ConfigNodeConfig) => n.disabled).length,
     [allConfigNodes]
@@ -357,15 +358,15 @@ export default function MonitorPanel() {
             <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center text-primary">
               <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2" /></svg>
             </div>
-            <div className="text-sm font-medium text-base-content/60">总节点</div>
+            <div className="text-sm font-medium text-base-content/60">运行节点</div>
           </div>
-          <div className="text-3xl font-black tabular-nums tracking-tight text-base-content mb-2 relative z-10">{totalConfigNodes}</div>
+          <div className="text-3xl font-black tabular-nums tracking-tight text-base-content mb-2 relative z-10">{totalRuntimeNodes}</div>
           <div className="text-xs flex flex-wrap gap-1.5 relative z-10">
             <span className="badge badge-success badge-sm badge-outline border-success/30 bg-success/5 font-medium">可用 {availableNodes}</span>
             {unavailableNodes > 0 && <span className="badge badge-error badge-sm badge-outline border-error/30 bg-error/5 font-medium">不可用 {unavailableNodes}</span>}
             {blacklistedNodes > 0 && <span className="badge badge-error badge-sm badge-outline border-error/30 bg-error/5 font-medium">黑名单 {blacklistedNodes}</span>}
             {pendingNodes > 0 && <span className="badge badge-warning badge-sm badge-outline border-warning/30 bg-warning/5 font-medium">待检查 {pendingNodes}</span>}
-            {disabledNodes > 0 && <span className="badge badge-ghost badge-sm bg-base-200/50 font-medium text-base-content/50">禁用 {disabledNodes}</span>}
+            {disabledNodes > 0 && <span className="badge badge-ghost badge-sm bg-base-200/50 font-medium text-base-content/50">配置禁用 {disabledNodes}</span>}
           </div>
         </div>
 
@@ -541,7 +542,7 @@ export default function MonitorPanel() {
       <div className="text-center text-xs text-base-content/30">
         {data && (
           <>
-            共 {totalConfigNodes} 个节点 ·
+            共 {totalRuntimeNodes} 个运行时节点 ·
             {Object.keys(data.region_stats || {}).length} 个地区 ·
             数据来自运行时监控
             {autoRefresh > 0 && ` · 每 ${autoRefresh} 秒自动刷新`}
