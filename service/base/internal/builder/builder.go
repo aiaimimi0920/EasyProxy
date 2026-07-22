@@ -36,11 +36,17 @@ var (
 	resolveECHConfigPEM = resolveECHConfigPEMFromQuery
 )
 
+// ErrNoValidNodes indicates that the configured node set cannot produce any
+// sing-box outbound. The box manager uses this to keep the dispatcher in an
+// idle/direct-capable state when proxy sources are temporarily empty or invalid.
+var ErrNoValidNodes = errors.New("no valid nodes available")
+
 // Build converts high level config into sing-box Options tree.
 func Build(cfg *config.Config) (option.Options, error) {
 	baseOutbounds := make([]option.Outbound, 0, len(cfg.Nodes))
 	memberTags := make([]string, 0, len(cfg.Nodes))
 	metadata := make(map[string]poolout.MemberMeta)
+	nodeEndpointDomains := make([]string, 0, len(cfg.Nodes))
 	var failedNodes []string
 	usedTags := make(map[string]int) // Track tag usage for uniqueness
 
@@ -94,6 +100,9 @@ func Build(cfg *config.Config) (option.Options, error) {
 		}
 		memberTags = append(memberTags, tag)
 		baseOutbounds = append(baseOutbounds, outbound)
+		if endpointDomain := nodeEndpointDomain(node.URI); endpointDomain != "" {
+			nodeEndpointDomains = append(nodeEndpointDomains, endpointDomain)
+		}
 		traits := describeNodeRoutingTraits(node.URI)
 		meta := poolout.MemberMeta{
 			Name:           node.Name,
@@ -138,7 +147,7 @@ func Build(cfg *config.Config) (option.Options, error) {
 
 	// Check if we have at least one valid node
 	if len(baseOutbounds) == 0 {
-		return option.Options{}, fmt.Errorf("no valid nodes available (all %d nodes failed to build)", len(cfg.Nodes))
+		return option.Options{}, fmt.Errorf("%w (all %d nodes failed to build)", ErrNoValidNodes, len(cfg.Nodes))
 	}
 
 	// Log summary
@@ -380,11 +389,17 @@ func Build(cfg *config.Config) (option.Options, error) {
 		log.Println("   Default (no path): all nodes pool")
 	}
 
+	dnsOptions, err := buildDNSOptions(cfg.DNS, nodeEndpointDomains, len(memberTags) > 0 && (enablePoolInbound || cfg.DispatchEnabled()))
+	if err != nil {
+		return option.Options{}, fmt.Errorf("build DNS options: %w", err)
+	}
+
 	opts := option.Options{
 		Log:       &option.LogOptions{Level: strings.ToLower(cfg.LogLevel)},
 		Inbounds:  inbounds,
 		Outbounds: outbounds,
 		Route:     &route,
+		DNS:       dnsOptions,
 	}
 	return opts, nil
 }
@@ -506,6 +521,138 @@ func buildNodeOutbound(tag, rawURI string, skipCertVerify bool) (option.Outbound
 	default:
 		return option.Outbound{}, fmt.Errorf("unsupported scheme %q", parsed.Scheme)
 	}
+}
+
+func nodeEndpointDomain(rawURI string) string {
+	u, err := url.Parse(strings.TrimSpace(rawURI))
+	if err != nil {
+		return ""
+	}
+	host := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(u.Hostname()), "."))
+	if host == "" || net.ParseIP(host) != nil {
+		return ""
+	}
+	return host
+}
+
+func buildDNSOptions(cfg config.DNSConfig, nodeDomains []string, hasProxy bool) (*option.DNSOptions, error) {
+	if cfg.Enabled != nil && !*cfg.Enabled {
+		return nil, nil
+	}
+	servers := append([]string(nil), cfg.RemoteServers...)
+	if len(servers) == 0 {
+		servers = []string{"https://cloudflare-dns.com/dns-query"}
+	}
+	detour := strings.TrimSpace(cfg.Detour)
+	if detour != "" && !hasProxy {
+		detour = ""
+	}
+	strategy := C.DomainStrategyPreferIPv4
+	switch strings.ToLower(strings.TrimSpace(cfg.Strategy)) {
+	case "", "prefer_ipv4", "prefer-ipv4":
+		strategy = C.DomainStrategyPreferIPv4
+	case "prefer_ipv6", "prefer-ipv6":
+		strategy = C.DomainStrategyPreferIPv6
+	case "ipv4_only", "ipv4-only":
+		strategy = C.DomainStrategyIPv4Only
+	case "ipv6_only", "ipv6-only":
+		strategy = C.DomainStrategyIPv6Only
+	default:
+		return nil, fmt.Errorf("unsupported DNS strategy %q", cfg.Strategy)
+	}
+
+	options := &option.DNSOptions{
+		RawDNSOptions: option.RawDNSOptions{
+			Final:            "remote-0",
+			DNSClientOptions: option.DNSClientOptions{Strategy: option.DomainStrategy(strategy)},
+		},
+	}
+	for idx, rawServer := range servers {
+		parsed, err := url.Parse(strings.TrimSpace(rawServer))
+		if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" {
+			return nil, fmt.Errorf("DNS remote server must be an https URL, got %q", rawServer)
+		}
+		port := uint16(443)
+		if parsed.Port() != "" {
+			parsedPort, err := strconv.ParseUint(parsed.Port(), 10, 16)
+			if err != nil || parsedPort == 0 {
+				return nil, fmt.Errorf("invalid DNS remote server port in %q", rawServer)
+			}
+			port = uint16(parsedPort)
+		}
+		path := parsed.EscapedPath()
+		if path == "" {
+			path = "/dns-query"
+		}
+		serverName := strings.TrimSpace(parsed.Query().Get("server_name"))
+		if serverName == "" {
+			serverName = parsed.Hostname()
+		}
+		remote := &option.RemoteHTTPSDNSServerOptions{
+			RemoteTLSDNSServerOptions: option.RemoteTLSDNSServerOptions{
+				RemoteDNSServerOptions: option.RemoteDNSServerOptions{
+					LocalDNSServerOptions: option.LocalDNSServerOptions{
+						DialerOptions: option.DialerOptions{
+							Detour:         detour,
+							DomainStrategy: option.DomainStrategy(strategy),
+							DomainResolver: &option.DomainResolveOptions{
+								Server:   "local",
+								Strategy: option.DomainStrategy(strategy),
+							},
+						},
+					},
+					DNSServerAddressOptions: option.DNSServerAddressOptions{
+						Server:     parsed.Hostname(),
+						ServerPort: port,
+					},
+				},
+				OutboundTLSOptionsContainer: option.OutboundTLSOptionsContainer{
+					TLS: &option.OutboundTLSOptions{Enabled: true, ServerName: serverName},
+				},
+			},
+			Path: path,
+		}
+		options.Servers = append(options.Servers, option.DNSServerOptions{
+			Type:    C.DNSTypeHTTPS,
+			Tag:     fmt.Sprintf("remote-%d", idx),
+			Options: remote,
+		})
+	}
+	options.Servers = append(options.Servers, option.DNSServerOptions{
+		Type:    C.DNSTypeLocal,
+		Tag:     "local",
+		Options: &option.LocalDNSServerOptions{},
+	})
+
+	uniqueDomains := make([]string, 0, len(nodeDomains))
+	seen := make(map[string]struct{}, len(nodeDomains))
+	for _, domain := range nodeDomains {
+		domain = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(domain), "."))
+		if domain == "" || net.ParseIP(domain) != nil {
+			continue
+		}
+		if _, ok := seen[domain]; ok {
+			continue
+		}
+		seen[domain] = struct{}{}
+		uniqueDomains = append(uniqueDomains, domain)
+	}
+	sort.Strings(uniqueDomains)
+	if len(uniqueDomains) > 0 {
+		options.Rules = append(options.Rules, option.DNSRule{
+			Type: C.RuleTypeDefault,
+			DefaultOptions: option.DefaultDNSRule{
+				RawDefaultDNSRule: option.RawDefaultDNSRule{
+					Domain: badoption.Listable[string](uniqueDomains),
+				},
+				DNSRuleAction: option.DNSRuleAction{
+					Action:       C.RuleActionTypeRoute,
+					RouteOptions: option.DNSRouteActionOptions{Server: "local"},
+				},
+			},
+		})
+	}
+	return options, nil
 }
 
 func buildHTTPOptions(u *url.URL, skipCertVerify bool) (option.HTTPOutboundOptions, error) {

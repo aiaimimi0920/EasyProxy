@@ -210,27 +210,11 @@ func (m *Manager) Start(ctx context.Context) error {
 		return err
 	}
 
-	// Local Server owns the dispatcher even before the shared pool has any
-	// nodes. Keep the manager in an explicit idle state so the dispatcher can
-	// serve DIRECT traffic and a later reload can activate the pool without a
-	// process restart.
-	if cfg.LocalServer.Enabled && len(cfg.Nodes) == 0 {
-		m.mu.Lock()
-		m.currentBox = nil
-		m.cfg = cfg
-		m.idle = true
-		m.lastAppliedCfg = snapshotConfig(cfg)
-		m.lastAppliedIdle = true
-		m.lastAppliedMode = cfg.Mode
-		m.lastAppliedBasePort = cfg.MultiPort.BasePort
-		monitorServer := m.monitorServer
-		m.mu.Unlock()
-		if monitorServer != nil {
-			monitorServer.SetConfig(cfg)
-		}
-		m.startPeriodicHealthCheck(cfg)
-		m.logger.Infof("Local Server started in idle mode with no proxy nodes")
-		return nil
+	// Keep the manager in an explicit idle state when the dispatcher owns the
+	// entry but the proxy source is empty. This lets DIRECT traffic continue
+	// while a later reload activates the pool without a process restart.
+	if cfg.DispatchEnabled() && len(cfg.Nodes) == 0 {
+		return m.startIdle(cfg, "no proxy nodes")
 	}
 
 	// Try to start, with automatic port conflict resolution
@@ -240,6 +224,9 @@ func (m *Manager) Start(ctx context.Context) error {
 		var err error
 		instance, err = m.createManagedBox(ctx, cfg)
 		if err != nil {
+			if cfg.DispatchEnabled() && errors.Is(err, builder.ErrNoValidNodes) {
+				return m.startIdle(cfg, "no valid proxy nodes")
+			}
 			return err
 		}
 		if err := m.restoreMonitorStatsFromStore(ctx); err != nil {
@@ -290,6 +277,28 @@ func (m *Manager) Start(ctx context.Context) error {
 	}
 
 	m.logger.Infof("sing-box instance started with %d nodes", len(cfg.Nodes))
+	return nil
+}
+
+func (m *Manager) startIdle(cfg *config.Config, reason string) error {
+	if cfg == nil {
+		return errors.New("config is nil")
+	}
+	m.mu.Lock()
+	m.currentBox = nil
+	m.cfg = cfg
+	m.idle = true
+	m.lastAppliedCfg = snapshotConfig(cfg)
+	m.lastAppliedIdle = true
+	m.lastAppliedMode = cfg.Mode
+	m.lastAppliedBasePort = cfg.MultiPort.BasePort
+	monitorServer := m.monitorServer
+	m.mu.Unlock()
+	if monitorServer != nil {
+		monitorServer.SetConfig(cfg)
+	}
+	m.startPeriodicHealthCheck(cfg)
+	m.logger.Infof("dispatcher started in idle mode (%s)", reason)
 	return nil
 }
 

@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"easy_proxies/internal/builder"
 	"easy_proxies/internal/config"
 	"easy_proxies/internal/monitor"
 	"easy_proxies/internal/outbound/pool"
@@ -1782,6 +1783,29 @@ func TestStartCapturesIndependentLastAppliedSnapshot(t *testing.T) {
 	}
 	if manager.lastAppliedCfg.Nodes[0].Name != "initial" || manager.lastAppliedCfg.Routing.Rules[0] != "DOMAIN,example.com,DIRECT" {
 		t.Fatalf("last-applied deep snapshot changed: %+v", manager.lastAppliedCfg)
+	}
+}
+
+func TestStartEntersIdleWhenAllProxyNodesAreInvalid(t *testing.T) {
+	managementDisabled := false
+	cfg := &config.Config{
+		Mode:       "pool",
+		Management: config.ManagementConfig{Enabled: &managementDisabled},
+		Routing:    config.RoutingConfig{Enabled: true},
+		Nodes:      []config.NodeConfig{{Name: "broken", URI: "unsupported://node.example"}},
+	}
+	manager := New(cfg, monitor.Config{})
+	manager.boxFactory = func(context.Context, *config.Config) (managedBox, error) {
+		return nil, fmt.Errorf("wrapped build failure: %w", builder.ErrNoValidNodes)
+	}
+
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v, want idle success", err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+
+	if manager.currentBox != nil || !manager.idle || !manager.lastAppliedIdle {
+		t.Fatalf("manager state = current=%T idle=%v lastIdle=%v, want idle", manager.currentBox, manager.idle, manager.lastAppliedIdle)
 	}
 }
 

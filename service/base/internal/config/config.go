@@ -47,6 +47,7 @@ type Config struct {
 	ExternalIP          string                    `yaml:"external_ip"`   // 外部 IP 地址，用于导出时替换 0.0.0.0
 	LogLevel            string                    `yaml:"log_level"`
 	SkipCertVerify      bool                      `yaml:"skip_cert_verify"` // 全局跳过 SSL 证书验证
+	DNS                 DNSConfig                 `yaml:"dns"`              // sing-box DNS 路由，避免使用受污染的系统解析
 	DatabasePath        string                    `yaml:"database_path"`    // SQLite 数据库路径，默认 data/data.db
 	ExtraListeners      []ExtraListenerConfig     `yaml:"extra_listeners"`  // 额外监听端口（不同选择策略）
 	LocalServer         LocalServerConfig         `yaml:"local_server"`     // 局域网本地服务器统一入口
@@ -111,6 +112,17 @@ type GatewayDNSConfig struct {
 
 type GatewayDeviceConfig struct {
 	Addresses []string `yaml:"addresses"`
+}
+
+// DNSConfig controls the DNS router used by sing-box outbounds. Proxy
+// destinations use encrypted DNS through the proxy pool, while upstream node
+// server names are explicitly routed to the local resolver to avoid a DNS
+// dependency cycle.
+type DNSConfig struct {
+	Enabled       *bool    `yaml:"enabled"`
+	RemoteServers []string `yaml:"remote_servers"`
+	Detour        string   `yaml:"detour"`
+	Strategy      string   `yaml:"strategy"`
 }
 
 type LocalServerConfig struct {
@@ -623,6 +635,20 @@ func (c *Config) applyDefaults() error {
 	}
 	if strings.TrimSpace(c.SourceSync.ConnectorRuntime.PreferredIP.IPFilePath) == "" {
 		c.SourceSync.ConnectorRuntime.PreferredIP.IPFilePath = "/usr/local/share/cfst/ip.txt"
+	}
+
+	if c.DNS.Enabled == nil {
+		enabled := true
+		c.DNS.Enabled = &enabled
+	}
+	if len(c.DNS.RemoteServers) == 0 {
+		c.DNS.RemoteServers = []string{"https://cloudflare-dns.com/dns-query"}
+	}
+	if strings.TrimSpace(c.DNS.Detour) == "" {
+		c.DNS.Detour = "proxy-pool"
+	}
+	if strings.TrimSpace(c.DNS.Strategy) == "" {
+		c.DNS.Strategy = "prefer_ipv4"
 	}
 
 	// Routing / smart-dispatch defaults. The feature is opt-in (Enabled defaults
@@ -1997,6 +2023,7 @@ func (c *Config) Clone() *Config {
 		ExternalIP:          c.ExternalIP,
 		LogLevel:            c.LogLevel,
 		SkipCertVerify:      c.SkipCertVerify,
+		DNS:                 c.DNS,
 		DatabasePath:        c.DatabasePath,
 		ExtraListeners:      cloneConfigSlice(c.ExtraListeners),
 		LocalServer:         c.LocalServer,
@@ -2007,6 +2034,8 @@ func (c *Config) Clone() *Config {
 
 	cloned.Management.Enabled = cloneConfigBool(c.Management.Enabled)
 	cloned.Management.ProbeTargets = cloneConfigSlice(c.Management.ProbeTargets)
+	cloned.DNS.Enabled = cloneConfigBool(c.DNS.Enabled)
+	cloned.DNS.RemoteServers = cloneConfigSlice(c.DNS.RemoteServers)
 	cloned.Routing.UseDefaultRules = cloneConfigBool(c.Routing.UseDefaultRules)
 	cloned.Routing.Rules = cloneConfigSlice(c.Routing.Rules)
 	cloned.Routing.RuleProviders = cloneConfigSlice(c.Routing.RuleProviders)
@@ -2217,6 +2246,9 @@ func (c *Config) SaveSettings() error {
 	saveCfg.LogLevel = c.LogLevel
 	saveCfg.ExternalIP = c.ExternalIP
 	saveCfg.SkipCertVerify = c.SkipCertVerify
+	saveCfg.DNS = c.DNS
+	saveCfg.DNS.Enabled = cloneConfigBool(c.DNS.Enabled)
+	saveCfg.DNS.RemoteServers = cloneConfigSlice(c.DNS.RemoteServers)
 
 	// Listener
 	saveCfg.Listener = c.Listener

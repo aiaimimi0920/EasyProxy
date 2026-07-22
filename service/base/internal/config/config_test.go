@@ -30,6 +30,7 @@ func cloneTestConfig() *Config {
 	useDefaultRules := true
 	connectorRuntimeEnabled := true
 	longLivedOnly := true
+	dnsEnabled := false
 
 	cfg := &Config{
 		ExtraListeners: []ExtraListenerConfig{{Address: "original-listener"}},
@@ -65,6 +66,12 @@ func cloneTestConfig() *Config {
 			ConnectorRuntime: ConnectorRuntimeConfig{
 				Enabled: &connectorRuntimeEnabled,
 			},
+		},
+		DNS: DNSConfig{
+			Enabled:       &dnsEnabled,
+			RemoteServers: []string{"https://dns.example.test/query"},
+			Detour:        "node-pool",
+			Strategy:      "ipv4_only",
 		},
 		Subscriptions: []string{"https://original.example/main-subscription"},
 		Nodes:         []NodeConfig{{Name: "original-node"}},
@@ -228,6 +235,22 @@ func TestConfigCloneDeepCopiesReferenceFields(t *testing.T) {
 		*cloned.SourceSync.ConnectorRuntime.Enabled = false
 		if !*original.SourceSync.ConnectorRuntime.Enabled {
 			t.Fatal("original connector runtime enabled value changed through clone")
+		}
+	})
+
+	t.Run("DNS settings", func(t *testing.T) {
+		original := cloneTestConfig()
+		cloned := original.Clone()
+		if cloned.DNS.Enabled == nil || *cloned.DNS.Enabled != false {
+			t.Fatalf("cloned DNS enabled = %#v, want false", cloned.DNS.Enabled)
+		}
+		cloned.DNS.RemoteServers[0] = "changed"
+		*cloned.DNS.Enabled = true
+		if got := original.DNS.RemoteServers[0]; got != "https://dns.example.test/query" {
+			t.Fatalf("original DNS remote server changed through clone: %q", got)
+		}
+		if *original.DNS.Enabled {
+			t.Fatal("original DNS enabled value changed through clone")
 		}
 	})
 
@@ -1121,6 +1144,13 @@ nodes:
 		t.Fatalf("Load returned error: %v", err)
 	}
 	cfg.Lock()
+	dnsEnabled := false
+	cfg.DNS = DNSConfig{
+		Enabled:       &dnsEnabled,
+		RemoteServers: []string{"https://dns.example.test/query"},
+		Detour:        "node-pool",
+		Strategy:      "ipv4_only",
+	}
 	err = cfg.SaveSettings()
 	cfg.Unlock()
 	if err != nil {
@@ -1178,6 +1208,18 @@ nodes:
 	}
 	if got, want := saved.DatabasePath, "preserved.db"; got != want {
 		t.Fatalf("saved database_path = %q, want preserved value %q", got, want)
+	}
+	if saved.DNS.Enabled == nil || *saved.DNS.Enabled {
+		t.Fatalf("saved DNS enabled = %#v, want false", saved.DNS.Enabled)
+	}
+	if got, want := saved.DNS.RemoteServers, []string{"https://dns.example.test/query"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("saved DNS remote servers = %#v, want %#v", got, want)
+	}
+	if got, want := saved.DNS.Detour, "node-pool"; got != want {
+		t.Fatalf("saved DNS detour = %q, want %q", got, want)
+	}
+	if got, want := saved.DNS.Strategy, "ipv4_only"; got != want {
+		t.Fatalf("saved DNS strategy = %q, want %q", got, want)
 	}
 	if len(saved.Nodes) != 1 || saved.Nodes[0].Name != "preserved-node" {
 		t.Fatalf("saved nodes = %#v, want original non-settings node", saved.Nodes)

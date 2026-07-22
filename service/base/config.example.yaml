@@ -16,6 +16,14 @@ log_level: info
 # 全局跳过 SSL 证书验证（默认 false，不建议在生产环境启用）
 skip_cert_verify: false
 
+# 最终目标域名使用经代理节点转发的加密 DNS，节点服务器自身仍使用本地 DNS。
+dns:
+  enabled: true
+  remote_servers:
+    - https://cloudflare-dns.com/dns-query
+  detour: proxy-pool
+  strategy: prefer_ipv4
+
 # 外部 IP 地址，用于导出配置时替换 0.0.0.0（可选）
 # external_ip: "your.public.ip"
 

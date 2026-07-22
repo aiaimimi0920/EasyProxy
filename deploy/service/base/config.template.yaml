@@ -9,6 +9,16 @@ log_level: info
 skip_cert_verify: false
 database_path: /var/lib/easy-proxy/data/data.db
 
+# Proxy destinations use encrypted DNS through the proxy pool. Upstream node
+# server names are resolved by the local resolver to avoid a DNS dependency
+# cycle while still avoiding polluted system DNS for final destinations.
+dns:
+  enabled: true
+  remote_servers:
+    - https://cloudflare-dns.com/dns-query
+  detour: proxy-pool
+  strategy: prefer_ipv4
+
 listener:
   address: 0.0.0.0
   port: 22323

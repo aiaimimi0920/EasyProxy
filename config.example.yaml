@@ -20,6 +20,12 @@ serviceBase:
     log_level: info
     skip_cert_verify: false
     database_path: /var/lib/easy-proxy/data/data.db
+    dns:
+      enabled: true
+      remote_servers:
+        - https://cloudflare-dns.com/dns-query
+      detour: proxy-pool
+      strategy: prefer_ipv4
     listener:
       address: 0.0.0.0
       port: 22323
