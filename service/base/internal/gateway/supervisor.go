@@ -107,6 +107,9 @@ func isIdempotentNetworkError(err error) bool {
 		return true
 	}
 	message := strings.ToLower(err.Error())
+	if errors.Is(err, exec.ErrNotFound) || strings.Contains(message, "executable file not found") {
+		return false
+	}
 	return strings.Contains(message, "already exists") ||
 		strings.Contains(message, "file exists") ||
 		strings.Contains(message, "no such file") ||
@@ -125,7 +128,7 @@ func buildGatewayCommands(cfg config.GatewayConfig) []gatewayCommand {
 	}
 	commands = append(commands, gatewayCommand{
 		name: "nft",
-		args: []string{"add", "rule", "inet", "easyproxy_gateway", "prerouting", "tcp", "dport", "{", port, "22323", "29888", "}", "return"},
+		args: []string{"add", "rule", "inet", "easyproxy_gateway", "prerouting", "tcp", "dport", "{", port, ",", "22323", ",", "29888", "}", "return"},
 	})
 	for _, privateCIDR := range []string{"127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10"} {
 		commands = append(commands, gatewayCommand{
@@ -154,7 +157,12 @@ func appendCaptureRule(commands []gatewayCommand, qualifier, value, cidr, port s
 	if qualifier != "" {
 		args = append(args, qualifier, value)
 	}
-	args = append(args, "ip", "saddr", cidr, "tcp", "meta", "mark", "set", "0x1", "tproxy", "to", ":"+port)
+	args = append(args,
+		"ip", "saddr", cidr,
+		"meta", "l4proto", "tcp",
+		"meta", "mark", "set", "0x1",
+		"tproxy", "ip", "to", ":"+port,
+	)
 	return append(commands, gatewayCommand{name: "nft", args: args})
 }
 

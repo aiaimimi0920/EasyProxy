@@ -11,7 +11,19 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const transparentMark = 0x1
+type socketOptionSetter func(fd, level, option, value int) error
+
+func configureTransparentSocket(fd int, setOption socketOptionSetter) error {
+	for _, option := range [][3]int{
+		{unix.SOL_SOCKET, unix.SO_REUSEADDR, 1},
+		{unix.IPPROTO_IP, unix.IP_TRANSPARENT, 1},
+	} {
+		if err := setOption(fd, option[0], option[1], option[2]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // ListenTransparent binds a Linux transparent TCP socket. Policy routing and
 // nftables are installed separately by Supervisor; this function only owns
@@ -24,18 +36,7 @@ func ListenTransparent(ctx context.Context, cfg config.GatewayConfig) (net.Liste
 	lc.Control = func(_ string, _ string, raw syscall.RawConn) error {
 		var controlErr error
 		if err := raw.Control(func(fd uintptr) {
-			fileDescriptor := int(fd)
-			if err := unix.SetsockoptInt(fileDescriptor, unix.SOL_SOCKET, unix.SO_REUSEADDR, 1); err != nil {
-				controlErr = err
-				return
-			}
-			if err := unix.SetsockoptInt(fileDescriptor, unix.IPPROTO_IP, unix.IP_TRANSPARENT, 1); err != nil {
-				controlErr = err
-				return
-			}
-			if err := unix.SetsockoptInt(fileDescriptor, unix.SOL_SOCKET, unix.SO_MARK, transparentMark); err != nil {
-				controlErr = err
-			}
+			controlErr = configureTransparentSocket(int(fd), unix.SetsockoptInt)
 		}); err != nil {
 			return err
 		}

@@ -57,7 +57,7 @@ RUN wget -O /out-cloudflared ${CLOUDFLARED_DOWNLOAD_URL} \
 FROM debian:bookworm-slim AS runtime
 RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources \
     && apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates gosu python3 python3-boto3 \
+    && apt-get install -y --no-install-recommends ca-certificates gosu iproute2 nftables python3 python3-boto3 \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -r -u 10001 easy \
     && mkdir -p /etc/easy-proxy /etc/easy-proxy/bootstrap /var/lib/easy-proxy/data /var/lib/easy-proxy/connectors /usr/local/share/cfst \

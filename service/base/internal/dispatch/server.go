@@ -601,19 +601,24 @@ func (s *Server) dial(ctx context.Context, network, host string, port uint16, re
 // relay performs a bidirectional copy between two connections and returns when
 // either direction closes.
 func relay(a, b net.Conn) {
-	var wg sync.WaitGroup
-	wg.Add(2)
+	done := make(chan struct{}, 2)
 	go func() {
-		defer wg.Done()
 		_, _ = io.Copy(a, b)
 		closeWrite(a)
+		done <- struct{}{}
 	}()
 	go func() {
-		defer wg.Done()
 		_, _ = io.Copy(b, a)
 		closeWrite(b)
+		done <- struct{}{}
 	}()
-	wg.Wait()
+	<-done
+	// One side closing is the end of this bidirectional session. Closing both
+	// sockets interrupts the opposite copy instead of leaving it blocked on an
+	// upstream that ignores half-close.
+	_ = a.Close()
+	_ = b.Close()
+	<-done
 }
 
 type closeWriter interface{ CloseWrite() error }

@@ -1,0 +1,14 @@
+services:
+  easy-proxy-gateway:
+    image: ${EASY_PROXY_IMAGE:-easyproxy/easy-proxy:transparent-20260723-gatewayfix7}
+    container_name: easy-proxy-gateway
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    environment:
+      EASY_PROXY_RUN_AS_ROOT: "1"
+    volumes:
+      - /opt/easyproxy-gateway/config/config.yaml:/etc/easy-proxy/config.yaml:ro
+      - /opt/easyproxy-gateway/data:/etc/easy-proxy/data

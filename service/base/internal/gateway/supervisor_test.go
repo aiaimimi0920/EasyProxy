@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -10,6 +11,12 @@ import (
 
 type recordingRunner struct {
 	commands []string
+}
+
+func TestMissingNetworkExecutableIsNotIdempotent(t *testing.T) {
+	if isIdempotentNetworkError(errors.New(`exec: "nft": executable file not found in $PATH`)) {
+		t.Fatal("missing network executable must fail instead of being treated as an existing rule")
+	}
 }
 
 func (r *recordingRunner) Run(_ context.Context, name string, args ...string) error {
@@ -41,10 +48,11 @@ func TestSupervisorApplyAndStopOwnsTransparentRules(t *testing.T) {
 		"ip rule add fwmark 0x1/0x1 lookup 100",
 		"ip route add local 0.0.0.0/0 dev lo table 100",
 		"nft add table inet easyproxy_gateway",
-		"tcp dport { 16000 22323 29888 } return",
+		"tcp dport { 16000 , 22323 , 29888 } return",
 		"iifname eth0",
 		"ip saddr 192.168.15.0/24",
-		"tproxy to :16000",
+		"meta l4proto tcp",
+		"tproxy ip to :16000",
 	} {
 		if !strings.Contains(joined, expected) {
 			t.Fatalf("commands do not contain %q:\n%s", expected, joined)

@@ -196,8 +196,13 @@ ${arg}"
 
     echo "[easy-proxy] starting with config ${EASY_PROXY_CONFIG_PATH}"
     if [ "$(id -u)" = "0" ]; then
-        chown -R easy:easy "${EASY_PROXY_STATE_DIR}" /etc/easy-proxy
-        gosu easy /usr/local/bin/easy-proxy "$@" &
+        # The config may be a read-only bind mount; only mutate the writable state tree.
+        chown -R easy:easy "${EASY_PROXY_STATE_DIR}"
+        if is_truthy "${EASY_PROXY_RUN_AS_ROOT:-0}"; then
+            /usr/local/bin/easy-proxy "$@" &
+        else
+            gosu easy /usr/local/bin/easy-proxy "$@" &
+        fi
     else
         /usr/local/bin/easy-proxy "$@" &
     fi
