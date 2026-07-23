@@ -232,6 +232,9 @@ gateway:
     listen: 0.0.0.0:53
   tun:
     interface_name: easyproxy0
+    addresses:
+      - 172.31.255.1/30
+      - fd31:255::1/126
     stack: mixed
     mtu: 1500
     ipv4: true
@@ -248,6 +251,12 @@ gateway:
 The supported stack values are `system`, `gvisor`, and `mixed`. The deployment
 default is `mixed`; a test-only override may compare gVisor and system behavior
 without changing the public routing model.
+
+`addresses` are the private L3 addresses assigned to the TUN interface. They
+must not overlap trusted client CIDRs, LAN/overlay ranges, fake-IP ranges, or
+the VM's existing addresses. The supervisor derives the policy route from the
+same address family and does not use the TUN address as a client gateway
+address; clients still route to `192.168.15.201` or their overlay exit path.
 
 EasyProxy owns policy routes explicitly rather than delegating forwarded-client
 routes to sing-box `auto_route`. This keeps trusted-ingress filtering and
