@@ -13,6 +13,7 @@
 **/__pycache__/
 **/*.pyc
 .tmp/
+.worktrees/
 tmp/
 logs/
 
