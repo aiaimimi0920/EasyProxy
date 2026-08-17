@@ -40,6 +40,93 @@ def find_profile(profiles: list[dict[str, Any]], profile_ids: list[str]) -> dict
     return None
 
 
+def normalize_string_array(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+
+    seen: set[str] = set()
+    normalized: list[str] = []
+    for entry in value:
+        item = str(entry or "").strip()
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        normalized.append(item)
+    return normalized
+
+
+def profile_identifiers(profile: dict[str, Any]) -> set[str]:
+    identifiers: set[str] = set()
+    for value in (profile.get("id"), profile.get("customId")):
+        item = str(value or "").strip()
+        if not item:
+            continue
+        identifiers.add(item)
+        identifiers.add(item.replace("_", "-"))
+    return identifiers
+
+
+def attach_sources_to_profiles(
+    profiles: list[dict[str, Any]],
+    profile_ids: list[str],
+    source_ids: list[str],
+    source_id_prefix: str,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    requested_ids = normalize_string_array(profile_ids)
+    expected = set(requested_ids)
+    found: set[str] = set()
+    prefix = f"{source_id_prefix}_"
+    updated_profiles: list[dict[str, Any]] = []
+
+    for profile in profiles:
+        matched_ids = expected.intersection(profile_identifiers(profile))
+        if not matched_ids:
+            updated_profiles.append(profile)
+            continue
+
+        found.update(matched_ids)
+        updated_profile = dict(profile)
+        manual_nodes = [
+            node_id
+            for node_id in normalize_string_array(profile.get("manualNodes"))
+            if not node_id.startswith(prefix)
+        ]
+        updated_profile["manualNodes"] = normalize_string_array(manual_nodes + source_ids)
+        updated_profiles.append(updated_profile)
+
+    missing = [profile_id for profile_id in requested_ids if profile_id not in found]
+    return updated_profiles, missing
+
+
+def validate_managed_connector_sources(
+    sources: list[dict[str, Any]],
+    expected_source_ids: list[str],
+    worker_url: str,
+    access_token: str,
+) -> None:
+    expected = set(expected_source_ids)
+    managed_sources = [
+        source
+        for source in sources
+        if str(source.get("id", "")).strip() in expected
+    ]
+    actual = {str(source.get("id", "")).strip() for source in managed_sources}
+    ensure(actual == expected, "MiSub connector manifest is missing managed ECH sources")
+
+    for source in managed_sources:
+        options = source.get("options") if isinstance(source.get("options"), dict) else {}
+        ensure(
+            str(options.get("connector_type") or source.get("connector_type") or "").strip() == "ech_worker",
+            "MiSub connector manifest returned a managed source with an unexpected connector type",
+        )
+        ensure(str(source.get("input", "")).strip() == worker_url, "MiSub connector manifest returned an unexpected worker URL")
+        connector_config = options.get("connector_config") or source.get("connector_config") or {}
+        ensure(
+            str(connector_config.get("access_token", "")).strip() == access_token,
+            "MiSub connector manifest returned an outdated access token",
+        )
+
+
 def normalize_existing_sources(
     misubs: list[dict[str, Any]],
     source_id_prefix: str,
@@ -124,6 +211,7 @@ def main() -> int:
     parser.add_argument("--preserve-server-ips", action="store_true")
     parser.add_argument("--server-ip", action="append", default=[])
     parser.add_argument("--remove-profile-id", action="append", default=[])
+    parser.add_argument("--attach-profile-id", action="append", default=[])
     args = parser.parse_args()
 
     base_url = args.base_url.rstrip("/") + "/"
@@ -226,6 +314,18 @@ def main() -> int:
     if profile is None:
         updated_profiles.append(updated_profile)
 
+    managed_source_ids = [source["id"] for source in new_sources]
+    updated_profiles, missing_attach_profiles = attach_sources_to_profiles(
+        updated_profiles,
+        args.attach_profile_id,
+        managed_source_ids,
+        args.source_id_prefix,
+    )
+    ensure(
+        not missing_attach_profiles,
+        f"MiSub attach profiles not found: {', '.join(missing_attach_profiles)}",
+    )
+
     update_payload = {
         "misubs": updated_misubs,
         "profiles": updated_profiles,
@@ -252,15 +352,32 @@ def main() -> int:
     manifest_payload = manifest_response.json()
     ensure(manifest_payload.get("success") is True, "MiSub manifest endpoint did not report success")
 
-    sources = manifest_payload.get("sources") or []
-    connector_sources = [source for source in sources if str(source.get("kind", "")).strip() == "connector"]
-    ensure(connector_sources, "MiSub connector manifest did not return any connector sources")
-    for source in connector_sources:
-        ensure(str(source.get("input", "")).strip() == args.worker_url, "MiSub connector manifest returned an unexpected worker URL")
-        connector_config = source.get("options", {}).get("connector_config") or source.get("connector_config") or {}
-        ensure(
-            str(connector_config.get("access_token", "")).strip() == args.access_token,
-            "MiSub connector manifest returned an outdated access token",
+    validate_managed_connector_sources(
+        manifest_payload.get("sources") or [],
+        managed_source_ids,
+        args.worker_url,
+        args.access_token,
+    )
+
+    for attach_profile_id in normalize_string_array(args.attach_profile_id):
+        attached_manifest_response = retry(
+            f"MiSub attached connector manifest {attach_profile_id}",
+            10,
+            5,
+            lambda profile_id=attach_profile_id: session.get(
+                base_url + f"api/manifest/{profile_id}",
+                headers={"Authorization": f"Bearer {args.manifest_token}"},
+                timeout=30,
+            ),
+        )
+        attached_manifest_response.raise_for_status()
+        attached_manifest_payload = attached_manifest_response.json()
+        ensure(attached_manifest_payload.get("success") is True, "MiSub attached manifest endpoint did not report success")
+        validate_managed_connector_sources(
+            attached_manifest_payload.get("sources") or [],
+            managed_source_ids,
+            args.worker_url,
+            args.access_token,
         )
 
     summary = {
@@ -268,6 +385,7 @@ def main() -> int:
         "worker_url": args.worker_url,
         "preserve_server_ips": args.preserve_server_ips,
         "removed_profile_ids": sorted(profile_ids_to_remove),
+        "attached_profile_ids": normalize_string_array(args.attach_profile_id),
         "source_count": len(new_sources),
         "server_ips": selected_server_ips,
         "updated_source_ids": [source["id"] for source in new_sources],

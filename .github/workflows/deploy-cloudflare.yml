@@ -567,6 +567,7 @@ jobs:
             --remove-profile-id "easyproxies-ech-preferred" \
             --profile-name "EasyProxies ECH Runtime" \
             --profile-description "Private profile for routing EasyProxy-managed ECH connector sources through the current self-hosted ECH Worker; host-local preferred IP fanout is generated on each EasyProxy runtime independently." \
+            --attach-profile-id "${runtime_profile_id}" \
             --worker-url "${ECH_WORKER_PUBLIC_URL}:443" \
             --access-token "${ECH_TOKEN}"
 

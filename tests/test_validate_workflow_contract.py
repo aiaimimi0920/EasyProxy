@@ -4,12 +4,14 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "validate.yml"
+CLOUDFLARE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "deploy-cloudflare.yml"
 
 
 class ValidateWorkflowContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.workflow = WORKFLOW.read_text(encoding="utf-8")
+        cls.cloudflare_workflow = CLOUDFLARE_WORKFLOW.read_text(encoding="utf-8")
 
     def test_root_ci_checks_go_format_and_vet(self):
         self.assertIn("python scripts/check-go-format.py", self.workflow)
@@ -17,6 +19,9 @@ class ValidateWorkflowContractTests(unittest.TestCase):
 
     def test_root_ci_rejects_uncommitted_generated_assets(self):
         self.assertIn("git diff --exit-code", self.workflow)
+
+    def test_cloudflare_deploy_attaches_ech_to_runtime_profile(self):
+        self.assertIn('--attach-profile-id "${runtime_profile_id}"', self.cloudflare_workflow)
 
 
 if __name__ == "__main__":
