@@ -34,7 +34,7 @@ const defaultSettings: SettingsData = {
   sub_refresh_enabled: false,
   sub_refresh_interval: '1h0m0s',
   sub_refresh_timeout: '30s',
-  sub_refresh_health_check_timeout: '1m0s',
+  sub_refresh_health_check_timeout: '2m0s',
   sub_refresh_drain_timeout: '30s',
   sub_refresh_min_available_nodes: 1,
 
@@ -46,7 +46,7 @@ const defaultSettings: SettingsData = {
   source_sync_fallback_subscriptions: [],
   source_sync_default_direct_proxy_scheme: 'http',
 
-  geoip_enabled: false,
+  geoip_enabled: true,
   geoip_database_path: './GeoLite2-Country.mmdb',
   geoip_auto_update_enabled: true,
   geoip_auto_update_interval: '24h0m0s',

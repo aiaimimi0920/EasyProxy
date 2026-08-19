@@ -2,6 +2,7 @@ package subscription
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -25,6 +26,12 @@ import (
 
 const connectorTypeECHWorker = "ech_worker"
 const connectorTypeZenProxyClient = "zenproxy_client"
+
+const (
+	zenProxyFetchMaxAttempts    = 3
+	zenProxyFetchRetryBaseDelay = 100 * time.Millisecond
+	zenProxyFetchBodyLimit      = 2 * 1024 * 1024
+)
 
 type preferredIPRuntimeSelector func(context.Context, string, config.ConnectorRuntimeConfig, config.ConnectorSourceConfig, monitor.PreferredIPRefreshOptions) ([]preferredIPResultRow, string, string, error)
 
@@ -359,58 +366,63 @@ func (m *connectorRuntimeManager) fetchZenProxyConnectorSource(cfg *config.Confi
 	ctx, cancel := context.WithTimeout(m.ctx, timeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Set("Accept", "application/json")
-	if connectorCfg.APIKey != "" && !connectorCfg.AuthInQuery {
-		req.Header.Set("Authorization", "Bearer "+connectorCfg.APIKey)
+	requestFactory := func(requestCtx context.Context) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			return nil, fmt.Errorf("create request: %w", err)
+		}
+		req.Header.Set("Accept", "application/json")
+		if connectorCfg.APIKey != "" && !connectorCfg.AuthInQuery {
+			req.Header.Set("Authorization", "Bearer "+connectorCfg.APIKey)
+		}
+
+		values := req.URL.Query()
+		if connectorCfg.AuthInQuery && connectorCfg.APIKey != "" {
+			values.Set("api_key", connectorCfg.APIKey)
+		}
+		if connectorCfg.Count > 0 {
+			values.Set("count", strconv.Itoa(connectorCfg.Count))
+		}
+		if connectorCfg.Country != "" {
+			values.Set("country", connectorCfg.Country)
+		}
+		if connectorCfg.ProxyType != "" {
+			values.Set("type", connectorCfg.ProxyType)
+		}
+		if connectorCfg.ProxyID != "" {
+			values.Set("proxy_id", connectorCfg.ProxyID)
+		}
+		if connectorCfg.ChatGPT {
+			values.Set("chatgpt", "true")
+		}
+		if connectorCfg.Google {
+			values.Set("google", "true")
+		}
+		if connectorCfg.Residential {
+			values.Set("residential", "true")
+		}
+		if connectorCfg.RiskMax != nil {
+			values.Set("risk_max", strconv.FormatFloat(*connectorCfg.RiskMax, 'f', -1, 64))
+		}
+		req.URL.RawQuery = values.Encode()
+		return req, nil
 	}
 
-	values := req.URL.Query()
-	if connectorCfg.AuthInQuery && connectorCfg.APIKey != "" {
-		values.Set("api_key", connectorCfg.APIKey)
-	}
-	if connectorCfg.Count > 0 {
-		values.Set("count", strconv.Itoa(connectorCfg.Count))
-	}
-	if connectorCfg.Country != "" {
-		values.Set("country", connectorCfg.Country)
-	}
-	if connectorCfg.ProxyType != "" {
-		values.Set("type", connectorCfg.ProxyType)
-	}
-	if connectorCfg.ProxyID != "" {
-		values.Set("proxy_id", connectorCfg.ProxyID)
-	}
-	if connectorCfg.ChatGPT {
-		values.Set("chatgpt", "true")
-	}
-	if connectorCfg.Google {
-		values.Set("google", "true")
-	}
-	if connectorCfg.Residential {
-		values.Set("residential", "true")
-	}
-	if connectorCfg.RiskMax != nil {
-		values.Set("risk_max", strconv.FormatFloat(*connectorCfg.RiskMax, 'f', -1, 64))
-	}
-	req.URL.RawQuery = values.Encode()
-
-	resp, err := m.httpClient.Do(req)
+	statusCode, responseBody, err := m.doZenProxyGET(ctx, requestFactory)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
-		return nil, fmt.Errorf("unexpected status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	if statusCode != http.StatusOK {
+		body := responseBody
+		if len(body) > 16*1024 {
+			body = body[:16*1024]
+		}
+		return nil, fmt.Errorf("unexpected status %d: %s", statusCode, strings.TrimSpace(string(body)))
 	}
 
 	var payload zenProxyFetchResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 2*1024*1024)).Decode(&payload); err != nil {
+	if err := json.NewDecoder(bytes.NewReader(responseBody)).Decode(&payload); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 	if len(payload.Proxies) == 0 {
@@ -457,6 +469,90 @@ func (m *connectorRuntimeManager) fetchZenProxyConnectorSource(cfg *config.Confi
 		return runtimeSources, fmt.Errorf("partial conversion failures: %s", strings.Join(conversionErrs, "; "))
 	}
 	return runtimeSources, nil
+}
+
+func (m *connectorRuntimeManager) doZenProxyGET(ctx context.Context, requestFactory func(context.Context) (*http.Request, error)) (int, []byte, error) {
+	for attempt := 0; attempt < zenProxyFetchMaxAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return 0, nil, err
+		}
+
+		attemptCtx := ctx
+		cancelAttempt := func() {}
+		if deadline, ok := ctx.Deadline(); ok {
+			remaining := time.Until(deadline)
+			attemptsLeft := zenProxyFetchMaxAttempts - attempt
+			if remaining <= 0 {
+				return 0, nil, context.DeadlineExceeded
+			}
+			attemptBudget := remaining / time.Duration(attemptsLeft)
+			if attemptBudget > 0 {
+				attemptCtx, cancelAttempt = context.WithTimeout(ctx, attemptBudget)
+			}
+		}
+
+		req, err := requestFactory(attemptCtx)
+		if err != nil {
+			cancelAttempt()
+			return 0, nil, err
+		}
+		resp, err := m.httpClient.Do(req)
+		if err != nil {
+			cancelAttempt()
+			if attempt+1 < zenProxyFetchMaxAttempts && ctx.Err() == nil && isRetryableZenProxyTransportError(err) {
+				if waitErr := waitZenProxyRetry(ctx, attempt); waitErr != nil {
+					return 0, nil, waitErr
+				}
+				continue
+			}
+			return 0, nil, err
+		}
+
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, zenProxyFetchBodyLimit+1))
+		_ = resp.Body.Close()
+		cancelAttempt()
+		if readErr != nil {
+			return 0, nil, fmt.Errorf("read response: %w", readErr)
+		}
+		if len(body) > zenProxyFetchBodyLimit {
+			return 0, nil, fmt.Errorf("response exceeds %d bytes", zenProxyFetchBodyLimit)
+		}
+		if attempt+1 < zenProxyFetchMaxAttempts && isRetryableZenProxyStatus(resp.StatusCode) {
+			if waitErr := waitZenProxyRetry(ctx, attempt); waitErr != nil {
+				return 0, nil, waitErr
+			}
+			continue
+		}
+		return resp.StatusCode, body, nil
+	}
+	return 0, nil, errors.New("zenproxy request exhausted retry attempts")
+}
+
+func isRetryableZenProxyTransportError(err error) bool {
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	var networkError net.Error
+	if errors.As(err, &networkError) && (networkError.Timeout() || networkError.Temporary()) {
+		return true
+	}
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+}
+
+func isRetryableZenProxyStatus(statusCode int) bool {
+	return statusCode == http.StatusBadGateway || statusCode == http.StatusServiceUnavailable || statusCode == http.StatusGatewayTimeout
+}
+
+func waitZenProxyRetry(ctx context.Context, attempt int) error {
+	delay := zenProxyFetchRetryBaseDelay * time.Duration(1<<attempt)
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (m *connectorRuntimeManager) expandConnectorSources(cfg *config.Config, sources []RuntimeSource) ([]RuntimeSource, error) {

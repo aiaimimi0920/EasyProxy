@@ -555,6 +555,86 @@ func TestProbeAllNodesCompletesWhenProbeIgnoresContext(t *testing.T) {
 	}
 }
 
+func TestManualProbeCompletesWhenProbeIgnoresContext(t *testing.T) {
+	manager, err := NewManager(Config{
+		ProbeTargets: []string{"https://platform.openai.com/login"},
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	defer manager.Stop()
+
+	release := make(chan struct{})
+	handle := manager.Register(NodeInfo{Tag: "manual-ignores-context"})
+	handle.SetProbe(func(context.Context) (time.Duration, error) {
+		<-release
+		return time.Millisecond, nil
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	startedAt := time.Now()
+	_, probeErr := manager.Probe(ctx, "manual-ignores-context")
+	close(release)
+	if !errors.Is(probeErr, context.DeadlineExceeded) {
+		t.Fatalf("Probe() error = %v, want context deadline exceeded", probeErr)
+	}
+	if elapsed := time.Since(startedAt); elapsed > 200*time.Millisecond {
+		t.Fatalf("manual probe returned after %v, want bounded context handling", elapsed)
+	}
+	if snap := handle.Snapshot(); !snap.InitialCheckDone || snap.Available {
+		t.Fatalf("manual timeout snapshot = %+v, want checked and unavailable", snap)
+	}
+}
+
+func TestNormalizeNodeProbeTimeoutCapsHealthGateTimeout(t *testing.T) {
+	if got := normalizeNodeProbeTimeout(time.Minute); got != 10*time.Second {
+		t.Fatalf("minute timeout normalized to %v, want 10s", got)
+	}
+	if got := normalizeNodeProbeTimeout(3 * time.Second); got != 3*time.Second {
+		t.Fatalf("short timeout normalized to %v, want 3s", got)
+	}
+	if got := normalizeNodeProbeTimeout(0); got != 10*time.Second {
+		t.Fatalf("zero timeout normalized to %v, want 10s", got)
+	}
+}
+
+func TestProbeGenerationRoundDeadlineDoesNotPublishFalseFailures(t *testing.T) {
+	manager, err := NewManager(Config{
+		ProbeTargets: []string{"https://platform.openai.com/login"},
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	defer manager.Stop()
+
+	const totalNodes = 40
+	handles := make([]*EntryHandle, 0, totalNodes)
+	for idx := 0; idx < totalNodes; idx++ {
+		handle := manager.Register(NodeInfo{Tag: fmt.Sprintf("round-deadline-%02d", idx)})
+		handle.SetProbe(func(ctx context.Context) (time.Duration, error) {
+			<-ctx.Done()
+			return 0, ctx.Err()
+		})
+		handles = append(handles, handle)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	summary, probeErr := manager.ProbeGeneration(ctx, 0, time.Second)
+	if !errors.Is(probeErr, context.DeadlineExceeded) {
+		t.Fatalf("ProbeGeneration() error = %v, want context deadline exceeded", probeErr)
+	}
+	if summary.Completed != 0 || summary.Available != 0 || summary.Failed != 0 {
+		t.Fatalf("round deadline summary = %+v, want no published node results", summary)
+	}
+	for _, handle := range handles {
+		if snap := handle.Snapshot(); snap.InitialCheckDone || snap.Available || snap.LastError != "" {
+			t.Fatalf("round deadline published a false node result: %+v", snap)
+		}
+	}
+}
+
 func TestProbeAllNodesAvoidsBurstConcurrencyThatOverwhelmsResolvers(t *testing.T) {
 	manager, err := NewManager(Config{
 		ProbeTargets: []string{"https://platform.openai.com/login"},

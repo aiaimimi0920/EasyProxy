@@ -387,6 +387,151 @@ func TestBuildNodeOutboundSupportsVMessH2URLAlias(t *testing.T) {
 	}
 }
 
+func TestBuildNodeOutboundDecodesHysteria2Password(t *testing.T) {
+	outbound, err := buildNodeOutbound("hysteria2-encoded-password", "hysteria2://p%40ss@example.com:443", false)
+	if err != nil {
+		t.Fatalf("buildNodeOutbound returned error: %v", err)
+	}
+
+	opts, ok := outbound.Options.(*option.Hysteria2OutboundOptions)
+	if !ok {
+		t.Fatalf("outbound options type = %T, want *option.Hysteria2OutboundOptions", outbound.Options)
+	}
+	if opts.Password != "p@ss" {
+		t.Fatalf("password = %q, want URL-decoded password", opts.Password)
+	}
+}
+
+func TestBuildNodeOutboundPreservesHysteria2ExtendedOptions(t *testing.T) {
+	outbound, err := buildNodeOutbound(
+		"hysteria2-extended",
+		"hysteria2://p%40ss@example.com:443?upMbps=20&downMbps=80&obfs=salamander&obfs-password=obfs-secret&alpn=h3",
+		false,
+	)
+	if err != nil {
+		t.Fatalf("buildNodeOutbound returned error: %v", err)
+	}
+
+	opts, ok := outbound.Options.(*option.Hysteria2OutboundOptions)
+	if !ok {
+		t.Fatalf("outbound options type = %T, want *option.Hysteria2OutboundOptions", outbound.Options)
+	}
+	if opts.UpMbps != 20 || opts.DownMbps != 80 {
+		t.Fatalf("bandwidth = %d/%d, want 20/80", opts.UpMbps, opts.DownMbps)
+	}
+	if opts.Obfs == nil || opts.Obfs.Type != "salamander" || opts.Obfs.Password != "obfs-secret" {
+		t.Fatalf("obfs = %#v, want salamander with password", opts.Obfs)
+	}
+	if opts.TLS == nil || len(opts.TLS.ALPN) != 1 || opts.TLS.ALPN[0] != "h3" {
+		t.Fatalf("TLS ALPN = %#v, want h3", opts.TLS)
+	}
+}
+
+func TestBuildNodeOutboundAcceptsPacketEncodingAliases(t *testing.T) {
+	tests := []struct {
+		name string
+		uri  string
+	}{
+		{
+			name: "vless snake case",
+			uri:  "vless://11111111-1111-1111-1111-111111111111@example.com:443?encryption=none&packet_encoding=xudp",
+		},
+		{
+			name: "vmess camel case",
+			uri:  "vmess://11111111-1111-1111-1111-111111111111@example.com:443?encryption=auto&packetEncoding=xudp",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			outbound, err := buildNodeOutbound(test.name, test.uri, false)
+			if err != nil {
+				t.Fatalf("buildNodeOutbound returned error: %v", err)
+			}
+			switch opts := outbound.Options.(type) {
+			case *option.VLESSOutboundOptions:
+				if opts.PacketEncoding == nil || *opts.PacketEncoding != "xudp" {
+					t.Fatalf("VLESS packet encoding = %#v, want xudp", opts.PacketEncoding)
+				}
+			case *option.VMessOutboundOptions:
+				if opts.PacketEncoding != "xudp" {
+					t.Fatalf("VMess packet encoding = %q, want xudp", opts.PacketEncoding)
+				}
+			default:
+				t.Fatalf("unexpected outbound options type %T", outbound.Options)
+			}
+		})
+	}
+}
+
+func TestBuildNodeOutboundPreservesHTTPUpgradeHost(t *testing.T) {
+	uri := "vless://11111111-1111-1111-1111-111111111111@example.com:443?encryption=none&security=tls&type=httpupgrade&host=edge.example.com&path=%2Fupgrade"
+
+	outbound, err := buildNodeOutbound("vless-httpupgrade-host", uri, false)
+	if err != nil {
+		t.Fatalf("buildNodeOutbound returned error: %v", err)
+	}
+
+	opts, ok := outbound.Options.(*option.VLESSOutboundOptions)
+	if !ok {
+		t.Fatalf("outbound options type = %T, want *option.VLESSOutboundOptions", outbound.Options)
+	}
+	if opts.Transport == nil || opts.Transport.Type != C.V2RayTransportTypeHTTPUpgrade {
+		t.Fatalf("transport = %+v, want HTTPUpgrade", opts.Transport)
+	}
+	if got := opts.Transport.HTTPUpgradeOptions.Headers["Host"]; len(got) != 1 || got[0] != "edge.example.com" {
+		t.Fatalf("HTTPUpgrade Host header = %#v", got)
+	}
+}
+
+func TestBuildNodeOutboundParsesVMessWebSocketEarlyDataQuery(t *testing.T) {
+	vmessJSON := `{"v":"2","ps":"ws-early-data","add":"example.com","port":"443","id":"11111111-1111-1111-1111-111111111111","aid":"0","net":"ws","path":"/ws?foo=bar&ed=2560&eh=X-Early-Data","tls":"tls"}`
+	uri := "vmess://" + base64.StdEncoding.EncodeToString([]byte(vmessJSON))
+
+	outbound, err := buildNodeOutbound("vmess-ws-early-data", uri, false)
+	if err != nil {
+		t.Fatalf("buildNodeOutbound returned error: %v", err)
+	}
+
+	opts, ok := outbound.Options.(*option.VMessOutboundOptions)
+	if !ok {
+		t.Fatalf("outbound options type = %T, want *option.VMessOutboundOptions", outbound.Options)
+	}
+	if opts.Transport == nil || opts.Transport.Type != C.V2RayTransportTypeWebsocket {
+		t.Fatalf("transport = %+v, want websocket", opts.Transport)
+	}
+	if opts.Transport.WebsocketOptions.Path != "/ws?foo=bar&ed=2560&eh=X-Early-Data" {
+		t.Fatalf("websocket path = %q", opts.Transport.WebsocketOptions.Path)
+	}
+	if opts.Transport.WebsocketOptions.MaxEarlyData != 2560 {
+		t.Fatalf("max early data = %d, want 2560", opts.Transport.WebsocketOptions.MaxEarlyData)
+	}
+	if opts.Transport.WebsocketOptions.EarlyDataHeaderName != "X-Early-Data" {
+		t.Fatalf("early data header = %q", opts.Transport.WebsocketOptions.EarlyDataHeaderName)
+	}
+}
+
+func TestBuildNodeOutboundEnablesVMessTLSCaseInsensitively(t *testing.T) {
+	vmessJSON := `{"v":"2","ps":"uppercase-tls","add":"example.com","port":"443","id":"11111111-1111-1111-1111-111111111111","aid":"0","net":"tcp","tls":" TLS ","sni":"edge.example.com"}`
+	uri := "vmess://" + base64.StdEncoding.EncodeToString([]byte(vmessJSON))
+
+	outbound, err := buildNodeOutbound("vmess-uppercase-tls", uri, false)
+	if err != nil {
+		t.Fatalf("buildNodeOutbound returned error: %v", err)
+	}
+
+	opts, ok := outbound.Options.(*option.VMessOutboundOptions)
+	if !ok {
+		t.Fatalf("outbound options type = %T, want *option.VMessOutboundOptions", outbound.Options)
+	}
+	if opts.OutboundTLSOptionsContainer.TLS == nil || !opts.OutboundTLSOptionsContainer.TLS.Enabled {
+		t.Fatalf("TLS options = %+v, want enabled", opts.OutboundTLSOptionsContainer.TLS)
+	}
+	if opts.OutboundTLSOptionsContainer.TLS.ServerName != "edge.example.com" {
+		t.Fatalf("TLS server name = %q", opts.OutboundTLSOptionsContainer.TLS.ServerName)
+	}
+}
+
 func TestBuildNodeOutboundEnablesStandardECHForVLESS(t *testing.T) {
 	originalResolver := resolveECHConfigPEM
 	resolveECHConfigPEM = func(value string) (string, error) {
@@ -472,5 +617,17 @@ func TestBuildNodeOutboundRejectsInvalidRealityShortID(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "invalid reality short_id") {
 		t.Fatalf("expected invalid short_id error, got %v", err)
+	}
+}
+
+func TestBuildNodeOutboundRejectsMissingRealityPublicKey(t *testing.T) {
+	uri := "vless://11111111-1111-1111-1111-111111111111@example.com:443?encryption=none&security=reality&sid=0123456789abcdef"
+
+	_, err := buildNodeOutbound("vless-reality-missing-public-key", uri, false)
+	if err == nil {
+		t.Fatal("expected missing reality public key to be rejected")
+	}
+	if !strings.Contains(err.Error(), "reality missing public key") {
+		t.Fatalf("expected missing public key error, got %v", err)
 	}
 }

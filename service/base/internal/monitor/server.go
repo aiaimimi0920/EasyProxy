@@ -191,6 +191,9 @@ func NewServer(cfg Config, mgr *Manager, logger *log.Logger) *Server {
 	if maxConcurrentProbes < 10 {
 		maxConcurrentProbes = 10
 	}
+	if maxConcurrentProbes > 16 {
+		maxConcurrentProbes = 16
+	}
 
 	s := &Server{
 		cfg:         cfg,

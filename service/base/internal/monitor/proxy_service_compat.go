@@ -1540,9 +1540,9 @@ func (s *Server) resolveProxyCompatCandidate(r *http.Request, request proxyCompa
 		eligible = append(eligible, candidate)
 	}
 	if len(eligible) == 0 {
-		if selectionTier == "degraded" && proxyCompatRequiresStrictDegradedServiceCooldown(serviceKey, stage) {
+		if proxyCompatRequiresStrictDegradedServiceCooldown(serviceKey, stage) {
 			return proxyCompatCandidate{}, runtimeCfg, fmt.Errorf(
-				"%w: no degraded EasyProxy nodes are currently available for service %s",
+				"%w: no EasyProxy nodes are currently available for service %s after service cooldown",
 				errProxyCompatNoNodes,
 				serviceKey,
 			)

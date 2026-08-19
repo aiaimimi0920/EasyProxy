@@ -53,17 +53,10 @@ func Build(cfg *config.Config) (option.Options, error) {
 	// Initialize GeoIP lookup if enabled
 	var geoLookup *geoip.Lookup
 	if cfg.GeoIP.Enabled && cfg.GeoIP.DatabasePath != "" {
+		// Build only needs a point-in-time lookup to classify this generation.
+		// The routing controller owns the long-lived auto-update lifecycle.
 		var err error
-		// Use auto-update if enabled
-		if cfg.GeoIP.AutoUpdateEnabled {
-			interval := cfg.GeoIP.AutoUpdateInterval
-			if interval == 0 {
-				interval = 24 * time.Hour // Default to 24 hours
-			}
-			geoLookup, err = geoip.NewWithAutoUpdate(cfg.GeoIP.DatabasePath, interval)
-		} else {
-			geoLookup, err = geoip.New(cfg.GeoIP.DatabasePath)
-		}
+		geoLookup, err = geoip.New(cfg.GeoIP.DatabasePath)
 		if err != nil {
 			log.Printf("⚠️  GeoIP database load failed: %v (region routing disabled)", err)
 		} else {
@@ -788,7 +781,8 @@ func buildVLESSOptions(u *url.URL, skipCertVerify bool) (option.VLESSOutboundOpt
 	if flow := query.Get("flow"); flow != "" {
 		opts.Flow = config.NormalizeVLESSFlow(flow)
 	}
-	if packetEncoding := query.Get("packetEncoding"); packetEncoding != "" {
+	packetEncoding := firstNonEmpty(query.Get("packetEncoding"), query.Get("packet_encoding"))
+	if packetEncoding != "" {
 		opts.PacketEncoding = &packetEncoding
 	}
 	if transport, err := buildV2RayTransport(query); err != nil {
@@ -805,7 +799,7 @@ func buildVLESSOptions(u *url.URL, skipCertVerify bool) (option.VLESSOutboundOpt
 }
 
 func buildHysteria2Options(u *url.URL, skipCertVerify bool) (option.Hysteria2OutboundOptions, error) {
-	password := u.User.String()
+	password := u.User.Username()
 	server, port, err := hostPort(u, 443)
 	if err != nil {
 		return option.Hysteria2OutboundOptions{}, err
@@ -884,11 +878,15 @@ func buildTLSOptions(query url.Values, skipCertVerify bool) (*option.OutboundTLS
 		tlsOptions.ECH = echOptions
 	}
 	if security == "reality" {
+		publicKey := strings.TrimSpace(query.Get("pbk"))
+		if publicKey == "" {
+			return nil, errors.New("reality missing public key")
+		}
 		shortID, err := normalizeRealityShortID(query.Get("sid"))
 		if err != nil {
 			return nil, err
 		}
-		tlsOptions.Reality = &option.OutboundRealityOptions{Enabled: true, PublicKey: query.Get("pbk"), ShortID: shortID}
+		tlsOptions.Reality = &option.OutboundRealityOptions{Enabled: true, PublicKey: publicKey, ShortID: shortID}
 		// Reality requires uTLS; use default fingerprint if not specified
 		if tlsOptions.UTLS == nil {
 			if fp == "" {
@@ -1056,6 +1054,9 @@ func buildV2RayTransport(query url.Values) (*option.V2RayTransportOptions, error
 		options.GRPCOptions.ServiceName = query.Get("serviceName")
 	case C.V2RayTransportTypeHTTPUpgrade:
 		options.HTTPUpgradeOptions.Path = query.Get("path")
+		if host := query.Get("host"); host != "" {
+			options.HTTPUpgradeOptions.Headers = badoption.HTTPHeader{"Host": {host}}
+		}
 	default:
 		return nil, fmt.Errorf("unsupported transport type %q", transportType)
 	}
@@ -1297,19 +1298,10 @@ func buildVMessOptions(rawURI string, skipCertVerify bool) (option.VMessOutbound
 			switch transportType {
 			case C.V2RayTransportTypeWebsocket:
 				transport.Type = C.V2RayTransportTypeWebsocket
-				wsPath := vmess.Path
-				// Handle early data in path
-				if idx := strings.Index(wsPath, "?ed="); idx != -1 {
-					edPart := wsPath[idx+4:]
-					wsPath = wsPath[:idx]
-					edValue := edPart
-					if ampIdx := strings.Index(edPart, "&"); ampIdx != -1 {
-						edValue = edPart[:ampIdx]
-					}
-					if ed, err := strconv.Atoi(edValue); err == nil && ed > 0 {
-						transport.WebsocketOptions.MaxEarlyData = uint32(ed)
-						transport.WebsocketOptions.EarlyDataHeaderName = "Sec-WebSocket-Protocol"
-					}
+				wsPath, earlyDataSize, earlyDataHeader := parseWebSocketPathAndEarlyData(url.Values{"path": {vmess.Path}})
+				if earlyDataSize > 0 {
+					transport.WebsocketOptions.MaxEarlyData = earlyDataSize
+					transport.WebsocketOptions.EarlyDataHeaderName = earlyDataHeader
 				}
 				transport.WebsocketOptions.Path = wsPath
 				if vmess.Host != "" {
@@ -1340,7 +1332,7 @@ func buildVMessOptions(rawURI string, skipCertVerify bool) (option.VMessOutbound
 	}
 
 	// Build TLS options
-	if vmess.TLS == "tls" {
+	if strings.EqualFold(strings.TrimSpace(vmess.TLS), "tls") {
 		tlsOptions := &option.OutboundTLSOptions{Enabled: true, Insecure: skipCertVerify}
 		if vmess.SNI != "" {
 			tlsOptions.ServerName = vmess.SNI
@@ -1391,6 +1383,9 @@ func buildVMessOptionsFromURL(rawURI string, skipCertVerify bool) (option.VMessO
 
 	if aid := query.Get("alterId"); aid != "" {
 		opts.AlterId, _ = strconv.Atoi(aid)
+	}
+	if packetEncoding := firstNonEmpty(query.Get("packetEncoding"), query.Get("packet_encoding")); packetEncoding != "" {
+		opts.PacketEncoding = packetEncoding
 	}
 
 	// Build transport

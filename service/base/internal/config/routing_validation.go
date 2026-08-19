@@ -3,8 +3,39 @@ package config
 import (
 	"fmt"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 )
+
+// ResolveRuleFilePaths anchors local routing rule files to the primary config
+// directory and rejects missing or non-regular inputs before runtime startup.
+func ResolveRuleFilePaths(configPath string, paths []string) ([]string, error) {
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	baseDir := filepath.Dir(configPath)
+	resolved := make([]string, 0, len(paths))
+	for idx, value := range paths {
+		path := strings.TrimSpace(value)
+		if path == "" {
+			return nil, fmt.Errorf("routing rule file %d has an empty path", idx+1)
+		}
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(baseDir, path)
+		}
+		path = filepath.Clean(path)
+		info, err := os.Stat(path)
+		if err != nil {
+			return nil, fmt.Errorf("routing rule file %q: %w", path, err)
+		}
+		if !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("routing rule file %q is not a regular file", path)
+		}
+		resolved = append(resolved, path)
+	}
+	return resolved, nil
+}
 
 // ValidateRuleProviders rejects provider URLs that the routing runtime cannot fetch.
 func ValidateRuleProviders(providers []RuleProvider) error {

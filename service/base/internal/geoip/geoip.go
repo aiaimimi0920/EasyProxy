@@ -62,7 +62,10 @@ func EnsureDatabase(dbPath string) error {
 			return fmt.Errorf("geoip database path is not a file: %s", dbPath)
 		}
 		if info.Size() > 0 {
-			return nil // File exists and has content
+			if err := validateMMDB(dbPath); err != nil {
+				return fmt.Errorf("validate existing geoip database: %w", err)
+			}
+			return nil
 		}
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("stat geoip database: %w", err)
@@ -209,7 +212,9 @@ func validateMMDB(path string) error {
 		return fmt.Errorf("file too small (%d bytes)", info.Size())
 	}
 
-	// Check for MaxMind metadata in the last 8KB
+	// Check for MaxMind metadata in the last 8KB before asking the real reader
+	// to parse the database. The marker alone is not sufficient: a corrupt file
+	// can contain it while still being unusable at runtime.
 	const tailSize int64 = 8192
 	readSize := tailSize
 	if info.Size() < readSize {
@@ -224,6 +229,13 @@ func validateMMDB(path string) error {
 	}
 	if !bytes.Contains(buf, []byte("MaxMind.com")) {
 		return fmt.Errorf("missing MaxMind metadata")
+	}
+	reader, err := geoip2.Open(path)
+	if err != nil {
+		return fmt.Errorf("open MaxMind database: %w", err)
+	}
+	if err := reader.Close(); err != nil {
+		return fmt.Errorf("close MaxMind database: %w", err)
 	}
 
 	return nil
@@ -357,9 +369,9 @@ func (l *Lookup) Update() error {
 }
 
 // downloadDatabase downloads the GeoIP database to the specified path
-func downloadDatabase(filepath string) error {
+func downloadDatabase(targetPath string) error {
 	// Create parent directory if needed
-	dir := filepath[:strings.LastIndex(filepath, "/")]
+	dir := filepath.Dir(targetPath)
 	if dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return fmt.Errorf("create directory: %w", err)
@@ -439,7 +451,7 @@ func downloadDatabase(filepath string) error {
 	tempFile = nil
 
 	// Rename to target path
-	if err := os.Rename(tempPath, filepath); err != nil {
+	if err := os.Rename(tempPath, targetPath); err != nil {
 		return err
 	}
 	cleanup = false

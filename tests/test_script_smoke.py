@@ -106,8 +106,12 @@ class ScriptSmokeTests(unittest.TestCase):
         runtime = root.get("serviceBase", {}).get("runtime", {})
         self.assertIn("routing", runtime, "config.example.yaml must expose the canonical routing block")
         self.assertFalse(runtime["routing"].get("enabled", True))
+        self.assertEqual(runtime["routing"].get("rule_files"), [])
         self.assertIn("local_server", runtime, "config.example.yaml must expose the canonical Local Server block")
         self.assertFalse(runtime["local_server"].get("enabled", True))
+        self.assertIn("gateway", runtime, "config.example.yaml must expose the gateway block")
+        self.assertEqual(runtime["gateway"].get("mode"), "transparent")
+        self.assertEqual(runtime["gateway"]["tun"].get("interface_name"), "easyproxy0")
 
         with tempfile.TemporaryDirectory() as temp_dir:
             output = Path(temp_dir) / "service-config.yaml"
@@ -129,7 +133,9 @@ class ScriptSmokeTests(unittest.TestCase):
             rendered = yaml.safe_load(output.read_text(encoding="utf-8")) or {}
             self.assertEqual(rendered["routing"]["enabled"], False)
             self.assertEqual(rendered["routing"]["final_policy"], "PROXY")
+            self.assertEqual(rendered["routing"]["rule_files"], [])
             self.assertIn("long_lived", rendered["routing"])
+            self.assertEqual(rendered["gateway"]["tun"]["stack"], "mixed")
 
     def test_root_local_server_render_derives_canonical_credentials(self):
         root = self.root_config_fixture()

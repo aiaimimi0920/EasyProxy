@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -640,6 +641,88 @@ proxies:
 		!strings.Contains(nodes[0].URI, "obfs%3Dtls") ||
 		!strings.Contains(nodes[0].URI, "obfs-host%3Db497b27.default.microsoft.lt%3A100531") {
 		t.Fatalf("expected plugin opts to preserve obfs mode/host, got %q", nodes[0].URI)
+	}
+}
+
+func TestParseSubscriptionContentAcceptsUnpaddedURLSafeBase64(t *testing.T) {
+	baseURI := "vless://11111111-1111-1111-1111-111111111111@example.com:443?encryption=none#"
+	rawURI := ""
+	encoded := ""
+	for padding := 0; padding < 3 && !strings.ContainsAny(encoded, "-_"); padding++ {
+		for candidate := rune(0x80); candidate < 0x1000; candidate++ {
+			rawURI = baseURI + strings.Repeat("x", padding) + string(candidate)
+			encoded = base64.RawURLEncoding.EncodeToString([]byte(rawURI + "\n"))
+			if strings.ContainsAny(encoded, "-_") {
+				break
+			}
+		}
+	}
+	if rawURI == "" || !strings.ContainsAny(encoded, "-_") {
+		t.Fatal("failed to construct a URL-safe base64 fixture")
+	}
+
+	nodes, err := ParseSubscriptionContent(encoded)
+	if err != nil {
+		t.Fatalf("ParseSubscriptionContent() error = %v", err)
+	}
+	if len(nodes) != 1 || nodes[0].URI != rawURI {
+		t.Fatalf("unexpected URL-safe base64 parse result: %#v", nodes)
+	}
+}
+
+func TestParseClashYAMLPreservesExtendedProtocolOptions(t *testing.T) {
+	content := `proxies:
+  - name: vmess-grpc
+    type: vmess
+    server: vmess.example.com
+    port: 443
+    uuid: 11111111-1111-1111-1111-111111111111
+    cipher: auto
+    network: grpc
+    tls: true
+    alpn: [h2, http/1.1]
+    packet-encoding: xudp
+    grpc-opts:
+      grpc-service-name: vmess-service
+  - name: trojan-grpc
+    type: trojan
+    server: trojan.example.com
+    port: 443
+    password: secret
+    network: grpc
+    alpn: [h2]
+    grpc-opts:
+      grpc-service-name: trojan-service
+  - name: hysteria2-extended
+    type: hysteria2
+    server: hysteria.example.com
+    port: 443
+    password: p@ss
+    alpn: [h3]
+    up-mbps: 20
+    down-mbps: 80
+    obfs: salamander
+    obfs-password: obfs-secret
+`
+
+	nodes, err := ParseSubscriptionContent(content)
+	if err != nil {
+		t.Fatalf("ParseSubscriptionContent() error = %v", err)
+	}
+	if len(nodes) != 3 {
+		t.Fatalf("expected 3 nodes, got %d", len(nodes))
+	}
+
+	for index, expectations := range [][]string{
+		{"type=grpc", "serviceName=vmess-service", "packetEncoding=xudp", "alpn=h2%2Chttp%2F1.1"},
+		{"type=grpc", "serviceName=trojan-service", "alpn=h2"},
+		{"p%40ss@", "upMbps=20", "downMbps=80", "obfs=salamander", "obfs-password=obfs-secret", "alpn=h3"},
+	} {
+		for _, expected := range expectations {
+			if !strings.Contains(nodes[index].URI, expected) {
+				t.Fatalf("node %d URI missing %q: %q", index, expected, nodes[index].URI)
+			}
+		}
 	}
 }
 
@@ -1343,5 +1426,174 @@ func TestGatewayDeviceAliasesClone(t *testing.T) {
 	clone.Gateway.Devices["laptop"].Addresses[0] = "10.0.0.1"
 	if got := cfg.Gateway.Devices["laptop"].Addresses[0]; got != "192.168.15.100" {
 		t.Fatalf("device aliases were not deep-cloned: got %q", got)
+	}
+}
+
+func TestGatewayTunDefaults(t *testing.T) {
+	cfg := &Config{Gateway: GatewayConfig{Enabled: true, Mode: "tun"}}
+	if err := cfg.normalize(); err != nil {
+		t.Fatalf("normalize() error = %v", err)
+	}
+	if got, want := cfg.Gateway.Tun.InterfaceName, "easyproxy0"; got != want {
+		t.Fatalf("gateway.tun.interface_name = %q, want %q", got, want)
+	}
+	if got, want := cfg.Gateway.Tun.Stack, "mixed"; got != want {
+		t.Fatalf("gateway.tun.stack = %q, want %q", got, want)
+	}
+	if got, want := cfg.Gateway.Tun.MTU, uint32(1500); got != want {
+		t.Fatalf("gateway.tun.mtu = %d, want %d", got, want)
+	}
+	if !cfg.Gateway.Tun.IPv4 || !cfg.Gateway.Tun.UDP || !cfg.Gateway.Tun.StrictRoute {
+		t.Fatalf("gateway.tun defaults = %+v, want IPv4/UDP/strict_route enabled", cfg.Gateway.Tun)
+	}
+	if cfg.Gateway.Tun.IPv6 {
+		t.Fatal("gateway.tun.ipv6 defaulted to true")
+	}
+	if got, want := cfg.Gateway.Tun.FakeIPv4Range, "198.18.0.0/16"; got != want {
+		t.Fatalf("gateway.tun.fake_ipv4_range = %q, want %q", got, want)
+	}
+	if got, want := cfg.Gateway.Capture.TCP, "disabled"; got != want {
+		t.Fatalf("gateway.capture.tcp = %q, want %q in TUN mode", got, want)
+	}
+	if got, want := cfg.Gateway.Capture.UDP, "disabled"; got != want {
+		t.Fatalf("gateway.capture.udp = %q, want %q in TUN mode", got, want)
+	}
+}
+
+func TestGatewayTunRejectsConflicts(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{name: "tproxy capture", mutate: func(cfg *Config) { cfg.Gateway.Capture.TCP = "tproxy" }},
+		{name: "DNS hijack without DNS", mutate: func(cfg *Config) { cfg.Gateway.Tun.DNSHijack = true }},
+		{name: "invalid stack", mutate: func(cfg *Config) { cfg.Gateway.Tun.Stack = "invalid" }},
+		{name: "MTU below minimum", mutate: func(cfg *Config) { cfg.Gateway.Tun.MTU = 1279 }},
+		{name: "malformed fake IPv4 prefix", mutate: func(cfg *Config) { cfg.Gateway.Tun.FakeIPv4Range = "not-a-prefix" }},
+		{name: "fake IPv4 overlaps trusted CIDR", mutate: func(cfg *Config) {
+			cfg.Gateway.Ingress.TrustedCIDRs = []string{"198.18.1.0/24"}
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{Gateway: GatewayConfig{Enabled: true, Mode: "tun"}}
+			tt.mutate(cfg)
+			if err := cfg.normalize(); err == nil {
+				t.Fatal("normalize() unexpectedly accepted invalid TUN configuration")
+			}
+		})
+	}
+}
+
+func TestGatewayTunClone(t *testing.T) {
+	cfg := &Config{
+		Routing: RoutingConfig{RuleFiles: []string{"rules/local.yaml"}},
+		Gateway: GatewayConfig{Tun: GatewayTunConfig{
+			Addresses: []string{"172.31.255.1/30", "fd31:255::1/126"},
+		}},
+	}
+	clone := cfg.Clone()
+	clone.Routing.RuleFiles[0] = "changed"
+	clone.Gateway.Tun.Addresses[0] = "10.0.0.1/30"
+	if got := cfg.Routing.RuleFiles[0]; got != "rules/local.yaml" {
+		t.Fatalf("routing rule files were not deep-cloned: got %q", got)
+	}
+	if got := cfg.Gateway.Tun.Addresses[0]; got != "172.31.255.1/30" {
+		t.Fatalf("TUN addresses were not deep-cloned: got %q", got)
+	}
+}
+
+func TestLoadForReloadResolvesRoutingRuleFilesRelativeToConfig(t *testing.T) {
+	dir := t.TempDir()
+	rulesDir := filepath.Join(dir, "rules")
+	if err := os.MkdirAll(rulesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rulePath := filepath.Join(rulesDir, "local.yaml")
+	if err := os.WriteFile(rulePath, []byte("payload:\n  - DOMAIN-SUFFIX,example.com,DIRECT\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(configPath, []byte("mode: pool\nrouting:\n  rule_files:\n    - rules/local.yaml\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadForReload(configPath)
+	if err != nil {
+		t.Fatalf("LoadForReload() error = %v", err)
+	}
+	if got, want := cfg.Routing.RuleFiles, []string{rulePath}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("routing.rule_files = %#v, want %#v", got, want)
+	}
+}
+
+func TestLoadForReloadDefaultsGeoIPEnabled(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(configPath, []byte("mode: pool\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadForReload(configPath)
+	if err != nil {
+		t.Fatalf("LoadForReload() error = %v", err)
+	}
+	if !cfg.GeoIP.Enabled {
+		t.Fatal("geoip.enabled = false, want default true")
+	}
+	if got, want := cfg.GeoIP.DatabasePath, filepath.Join(dir, "GeoLite2-Country.mmdb"); got != want {
+		t.Fatalf("geoip.database_path = %q, want %q", got, want)
+	}
+	if !cfg.GeoIP.AutoUpdateEnabled {
+		t.Fatal("geoip.auto_update_enabled = false, want default true")
+	}
+	if got, want := cfg.GeoIP.AutoUpdateInterval, 24*time.Hour; got != want {
+		t.Fatalf("geoip.auto_update_interval = %v, want %v", got, want)
+	}
+	if got, want := cfg.SubscriptionRefresh.HealthCheckTimeout, 2*time.Minute; got != want {
+		t.Fatalf("subscription_refresh.health_check_timeout = %v, want %v", got, want)
+	}
+}
+
+func TestLoadForReloadPreservesExplicitGeoIPDisable(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	data := []byte("mode: pool\ngeoip:\n  enabled: false\n  database_path: \"\"\n  auto_update_enabled: false\n  auto_update_interval: 1h\n")
+	if err := os.WriteFile(configPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadForReload(configPath)
+	if err != nil {
+		t.Fatalf("LoadForReload() error = %v", err)
+	}
+	if cfg.GeoIP.Enabled || cfg.GeoIP.AutoUpdateEnabled {
+		t.Fatalf("explicit GeoIP disable was overwritten: %+v", cfg.GeoIP)
+	}
+	if cfg.GeoIP.DatabasePath != "" {
+		t.Fatalf("geoip.database_path = %q, want explicit empty value", cfg.GeoIP.DatabasePath)
+	}
+	if got, want := cfg.GeoIP.AutoUpdateInterval, time.Hour; got != want {
+		t.Fatalf("geoip.auto_update_interval = %v, want %v", got, want)
+	}
+}
+
+func TestGatewayTunPreservesExplicitFalseBooleansFromYAML(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	data := []byte("mode: pool\ngateway:\n  enabled: true\n  mode: tun\n  tun:\n    ipv4: false\n    ipv6: true\n    udp: false\n    strict_route: false\n")
+	if err := os.WriteFile(configPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadForReload(configPath)
+	if err != nil {
+		t.Fatalf("LoadForReload() error = %v", err)
+	}
+	if cfg.Gateway.Tun.IPv4 || cfg.Gateway.Tun.UDP || cfg.Gateway.Tun.StrictRoute {
+		t.Fatalf("explicit false TUN booleans were overwritten: %+v", cfg.Gateway.Tun)
+	}
+	if !cfg.Gateway.Tun.IPv6 {
+		t.Fatal("explicit gateway.tun.ipv6 true was lost")
 	}
 }

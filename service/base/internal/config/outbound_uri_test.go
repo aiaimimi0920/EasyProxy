@@ -207,3 +207,81 @@ func TestBuildURIFromSingboxOutboundTrojanEscapesPassword(t *testing.T) {
 		t.Fatalf("unexpected trojan password round-trip: %q", got)
 	}
 }
+
+func TestBuildURIFromSingboxOutboundPreservesExtendedFields(t *testing.T) {
+	t.Run("vmess packet encoding and alpn", func(t *testing.T) {
+		uri, err := BuildURIFromSingboxOutbound("VMess Extended", map[string]any{
+			"type":            "vmess",
+			"server":          "vmess.example.com",
+			"server_port":     443,
+			"uuid":            "11111111-1111-1111-1111-111111111111",
+			"security":        "auto",
+			"packet_encoding": "xudp",
+			"tls": map[string]any{
+				"enabled": true,
+				"alpn":    []any{"h2", "http/1.1"},
+			},
+		})
+		if err != nil {
+			t.Fatalf("BuildURIFromSingboxOutbound() error = %v", err)
+		}
+		parsed, _ := url.Parse(uri)
+		if parsed.Query().Get("packetEncoding") != "xudp" || parsed.Query().Get("alpn") != "h2,http/1.1" {
+			t.Fatalf("extended VMess query was not preserved: %q", uri)
+		}
+	})
+
+	t.Run("trojan grpc and alpn", func(t *testing.T) {
+		uri, err := BuildURIFromSingboxOutbound("Trojan Extended", map[string]any{
+			"type":        "trojan",
+			"server":      "trojan.example.com",
+			"server_port": 443,
+			"password":    "secret",
+			"transport": map[string]any{
+				"type":         "grpc",
+				"service_name": "trojan-service",
+			},
+			"tls": map[string]any{
+				"enabled": true,
+				"alpn":    []string{"h2"},
+			},
+		})
+		if err != nil {
+			t.Fatalf("BuildURIFromSingboxOutbound() error = %v", err)
+		}
+		parsed, _ := url.Parse(uri)
+		if parsed.Query().Get("type") != "grpc" || parsed.Query().Get("serviceName") != "trojan-service" || parsed.Query().Get("alpn") != "h2" {
+			t.Fatalf("extended Trojan query was not preserved: %q", uri)
+		}
+	})
+
+	t.Run("hysteria2 bandwidth obfs password and alpn", func(t *testing.T) {
+		uri, err := BuildURIFromSingboxOutbound("Hysteria2 Extended", map[string]any{
+			"type":        "hysteria2",
+			"server":      "hysteria.example.com",
+			"server_port": 443,
+			"password":    "p@ss",
+			"up_mbps":     20,
+			"down_mbps":   80,
+			"obfs": map[string]any{
+				"type":     "salamander",
+				"password": "obfs-secret",
+			},
+			"tls": map[string]any{
+				"enabled": true,
+				"alpn":    []any{"h3"},
+			},
+		})
+		if err != nil {
+			t.Fatalf("BuildURIFromSingboxOutbound() error = %v", err)
+		}
+		parsed, _ := url.Parse(uri)
+		if parsed.User == nil || parsed.User.Username() != "p@ss" {
+			t.Fatalf("Hysteria2 password did not round-trip: %q", uri)
+		}
+		query := parsed.Query()
+		if query.Get("upMbps") != "20" || query.Get("downMbps") != "80" || query.Get("obfs") != "salamander" || query.Get("obfs-password") != "obfs-secret" || query.Get("alpn") != "h3" {
+			t.Fatalf("extended Hysteria2 query was not preserved: %q", uri)
+		}
+	})
+}

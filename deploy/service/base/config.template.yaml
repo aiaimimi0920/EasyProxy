@@ -48,12 +48,47 @@ routing:
   use_default_rules: true
   final_policy: PROXY
   rules: []
+  rule_files: []
   rule_providers: []
   long_lived:
     min_uptime: 2h
     min_success_rate: 0.9
   session:
     ttl: 10m
+
+# Provider-neutral gateway. Keep disabled for ordinary proxy deployments.
+gateway:
+  enabled: false
+  mode: transparent
+  listen: 0.0.0.0:15001
+  ingress:
+    interfaces: []
+    interface_patterns: []
+    trusted_cidrs: []
+  capture:
+    tcp: tproxy
+    udp: disabled
+    preserve_original_destination: true
+  routing:
+    final_policy: PROXY
+    no_available_proxy_policy: DIRECT
+  dns:
+    enabled: false
+    listen: 0.0.0.0:53
+  tun:
+    interface_name: easyproxy0
+    addresses: [172.31.255.1/30, "fd31:255::1/126"]
+    stack: mixed
+    mtu: 1500
+    ipv4: true
+    ipv6: false
+    udp: true
+    strict_route: true
+    dns_hijack: false
+    fake_ip: false
+    fake_ipv4_range: 198.18.0.0/16
+    fake_ipv6_range: "fc00::/18"
+  devices: {}
 
 # Canonical Local Server is opt-in. Enabling it requires mode: pool and a
 # listener.protocol of mixed; the renderer derives listener/management
@@ -79,9 +114,15 @@ subscription_refresh:
   enabled: true
   interval: 2h0m0s
   timeout: 30s
-  health_check_timeout: 1m0s
+  health_check_timeout: 2m0s
   drain_timeout: 30s
   min_available_nodes: 1
+
+geoip:
+  enabled: true
+  database_path: "/var/lib/easy-proxy/GeoLite2-Country.mmdb"
+  auto_update_enabled: true
+  auto_update_interval: 24h0m0s
 
 source_sync:
   enabled: true

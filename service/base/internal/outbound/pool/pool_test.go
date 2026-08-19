@@ -90,6 +90,35 @@ func TestHTTPProbeTargetUsesFullPathAndAcceptsRedirect(t *testing.T) {
 	}
 }
 
+func TestHTTPProbeTargetRejectsOpenAIAuthChallenge403(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/log-in-or-create-account" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer server.Close()
+
+	conn, err := net.Dial("tcp", server.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("dial tls server: %v", err)
+	}
+	defer conn.Close()
+
+	target := monitor.ProbeTargetSpec{
+		Original: "https://auth.openai.com/log-in-or-create-account",
+		Scheme:   "https",
+		Host:     "auth.openai.com",
+		Port:     443,
+		Path:     "/log-in-or-create-account",
+		HostHdr:  "auth.openai.com",
+		Dst:      M.ParseSocksaddrHostPort("auth.openai.com", 443),
+	}
+	if _, err := httpProbeTarget(conn, target, true); err == nil {
+		t.Fatal("expected openai auth 403 probe to fail")
+	}
+}
+
 type failingOutbound struct{}
 
 func (failingOutbound) Type() string { return "test" }
@@ -345,6 +374,7 @@ func TestRunProbeTargetsForMemberPrefersLocalHTTPProxy(t *testing.T) {
 		options: Options{
 			Metadata: map[string]MemberMeta{
 				"commercial-node": {
+					Mode:          "multi-port",
 					ListenAddress: host,
 					Port:          uint16(port),
 				},
@@ -374,6 +404,28 @@ func TestRunProbeTargetsForMemberPrefersLocalHTTPProxy(t *testing.T) {
 	}
 	if duration <= 0 {
 		t.Fatalf("expected positive probe duration, got %v", duration)
+	}
+}
+
+func TestMemberProbeProxyAddressSkipsSharedPoolListener(t *testing.T) {
+	p := &poolOutbound{options: Options{Metadata: map[string]MemberMeta{
+		"pool-node": {
+			Mode:          "pool",
+			ListenAddress: "0.0.0.0",
+			Port:          22323,
+		},
+		"multi-port-node": {
+			Mode:          "multi-port",
+			ListenAddress: "0.0.0.0",
+			Port:          25001,
+		},
+	}}}
+
+	if got := p.memberProbeProxyAddress(&memberState{tag: "pool-node"}); got != "" {
+		t.Fatalf("pool member probe address = %q, want raw outbound", got)
+	}
+	if got := p.memberProbeProxyAddress(&memberState{tag: "multi-port-node"}); got != "127.0.0.1:25001" {
+		t.Fatalf("multi-port member probe address = %q, want dedicated listener", got)
 	}
 }
 

@@ -849,8 +849,15 @@ func (m *Manager) probeGeneration(
 	var completed atomic.Int32
 	var available atomic.Int32
 	var failed atomic.Int32
+	var scheduleErr error
+scheduling:
 	for _, task := range tasks {
-		sem <- struct{}{}
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			scheduleErr = ctx.Err()
+			break scheduling
+		}
 		wg.Add(1)
 		go func(task generationProbeTask) {
 			defer wg.Done()
@@ -861,6 +868,12 @@ func (m *Manager) probeGeneration(
 				probeErr = errors.New("probe not available for this node")
 			} else {
 				latency, probeErr = runProbeWithTimeout(ctx, timeout, task.probe)
+			}
+			// A round-level cancellation is not evidence that this node is
+			// unavailable. Discard it instead of publishing a false negative;
+			// per-node timeouts still have an active parent and are committed.
+			if ctx.Err() != nil {
+				return
 			}
 			if !m.applyProbeResult(
 				generation,
@@ -896,6 +909,12 @@ func (m *Manager) probeGeneration(
 	m.mu.RUnlock()
 	if stale {
 		return summary, ErrStaleGeneration
+	}
+	if scheduleErr != nil {
+		return summary, scheduleErr
+	}
+	if err := ctx.Err(); err != nil {
+		return summary, err
 	}
 	return summary, nil
 }
@@ -981,10 +1000,17 @@ func probeAllWorkerLimit(totalEntries int) int {
 	return workerLimit
 }
 
-func runProbeWithTimeout(parent context.Context, timeout time.Duration, probe probeFunc) (time.Duration, error) {
-	if timeout <= 0 {
-		timeout = 10 * time.Second
+const maxNodeProbeTimeout = 10 * time.Second
+
+func normalizeNodeProbeTimeout(timeout time.Duration) time.Duration {
+	if timeout <= 0 || timeout > maxNodeProbeTimeout {
+		return maxNodeProbeTimeout
 	}
+	return timeout
+}
+
+func runProbeWithTimeout(parent context.Context, timeout time.Duration, probe probeFunc) (time.Duration, error) {
+	timeout = normalizeNodeProbeTimeout(timeout)
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 
@@ -1839,7 +1865,7 @@ func (m *Manager) Probe(ctx context.Context, tag string) (time.Duration, error) 
 		return 0, ErrStaleGeneration
 	}
 	probeSeq := m.nextProbeSeq.Add(1)
-	latency, probeErr := probe(ctx)
+	latency, probeErr := runProbeWithTimeout(ctx, 0, probe)
 	if !m.applyProbeResult(generation, tag, e, 0, probeEpoch, probeSeq, probeRevision, latency, probeErr) {
 		return 0, ErrStaleGeneration
 	}

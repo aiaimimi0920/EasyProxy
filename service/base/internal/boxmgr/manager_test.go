@@ -1185,7 +1185,7 @@ func TestReloadCompleteFailureClosesRunningCandidateAndRestoresOld(t *testing.T)
 	}
 }
 
-func TestReloadRollbackFailureLeavesNoCurrentBox(t *testing.T) {
+func TestReloadRollbackFailureEntersRecoverableIdle(t *testing.T) {
 	rollbackCreateErr := errors.New("rollback create failed")
 	rollbackStartErr := errors.New("rollback start failed")
 	for _, tc := range []struct {
@@ -1203,6 +1203,7 @@ func TestReloadRollbackFailureLeavesNoCurrentBox(t *testing.T) {
 			newCfg := &config.Config{Mode: "hybrid", Nodes: []config.NodeConfig{{Name: "new"}}}
 			oldBox := &fakeManagedBox{events: &events, name: "old"}
 			candidate := &fakeManagedBox{events: &events, name: "candidate", startErr: candidateErr}
+			recovered := &fakeManagedBox{events: &events, name: "recovered"}
 			factoryCalls := 0
 			manager := &Manager{
 				baseCtx:        context.Background(),
@@ -1215,11 +1216,14 @@ func TestReloadRollbackFailureLeavesNoCurrentBox(t *testing.T) {
 					if factoryCalls == 1 {
 						return candidate, nil
 					}
-					if tc.rollbackErr != nil {
-						return nil, tc.rollbackErr
+					if factoryCalls == 2 {
+						if tc.rollbackErr != nil {
+							return nil, tc.rollbackErr
+						}
+						tc.rollbackBox.events = &events
+						return tc.rollbackBox, nil
 					}
-					tc.rollbackBox.events = &events
-					return tc.rollbackBox, nil
+					return recovered, nil
 				},
 			}
 			lifecycle := &recordingReloadListener{manager: manager, events: &events}
@@ -1232,11 +1236,28 @@ func TestReloadRollbackFailureLeavesNoCurrentBox(t *testing.T) {
 			if manager.currentBox != nil {
 				t.Fatalf("current box = %T, want nil after rollback failure", manager.currentBox)
 			}
+			if !manager.idle || !manager.lastAppliedIdle {
+				t.Fatalf("idle state = current:%v applied:%v, want true/true", manager.idle, manager.lastAppliedIdle)
+			}
+			state := manager.CurrentReloadState()
+			if !state.Idle || state.Config == nil || state.Config.Mode != oldCfg.Mode {
+				t.Fatalf("reload state = %+v, want old config in idle mode", state)
+			}
 			if len(lifecycle.failed) != 1 || lifecycle.failed[0].restored {
 				t.Fatalf("unexpected failure callback: %+v", lifecycle.failed)
 			}
 			if tc.rollbackBox != nil && tc.rollbackBox.closes != 1 {
 				t.Fatalf("failed rollback box close count = %d, want 1", tc.rollbackBox.closes)
+			}
+
+			if err := manager.Reload(newCfg); err != nil {
+				t.Fatalf("Reload() after rollback failure error = %v", err)
+			}
+			if manager.currentBox != recovered || recovered.starts != 1 {
+				t.Fatalf("recovered box = %T starts:%d, want current with one start", manager.currentBox, recovered.starts)
+			}
+			if manager.idle || manager.lastAppliedIdle {
+				t.Fatalf("idle state after recovery = current:%v applied:%v, want false/false", manager.idle, manager.lastAppliedIdle)
 			}
 		})
 	}

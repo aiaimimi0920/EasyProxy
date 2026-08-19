@@ -82,7 +82,7 @@ local_server:
     password: change_me_to_a_strong_shared_password
 
 # ───────────────────────────────────────────────────────────────
-# GeoIP 地域分区配置（可选）
+# GeoIP 地域分区配置（默认开启，可显式关闭）
 # ───────────────────────────────────────────────────────────────
 # 启用后，节点会按地域自动分组，可通过路径访问特定地域的代理池：
 #   http://127.0.0.1:22323/jp    - 日本节点
@@ -94,7 +94,7 @@ local_server:
 #   http://127.0.0.1:22323/other - 其他地域
 #   http://127.0.0.1:22323/      - 全部节点（默认）
 geoip:
-  enabled: false                                     # 是否启用 GeoIP 地域分区
+  enabled: true                                      # 默认启用 GeoIP 地域分区
   database_path: "./GeoLite2-Country.mmdb"           # GeoIP 数据库路径（首次启动时自动下载）
   auto_update_enabled: true                          # 是否启用自动更新数据库（推荐）
   auto_update_interval: 24h                          # 自动更新间隔（默认 24 小时）
@@ -129,6 +129,8 @@ geoip:
 #     - "DOMAIN-KEYWORD,google,PROXY"
 #     - "IP-CIDR,203.0.113.0/24,DIRECT"
 #     - "GEOIP,CN,DIRECT"          # 仅对“目标本身已是 IP”的请求生效
+#   rule_files:                    # 相对路径以主 config.yaml 所在目录为基准
+#     - "rules/flclash-import.yaml"
 #   rule_providers:                # 远程规则集（社区域名列表等），定时刷新
 #     - url: "https://example.com/china-direct.txt"
 #       policy: DIRECT
@@ -182,6 +184,19 @@ geoip:
 #   dns:
 #     enabled: false                # DNS/DoH/DoT 边界见透明网关文档
 #     listen: 0.0.0.0:53
+#   tun:                            # mode: tun 时生效；与 TPROXY capture 互斥
+#     interface_name: easyproxy0
+#     addresses: [172.31.255.1/30, "fd31:255::1/126"]
+#     stack: mixed                  # system / gvisor / mixed
+#     mtu: 1500                     # 1280-9000
+#     ipv4: true
+#     ipv6: false                   # 部署具备完整 IPv6 转发/出口后再启用
+#     udp: true
+#     strict_route: true
+#     dns_hijack: false             # true 要求 gateway.dns.enabled: true
+#     fake_ip: false
+#     fake_ipv4_range: 198.18.0.0/16
+#     fake_ipv6_range: "fc00::/18"
 #   devices:
 #     laptop:
 #       addresses: [192.168.15.100, 100.64.0.20, 10.66.0.20]

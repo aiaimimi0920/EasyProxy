@@ -156,6 +156,10 @@ func (rc *RoutingController) startStateOperationLocked(state boxmgr.ReloadState)
 			rc.mu.Unlock()
 			return err
 		}
+	} else {
+		// GeoIP database maintenance is independent of whether the smart
+		// dispatcher currently owns a listener.
+		rc.openGeoLocked(state.Config)
 	}
 	rc.setAppliedStateLocked(state)
 	rc.hasPending = false
@@ -193,6 +197,7 @@ func (rc *RoutingController) startLocked(cfg *config.Config) error {
 			return fmt.Errorf("start Local Server dispatch entry on %s: %w", listen, err)
 		}
 		rc.server = srv
+		rc.openGeoLocked(cfg)
 		rc.running = true
 		return nil
 	}
@@ -408,10 +413,16 @@ func (rc *RoutingController) CompleteReload(_ context.Context, from, to boxmgr.R
 
 	topologyChanged := routingTopologyFor(from) != routingTopologyFor(to)
 	if !routingEnabled(to) {
-		if rc.running || rc.server != nil || rc.engine != nil {
+		if rc.running || rc.server != nil || rc.engine != nil || rc.provider != nil {
 			rc.pendingRuntimeMutated = true
+			rc.stopRuntimeLocked()
 		}
-		rc.stopRuntimeLocked()
+		wantsGeo := to.Config != nil && to.Config.GeoIP.Enabled && strings.TrimSpace(to.Config.GeoIP.DatabasePath) != ""
+		if routingGeoChanged(from.Config, to.Config) || wantsGeo != (rc.geo != nil) {
+			rc.pendingRuntimeMutated = true
+			rc.closeGeoLocked()
+			rc.openGeoLocked(to.Config)
+		}
 	} else if topologyChanged || !rc.running || rc.server == nil || (!to.Config.LocalServer.Enabled && rc.engine == nil) {
 		rc.pendingRuntimeMutated = true
 		rc.stopRuntimeLocked()
@@ -419,6 +430,10 @@ func (rc *RoutingController) CompleteReload(_ context.Context, from, to boxmgr.R
 			rc.mu.Unlock()
 			return err
 		}
+	} else if to.Config.LocalServer.Enabled && routingGeoChanged(from.Config, to.Config) {
+		rc.pendingRuntimeMutated = true
+		rc.closeGeoLocked()
+		rc.openGeoLocked(to.Config)
 	} else if !to.Config.LocalServer.Enabled && routingRuntimeChanged(from.Config, to.Config) {
 		rc.pendingRuntimeMutated = true
 		if err := rc.applyRuntimeConfigLocked(from.Config, to.Config); err != nil {
@@ -470,6 +485,8 @@ func (rc *RoutingController) FailedReload(_ context.Context, from, _ boxmgr.Relo
 				rc.mu.Unlock()
 				return fmt.Errorf("restore Local Server dispatch after failed box rollback: %w", err)
 			}
+		} else if !routingEnabled(from) {
+			rc.openGeoLocked(from.Config)
 		}
 		rc.setAppliedStateLocked(from)
 		rc.hasPending = false
@@ -492,6 +509,8 @@ func (rc *RoutingController) FailedReload(_ context.Context, from, _ boxmgr.Relo
 			log.Printf("⚠️ failed to restore smart routing after box rollback: %v", err)
 			return fmt.Errorf("restore smart routing after box rollback: %w", err)
 		}
+	} else {
+		rc.openGeoLocked(from.Config)
 	}
 	rc.setAppliedStateLocked(from)
 	rc.hasPending = false
@@ -625,7 +644,9 @@ func routingGeoChanged(from, to *config.Config) bool {
 	if !from.GeoIP.Enabled {
 		return false
 	}
-	return strings.TrimSpace(from.GeoIP.DatabasePath) != strings.TrimSpace(to.GeoIP.DatabasePath)
+	return strings.TrimSpace(from.GeoIP.DatabasePath) != strings.TrimSpace(to.GeoIP.DatabasePath) ||
+		from.GeoIP.AutoUpdateEnabled != to.GeoIP.AutoUpdateEnabled ||
+		from.GeoIP.AutoUpdateInterval != to.GeoIP.AutoUpdateInterval
 }
 
 func routingEngineInputsChanged(from, to *config.Config) bool {
@@ -809,10 +830,22 @@ func (rc *RoutingController) openGeoLocked(cfg *config.Config) routerule.Country
 }
 
 func openGeoConfig(cfg *config.Config) (*geoip.Lookup, routerule.CountryLookup) {
-	if !cfg.GeoIP.Enabled || strings.TrimSpace(cfg.GeoIP.DatabasePath) == "" {
+	if cfg == nil || !cfg.GeoIP.Enabled || strings.TrimSpace(cfg.GeoIP.DatabasePath) == "" {
 		return nil, nil
 	}
-	gl, err := geoip.New(cfg.GeoIP.DatabasePath)
+	var (
+		gl  *geoip.Lookup
+		err error
+	)
+	if cfg.GeoIP.AutoUpdateEnabled {
+		interval := cfg.GeoIP.AutoUpdateInterval
+		if interval <= 0 {
+			interval = 24 * time.Hour
+		}
+		gl, err = geoip.NewWithAutoUpdate(cfg.GeoIP.DatabasePath, interval)
+	} else {
+		gl, err = geoip.New(cfg.GeoIP.DatabasePath)
+	}
 	if err != nil {
 		log.Printf("⚠️ routing GEOIP lookup unavailable: %v", err)
 		return nil, nil

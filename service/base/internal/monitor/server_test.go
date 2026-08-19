@@ -3345,7 +3345,7 @@ func TestProxyCompatCheckoutDoesNotWaitForInitialProbeWhenCandidatesExist(t *tes
 	}
 }
 
-func TestProxyCompatCheckoutFallsBackWhenAllCandidatesAreCooling(t *testing.T) {
+func TestProxyCompatCheckoutFallsBackWhenAllCandidatesAreCoolingForNonRegistrationServices(t *testing.T) {
 	mgr, err := NewManager(Config{})
 	if err != nil {
 		t.Fatalf("NewManager failed: %v", err)
@@ -3389,11 +3389,11 @@ func TestProxyCompatCheckoutFallsBackWhenAllCandidatesAreCooling(t *testing.T) {
 		if snap.Tag != "cooling-a" && snap.Tag != "cooling-b" {
 			continue
 		}
-		s.compatState().recordServiceFailureForSnapshot("register-service", snap, "eUdf5", decision)
+		s.compatState().recordServiceFailureForSnapshot("quota-service", snap, "eUdf5", decision)
 	}
 
 	checkoutBody, err := json.Marshal(proxyCompatCheckoutRequest{
-		HostID:        "register-service",
+		HostID:        "quota-service",
 		ProvisionMode: "reuse-only",
 		BindingMode:   "shared-instance",
 	})
@@ -3417,6 +3417,77 @@ func TestProxyCompatCheckoutFallsBackWhenAllCandidatesAreCooling(t *testing.T) {
 	}
 	if resp.Result.Lease.Metadata["selectedNodeSelectionTier"] != "effective-cooldown-fallback" {
 		t.Fatalf("expected cooldown fallback tier, got %+v", resp.Result.Lease.Metadata)
+	}
+}
+
+func TestProxyCompatCheckoutRejectsAllCoolingCandidatesForRegistrationServices(t *testing.T) {
+	mgr, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+
+	first := mgr.Register(NodeInfo{
+		Tag:           "cooling-a",
+		Name:          "Cooling A",
+		ListenAddress: "127.0.0.1",
+		Port:          36211,
+	})
+	first.MarkInitialCheckDone(true)
+
+	second := mgr.Register(NodeInfo{
+		Tag:           "cooling-b",
+		Name:          "Cooling B",
+		ListenAddress: "127.0.0.1",
+		Port:          36212,
+	})
+	second.MarkInitialCheckDone(true)
+
+	s := &Server{
+		cfg:         Config{ProxyUsername: "node-user", ProxyPassword: "node-pass"},
+		mgr:         mgr,
+		sessions:    map[string]*Session{},
+		proxyCompat: newProxyCompatState(),
+	}
+
+	cfg := &config.Config{}
+	cfg.Listener.Port = 2323
+	cfg.Listener.Protocol = "http"
+	cfg.Management.Listen = "0.0.0.0:9888"
+	cfg.MultiPort.Protocol = "http"
+	cfg.MultiPort.Username = "node-user"
+	cfg.MultiPort.Password = "node-pass"
+	cfg.Mode = "hybrid"
+	s.SetConfig(cfg)
+
+	decision := classifyProxyCompatUsageFailure("eUdf5")
+	for _, snap := range mgr.Snapshot() {
+		if snap.Tag != "cooling-a" && snap.Tag != "cooling-b" {
+			continue
+		}
+		s.compatState().recordServiceFailureForSnapshot("register-service", snap, "eUdf5", decision)
+	}
+
+	checkoutBody, err := json.Marshal(proxyCompatCheckoutRequest{
+		HostID:        "register-service",
+		ProvisionMode: "reuse-only",
+		BindingMode:   "shared-instance",
+		Metadata: map[string]string{
+			"stage": "registration",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Marshal checkout request failed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/proxy/leases/checkout", bytes.NewReader(checkoutBody))
+	req.Host = "easy-proxy-service:9888"
+	rec := httptest.NewRecorder()
+	s.handleProxyCheckout(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected strict registration cooldown status %d, got %d: %s", http.StatusServiceUnavailable, rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "NO_PROXY_PROVIDER_ROUTE") {
+		t.Fatalf("expected no route error body, got %s", rec.Body.String())
 	}
 }
 

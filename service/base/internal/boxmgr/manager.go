@@ -28,7 +28,7 @@ var _ monitor.NodeManager = (*Manager)(nil)
 
 const (
 	defaultDrainTimeout       = 10 * time.Second
-	defaultHealthCheckTimeout = 30 * time.Second
+	defaultHealthCheckTimeout = 2 * time.Minute
 	healthCheckPollInterval   = 500 * time.Millisecond
 	// periodicHealthInterval is configured via cfg.Management.HealthCheckInterval
 	periodicHealthTimeout = 10 * time.Second
@@ -912,7 +912,9 @@ func (m *Manager) clearFailedRollbackState(ctx context.Context, oldCfg *config.C
 		m.monitorMgr.BeginReload()
 		m.monitorMgr.SweepStaleNodes()
 	}
-	m.restoreAppliedState(ctx, oldCfg, false, nil)
+	// A failed rollback has no running box. Preserve the last applied config in
+	// explicit idle mode so a later reload can rebuild the runtime.
+	m.restoreAppliedState(ctx, oldCfg, true, nil)
 }
 
 // Close terminates the active instance and auxiliary components.

@@ -184,6 +184,30 @@ func TestBuildEngineFinalPolicy(t *testing.T) {
 	}
 }
 
+func TestRoutingGeoChangedIncludesAutoUpdateLifecycle(t *testing.T) {
+	base := &config.Config{GeoIP: config.GeoIPConfig{
+		Enabled:            true,
+		DatabasePath:       "/tmp/GeoLite2-Country.mmdb",
+		AutoUpdateEnabled:  true,
+		AutoUpdateInterval: 24 * time.Hour,
+	}}
+
+	unchanged := cloneConfigSnapshot(base)
+	if routingGeoChanged(base, unchanged) {
+		t.Fatal("equivalent GeoIP lifecycle settings reported as changed")
+	}
+	disabledUpdate := cloneConfigSnapshot(base)
+	disabledUpdate.GeoIP.AutoUpdateEnabled = false
+	if !routingGeoChanged(base, disabledUpdate) {
+		t.Fatal("auto-update enablement change was ignored")
+	}
+	changedInterval := cloneConfigSnapshot(base)
+	changedInterval.GeoIP.AutoUpdateInterval = 12 * time.Hour
+	if !routingGeoChanged(base, changedInterval) {
+		t.Fatal("auto-update interval change was ignored")
+	}
+}
+
 func TestLocalServerStartsWhileSharedDisabledAndBoxIdle(t *testing.T) {
 	cfg := localServerConfigForTest(t)
 	box := &routingBoxManagerStub{}

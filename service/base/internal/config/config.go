@@ -68,6 +68,7 @@ type RoutingConfig struct {
 	UseDefaultRules *bool                   `yaml:"use_default_rules"` // 是否附加内置“中国直连”默认规则集（默认 true）
 	FinalPolicy     string                  `yaml:"final_policy"`      // 兜底策略：DIRECT / PROXY（默认 PROXY）
 	Rules           []string                `yaml:"rules"`             // 自定义分流规则，按顺序优先于默认集
+	RuleFiles       []string                `yaml:"rule_files"`        // 本地规则文件，按声明顺序加载
 	RuleProviders   []RuleProvider          `yaml:"rule_providers"`    // 远程规则集
 	NodeFilter      RoutingNodeFilterConfig `yaml:"node_filter"`       // 节点筛选条件
 	LongLived       LongLivedConfig         `yaml:"long_lived"`        // 长效节点判定阈值
@@ -85,6 +86,7 @@ type GatewayConfig struct {
 	Capture GatewayCaptureConfig           `yaml:"capture"`
 	Routing GatewayRoutingConfig           `yaml:"routing"`
 	DNS     GatewayDNSConfig               `yaml:"dns"`
+	Tun     GatewayTunConfig               `yaml:"tun"`
 	Devices map[string]GatewayDeviceConfig `yaml:"devices"`
 }
 
@@ -108,6 +110,45 @@ type GatewayRoutingConfig struct {
 type GatewayDNSConfig struct {
 	Enabled bool   `yaml:"enabled"`
 	Listen  string `yaml:"listen"`
+}
+
+type GatewayTunConfig struct {
+	InterfaceName string   `yaml:"interface_name"`
+	Addresses     []string `yaml:"addresses"`
+	Stack         string   `yaml:"stack"`
+	MTU           uint32   `yaml:"mtu"`
+	IPv4          bool     `yaml:"ipv4"`
+	IPv6          bool     `yaml:"ipv6"`
+	UDP           bool     `yaml:"udp"`
+	StrictRoute   bool     `yaml:"strict_route"`
+	DNSHijack     bool     `yaml:"dns_hijack"`
+	FakeIP        bool     `yaml:"fake_ip"`
+	FakeIPv4Range string   `yaml:"fake_ipv4_range"`
+	FakeIPv6Range string   `yaml:"fake_ipv6_range"`
+
+	ipv4Set        bool `yaml:"-"`
+	udpSet         bool `yaml:"-"`
+	strictRouteSet bool `yaml:"-"`
+}
+
+func (c *GatewayTunConfig) UnmarshalYAML(value *yaml.Node) error {
+	type plain GatewayTunConfig
+	var decoded plain
+	if err := value.Decode(&decoded); err != nil {
+		return err
+	}
+	*c = GatewayTunConfig(decoded)
+	for idx := 0; idx+1 < len(value.Content); idx += 2 {
+		switch value.Content[idx].Value {
+		case "ipv4":
+			c.ipv4Set = true
+		case "udp":
+			c.udpSet = true
+		case "strict_route":
+			c.strictRouteSet = true
+		}
+	}
+	return nil
 }
 
 type GatewayDeviceConfig struct {
@@ -182,6 +223,17 @@ type GeoIPConfig struct {
 	Port               uint16        `yaml:"port"`                 // GeoIP 路由监听端口，默认 22323
 	AutoUpdateEnabled  bool          `yaml:"auto_update_enabled"`  // 是否启用自动更新数据库
 	AutoUpdateInterval time.Duration `yaml:"auto_update_interval"` // 自动更新间隔，默认 24 小时
+}
+
+func defaultConfigForDecode() Config {
+	return Config{
+		GeoIP: GeoIPConfig{
+			Enabled:            true,
+			DatabasePath:       "./GeoLite2-Country.mmdb",
+			AutoUpdateEnabled:  true,
+			AutoUpdateInterval: 24 * time.Hour,
+		},
+	}
 }
 
 // ListenerConfig defines how the proxy should listen for clients.
@@ -457,7 +509,7 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
-	var cfg Config
+	cfg := defaultConfigForDecode()
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("decode config: %w", err)
 	}
@@ -471,6 +523,11 @@ func Load(path string) (*Config, error) {
 	if cfg.GeoIP.DatabasePath != "" && !filepath.IsAbs(cfg.GeoIP.DatabasePath) {
 		cfg.GeoIP.DatabasePath = filepath.Join(configDir, cfg.GeoIP.DatabasePath)
 	}
+	resolvedRuleFiles, err := ResolveRuleFilePaths(path, cfg.Routing.RuleFiles)
+	if err != nil {
+		return nil, err
+	}
+	cfg.Routing.RuleFiles = resolvedRuleFiles
 
 	if err := cfg.normalizeInternal(false); err != nil {
 		return nil, err
@@ -487,7 +544,7 @@ func LoadForReload(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
-	var cfg Config
+	cfg := defaultConfigForDecode()
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("decode config: %w", err)
 	}
@@ -501,6 +558,11 @@ func LoadForReload(path string) (*Config, error) {
 	if cfg.GeoIP.DatabasePath != "" && !filepath.IsAbs(cfg.GeoIP.DatabasePath) {
 		cfg.GeoIP.DatabasePath = filepath.Join(configDir, cfg.GeoIP.DatabasePath)
 	}
+	resolvedRuleFiles, err := ResolveRuleFilePaths(path, cfg.Routing.RuleFiles)
+	if err != nil {
+		return nil, err
+	}
+	cfg.Routing.RuleFiles = resolvedRuleFiles
 
 	if err := cfg.normalizeInternal(true); err != nil {
 		return nil, err
@@ -587,7 +649,7 @@ func (c *Config) applyDefaults() error {
 		c.SubscriptionRefresh.Timeout = 30 * time.Second
 	}
 	if c.SubscriptionRefresh.HealthCheckTimeout <= 0 {
-		c.SubscriptionRefresh.HealthCheckTimeout = 60 * time.Second
+		c.SubscriptionRefresh.HealthCheckTimeout = 2 * time.Minute
 	}
 	if c.SubscriptionRefresh.DrainTimeout <= 0 {
 		c.SubscriptionRefresh.DrainTimeout = 30 * time.Second
@@ -675,6 +737,7 @@ func (c *Config) applyDefaults() error {
 		}
 	}
 
+	c.Gateway.Mode = strings.ToLower(strings.TrimSpace(c.Gateway.Mode))
 	if c.Gateway.Mode == "" {
 		c.Gateway.Mode = "transparent"
 	}
@@ -682,7 +745,11 @@ func (c *Config) applyDefaults() error {
 		c.Gateway.Listen = "0.0.0.0:15001"
 	}
 	if c.Gateway.Capture.TCP == "" {
-		c.Gateway.Capture.TCP = "tproxy"
+		if c.Gateway.Mode == "tun" {
+			c.Gateway.Capture.TCP = "disabled"
+		} else {
+			c.Gateway.Capture.TCP = "tproxy"
+		}
 	}
 	if c.Gateway.Capture.UDP == "" {
 		c.Gateway.Capture.UDP = "disabled"
@@ -701,6 +768,33 @@ func (c *Config) applyDefaults() error {
 	if c.Gateway.DNS.Listen == "" {
 		c.Gateway.DNS.Listen = "0.0.0.0:53"
 	}
+	if c.Gateway.Tun.InterfaceName == "" {
+		c.Gateway.Tun.InterfaceName = "easyproxy0"
+	}
+	if len(c.Gateway.Tun.Addresses) == 0 {
+		c.Gateway.Tun.Addresses = []string{"172.31.255.1/30", "fd31:255::1/126"}
+	}
+	if c.Gateway.Tun.Stack == "" {
+		c.Gateway.Tun.Stack = "mixed"
+	}
+	if c.Gateway.Tun.MTU == 0 {
+		c.Gateway.Tun.MTU = 1500
+	}
+	if !c.Gateway.Tun.ipv4Set && !c.Gateway.Tun.IPv4 && !c.Gateway.Tun.IPv6 {
+		c.Gateway.Tun.IPv4 = true
+	}
+	if !c.Gateway.Tun.udpSet {
+		c.Gateway.Tun.UDP = true
+	}
+	if !c.Gateway.Tun.strictRouteSet {
+		c.Gateway.Tun.StrictRoute = true
+	}
+	if c.Gateway.Tun.FakeIPv4Range == "" {
+		c.Gateway.Tun.FakeIPv4Range = "198.18.0.0/16"
+	}
+	if c.Gateway.Tun.FakeIPv6Range == "" {
+		c.Gateway.Tun.FakeIPv6Range = "fc00::/18"
+	}
 	if err := c.normalizeGateway(); err != nil {
 		return err
 	}
@@ -717,8 +811,8 @@ func (c *Config) normalizeGateway() error {
 		return nil
 	}
 	g := &c.Gateway
-	if strings.TrimSpace(g.Mode) != "transparent" {
-		return fmt.Errorf("unsupported gateway mode %q (use %q)", g.Mode, "transparent")
+	if g.Mode != "transparent" && g.Mode != "tun" {
+		return fmt.Errorf("unsupported gateway mode %q (use %q or %q)", g.Mode, "transparent", "tun")
 	}
 	if _, _, err := net.SplitHostPort(strings.TrimSpace(g.Listen)); err != nil {
 		return fmt.Errorf("gateway.listen must be host:port: %w", err)
@@ -735,6 +829,9 @@ func (c *Config) normalizeGateway() error {
 			return fmt.Errorf("unsupported %s mode %q", value.name, value.value)
 		}
 	}
+	if g.Mode == "tun" && (g.Capture.TCP != "disabled" || g.Capture.UDP != "disabled") {
+		return errors.New("gateway.mode tun conflicts with TPROXY capture; set gateway.capture.tcp and gateway.capture.udp to disabled")
+	}
 	for _, value := range []struct {
 		name  string
 		value string
@@ -747,9 +844,17 @@ func (c *Config) normalizeGateway() error {
 			return fmt.Errorf("unsupported %s %q", value.name, value.value)
 		}
 	}
+	trustedNetworks := make([]*net.IPNet, 0, len(g.Ingress.TrustedCIDRs))
 	for _, cidr := range g.Ingress.TrustedCIDRs {
-		if _, _, err := net.ParseCIDR(strings.TrimSpace(cidr)); err != nil {
+		_, network, err := net.ParseCIDR(strings.TrimSpace(cidr))
+		if err != nil {
 			return fmt.Errorf("invalid gateway trusted CIDR %q: %w", cidr, err)
+		}
+		trustedNetworks = append(trustedNetworks, network)
+	}
+	if g.Mode == "tun" {
+		if err := validateGatewayTun(g, trustedNetworks); err != nil {
+			return err
 		}
 	}
 	for name, device := range g.Devices {
@@ -1523,17 +1628,10 @@ func ParseSubscriptionContent(content string) ([]NodeConfig, error) {
 		}
 	}
 
-	// Check if it's base64 encoded (common for v2ray subscriptions)
-	if isBase64(content) {
-		decoded, err := base64.StdEncoding.DecodeString(content)
-		if err != nil {
-			// Try URL-safe base64
-			decoded, err = base64.RawStdEncoding.DecodeString(content)
-			if err != nil {
-				// Not base64, try as plain text
-				return parseNodesFromContent(content)
-			}
-		}
+	// Check if it's base64 encoded (common for v2ray subscriptions).
+	// Providers use both standard and URL-safe alphabets, with or without
+	// padding, so decode all four variants before falling back to plain text.
+	if decoded, ok := decodeSubscriptionBase64(content); ok {
 		content = string(decoded)
 	}
 
@@ -1580,32 +1678,54 @@ func parseNodesFromContent(content string) ([]NodeConfig, error) {
 
 // isBase64 checks if a string looks like base64 encoded content (optimized version)
 func isBase64(s string) bool {
-	// Remove whitespace
-	s = strings.TrimSpace(s)
+	s = compactBase64Whitespace(s)
 	if len(s) == 0 {
 		return false
 	}
-
-	// Remove newlines for checking
-	s = strings.ReplaceAll(s, "\n", "")
-	s = strings.ReplaceAll(s, "\r", "")
 
 	// Quick check: if it contains proxy URI schemes, it's not base64
 	if strings.Contains(s, "://") {
 		return false
 	}
 
-	// Check character set - base64 only contains A-Za-z0-9+/=
+	// Accept both standard (+/) and URL-safe (-_) base64 alphabets.
 	// This is much faster than trying to decode
 	for _, c := range s {
 		if !((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-			(c >= '0' && c <= '9') || c == '+' || c == '/' || c == '=') {
+			(c >= '0' && c <= '9') || c == '+' || c == '/' || c == '-' || c == '_' || c == '=') {
 			return false
 		}
 	}
 
-	// Length must be multiple of 4 (with padding)
-	return len(s)%4 == 0
+	// A base64 payload can be unpadded, but a remainder of 1 is impossible.
+	return len(s)%4 != 1
+}
+
+func decodeSubscriptionBase64(content string) ([]byte, bool) {
+	encoded := compactBase64Whitespace(content)
+	if !isBase64(encoded) {
+		return nil, false
+	}
+	for _, encoding := range []*base64.Encoding{
+		base64.StdEncoding,
+		base64.RawStdEncoding,
+		base64.URLEncoding,
+		base64.RawURLEncoding,
+	} {
+		if decoded, err := encoding.DecodeString(encoded); err == nil {
+			return decoded, true
+		}
+	}
+	return nil, false
+}
+
+func compactBase64Whitespace(value string) string {
+	return strings.Map(func(r rune) rune {
+		if r == ' ' || r == '\t' || r == '\r' || r == '\n' {
+			return -1
+		}
+		return r
+	}, strings.TrimSpace(value))
 }
 
 // IsProxyURI checks if a string is a valid proxy URI
@@ -1676,6 +1796,12 @@ type clashProxy struct {
 	GrpcOpts          *clashGrpcOptions      `yaml:"grpc-opts"`
 	RealityOpts       *clashRealityOptions   `yaml:"reality-opts"`
 	ClientFingerprint string                 `yaml:"client-fingerprint"`
+	ALPN              []string               `yaml:"alpn"`
+	PacketEncoding    string                 `yaml:"packet-encoding"`
+	UpMbps            int                    `yaml:"up-mbps"`
+	DownMbps          int                    `yaml:"down-mbps"`
+	Obfs              string                 `yaml:"obfs"`
+	ObfsPassword      string                 `yaml:"obfs-password"`
 	Plugin            string                 `yaml:"plugin"`
 	PluginOpts        map[string]interface{} `yaml:"plugin-opts"`
 }
@@ -1760,6 +1886,15 @@ func buildVMessURI(p clashProxy) string {
 			params.Set("host", host)
 		}
 	}
+	if p.GrpcOpts != nil && p.GrpcOpts.GrpcServiceName != "" {
+		params.Set("serviceName", p.GrpcOpts.GrpcServiceName)
+	}
+	if p.PacketEncoding != "" {
+		params.Set("packetEncoding", p.PacketEncoding)
+	}
+	if len(p.ALPN) > 0 {
+		params.Set("alpn", strings.Join(p.ALPN, ","))
+	}
 	if p.ClientFingerprint != "" {
 		params.Set("fp", p.ClientFingerprint)
 	}
@@ -1817,6 +1952,12 @@ func buildVLESSURI(p clashProxy) string {
 	if p.GrpcOpts != nil && p.GrpcOpts.GrpcServiceName != "" {
 		params.Set("serviceName", p.GrpcOpts.GrpcServiceName)
 	}
+	if p.PacketEncoding != "" {
+		params.Set("packetEncoding", p.PacketEncoding)
+	}
+	if len(p.ALPN) > 0 {
+		params.Set("alpn", strings.Join(p.ALPN, ","))
+	}
 	if p.ClientFingerprint != "" {
 		params.Set("fp", p.ClientFingerprint)
 	}
@@ -1848,6 +1989,12 @@ func buildTrojanURI(p clashProxy) string {
 		if host, ok := p.WSOpts.Headers["Host"]; ok {
 			params.Set("host", host)
 		}
+	}
+	if p.GrpcOpts != nil && p.GrpcOpts.GrpcServiceName != "" {
+		params.Set("serviceName", p.GrpcOpts.GrpcServiceName)
+	}
+	if len(p.ALPN) > 0 {
+		params.Set("alpn", strings.Join(p.ALPN, ","))
 	}
 	if p.ClientFingerprint != "" {
 		params.Set("fp", p.ClientFingerprint)
@@ -1945,13 +2092,30 @@ func buildHysteria2URI(p clashProxy) string {
 	if p.SkipCertVerify {
 		params.Set("insecure", "1")
 	}
-
-	query := ""
-	if len(params) > 0 {
-		query = "?" + params.Encode()
+	if len(p.ALPN) > 0 {
+		params.Set("alpn", strings.Join(p.ALPN, ","))
+	}
+	if p.UpMbps > 0 {
+		params.Set("upMbps", strconv.Itoa(p.UpMbps))
+	}
+	if p.DownMbps > 0 {
+		params.Set("downMbps", strconv.Itoa(p.DownMbps))
+	}
+	if p.Obfs != "" {
+		params.Set("obfs", p.Obfs)
+		if p.ObfsPassword != "" {
+			params.Set("obfs-password", p.ObfsPassword)
+		}
 	}
 
-	return fmt.Sprintf("hysteria2://%s@%s:%d%s#%s", p.Password, p.Server, p.Port, query, url.QueryEscape(p.Name))
+	u := &url.URL{
+		Scheme:   "hysteria2",
+		User:     url.User(p.Password),
+		Host:     netJoinHostPort(p.Server, p.Port),
+		RawQuery: params.Encode(),
+		Fragment: p.Name,
+	}
+	return u.String()
 }
 
 func buildAnyTLSURI(p clashProxy) string {
@@ -1964,13 +2128,18 @@ func buildAnyTLSURI(p clashProxy) string {
 	if p.SkipCertVerify {
 		params.Set("insecure", "1")
 	}
-
-	query := ""
-	if len(params) > 0 {
-		query = "?" + params.Encode()
+	if len(p.ALPN) > 0 {
+		params.Set("alpn", strings.Join(p.ALPN, ","))
 	}
 
-	return fmt.Sprintf("anytls://%s@%s:%d%s#%s", p.Password, p.Server, p.Port, query, url.QueryEscape(p.Name))
+	u := &url.URL{
+		Scheme:   "anytls",
+		User:     url.User(p.Password),
+		Host:     netJoinHostPort(p.Server, p.Port),
+		RawQuery: params.Encode(),
+		Fragment: p.Name,
+	}
+	return u.String()
 }
 
 // RLock acquires a read lock on the config.
@@ -2038,6 +2207,7 @@ func (c *Config) Clone() *Config {
 	cloned.DNS.RemoteServers = cloneConfigSlice(c.DNS.RemoteServers)
 	cloned.Routing.UseDefaultRules = cloneConfigBool(c.Routing.UseDefaultRules)
 	cloned.Routing.Rules = cloneConfigSlice(c.Routing.Rules)
+	cloned.Routing.RuleFiles = cloneConfigSlice(c.Routing.RuleFiles)
 	cloned.Routing.RuleProviders = cloneConfigSlice(c.Routing.RuleProviders)
 	cloned.Routing.NodeFilter.Countries = cloneConfigSlice(c.Routing.NodeFilter.Countries)
 	cloned.Routing.NodeFilter.Regions = cloneConfigSlice(c.Routing.NodeFilter.Regions)
@@ -2045,6 +2215,7 @@ func (c *Config) Clone() *Config {
 	cloned.Gateway.Ingress.Interfaces = cloneConfigSlice(c.Gateway.Ingress.Interfaces)
 	cloned.Gateway.Ingress.InterfacePatterns = cloneConfigSlice(c.Gateway.Ingress.InterfacePatterns)
 	cloned.Gateway.Ingress.TrustedCIDRs = cloneConfigSlice(c.Gateway.Ingress.TrustedCIDRs)
+	cloned.Gateway.Tun.Addresses = cloneConfigSlice(c.Gateway.Tun.Addresses)
 	if c.Gateway.Devices != nil {
 		cloned.Gateway.Devices = make(map[string]GatewayDeviceConfig, len(c.Gateway.Devices))
 		for name, device := range c.Gateway.Devices {

@@ -953,12 +953,31 @@ func httpProbeTarget(conn net.Conn, target monitor.ProbeTargetSpec, skipCertVeri
 	if _, err := fmt.Sscanf(parts[1], "%d", &status); err != nil {
 		return 0, fmt.Errorf("parse status line %q: %w", strings.TrimSpace(statusLine), err)
 	}
-	if status < 200 || status >= 500 {
+	if probeTargetRequiresStrictSuccessStatus(target) {
+		if status < 200 || status >= 400 {
+			return 0, fmt.Errorf("unexpected HTTP status %d from %s", status, target.Original)
+		}
+	} else if status < 200 || status >= 500 {
 		return 0, fmt.Errorf("unexpected HTTP status %d from %s", status, target.Original)
 	}
 
 	ttfb := time.Since(start)
 	return ttfb, nil
+}
+
+func probeTargetRequiresStrictSuccessStatus(target monitor.ProbeTargetSpec) bool {
+	host := strings.ToLower(strings.TrimSpace(target.Host))
+	path := strings.ToLower(strings.TrimSpace(target.Path))
+	switch host {
+	case "auth.openai.com":
+		return path == "" || strings.HasPrefix(path, "/")
+	case "platform.openai.com":
+		return strings.HasPrefix(path, "/login")
+	case "chatgpt.com", "www.chatgpt.com":
+		return strings.HasPrefix(path, "/auth/")
+	default:
+		return false
+	}
 }
 
 func (p *poolOutbound) makeProbeFunc(member *memberState) func(ctx context.Context) (time.Duration, error) {
@@ -1045,6 +1064,13 @@ func (p *poolOutbound) memberProbeProxyAddress(member *memberState) string {
 	}
 	meta, ok := p.options.Metadata[member.tag]
 	if !ok || meta.Port == 0 {
+		return ""
+	}
+	// Pool-mode members all advertise the same shared listener. Probing through
+	// it selects an arbitrary pool member, so the result cannot describe the
+	// member currently being checked. Only dedicated per-node listeners may be
+	// used as the preferred probe path; pool members must use their raw outbound.
+	if strings.EqualFold(strings.TrimSpace(meta.Mode), "pool") {
 		return ""
 	}
 	host := normalizeLocalProbeHost(meta.ListenAddress)

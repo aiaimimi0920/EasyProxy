@@ -125,6 +125,12 @@ func buildHysteria2URIFromSingbox(name string, outbound map[string]any) (string,
 	}
 	proxy.Type = "hysteria2"
 	proxy.Password = singboxString(outbound, "password")
+	proxy.UpMbps = singboxInt(outbound, "up_mbps")
+	proxy.DownMbps = singboxInt(outbound, "down_mbps")
+	if obfs := singboxMap(outbound, "obfs"); len(obfs) > 0 {
+		proxy.Obfs = singboxString(obfs, "type")
+		proxy.ObfsPassword = singboxString(obfs, "password")
+	}
 	if proxy.Password == "" {
 		return "", fmt.Errorf("hysteria2 outbound missing password")
 	}
@@ -133,16 +139,7 @@ func buildHysteria2URIFromSingbox(name string, outbound map[string]any) (string,
 	if uri == "" {
 		return "", fmt.Errorf("failed to encode hysteria2 outbound as uri")
 	}
-	return withURIQuery(uri, func(values url.Values) {
-		if obfs := singboxMap(outbound, "obfs"); len(obfs) > 0 {
-			if obfsType := singboxString(obfs, "type"); obfsType != "" {
-				values.Set("obfs", obfsType)
-			}
-			if obfsPassword := singboxString(obfs, "password"); obfsPassword != "" {
-				values.Set("obfs-password", obfsPassword)
-			}
-		}
-	}), nil
+	return uri, nil
 }
 
 func buildSOCKSURIFromSingbox(name string, outbound map[string]any) (string, error) {
@@ -206,6 +203,9 @@ func buildHTTPURIFromSingbox(name string, outbound map[string]any) (string, erro
 			if fingerprint := singboxString(singboxMap(tls, "utls"), "fingerprint"); fingerprint != "" {
 				values.Set("fp", fingerprint)
 			}
+			if alpn := singboxStringList(tls, "alpn"); len(alpn) > 0 {
+				values.Set("alpn", strings.Join(alpn, ","))
+			}
 		}
 	})
 	return appendFragment(uri, defaultOutboundDisplayName(name, server, port)), nil
@@ -218,9 +218,10 @@ func buildClashProxyFromSingbox(name string, outbound map[string]any) (clashProx
 	}
 
 	proxy := clashProxy{
-		Name:   defaultOutboundDisplayName(name, server, port),
-		Server: server,
-		Port:   port,
+		Name:           defaultOutboundDisplayName(name, server, port),
+		Server:         server,
+		Port:           port,
+		PacketEncoding: singboxString(outbound, "packet_encoding"),
 	}
 
 	transport := singboxMap(outbound, "transport")
@@ -269,6 +270,7 @@ func buildClashProxyFromSingbox(name string, outbound map[string]any) (clashProx
 		proxy.ServerName = singboxString(tls, "server_name")
 		proxy.SNI = proxy.ServerName
 		proxy.ClientFingerprint = singboxString(singboxMap(tls, "utls"), "fingerprint")
+		proxy.ALPN = singboxStringList(tls, "alpn")
 		if reality := singboxMap(tls, "reality"); singboxBool(reality, "enabled") {
 			proxy.RealityOpts = &clashRealityOptions{
 				PublicKey: singboxString(reality, "public_key"),
@@ -287,6 +289,9 @@ func withExtraTLSQuery(rawURI string, proxy clashProxy) string {
 		}
 		if proxy.ClientFingerprint != "" {
 			values.Set("fp", proxy.ClientFingerprint)
+		}
+		if len(proxy.ALPN) > 0 {
+			values.Set("alpn", strings.Join(proxy.ALPN, ","))
 		}
 	})
 }
@@ -428,6 +433,29 @@ func singboxMap(values map[string]any, key string) map[string]any {
 		return typed
 	}
 	return map[string]any{}
+}
+
+func singboxStringList(values map[string]any, key string) []string {
+	if values == nil {
+		return nil
+	}
+	switch typed := values[key].(type) {
+	case []string:
+		return append([]string(nil), typed...)
+	case []any:
+		result := make([]string, 0, len(typed))
+		for _, value := range typed {
+			if item := strings.TrimSpace(fmt.Sprint(value)); item != "" {
+				result = append(result, item)
+			}
+		}
+		return result
+	case string:
+		if item := strings.TrimSpace(typed); item != "" {
+			return []string{item}
+		}
+	}
+	return nil
 }
 
 func singboxInterfaceMap(values map[string]any, key string) map[string]interface{} {

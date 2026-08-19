@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -24,6 +25,18 @@ type fakeConnectorRuntime struct {
 	returned []RuntimeSource
 	err      error
 }
+
+type connectorRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn connectorRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
+
+type connectorTimeoutError struct{}
+
+func (connectorTimeoutError) Error() string   { return "temporary timeout" }
+func (connectorTimeoutError) Timeout() bool   { return true }
+func (connectorTimeoutError) Temporary() bool { return true }
 
 func (f *fakeConnectorRuntime) Reconcile(_ *config.Config, sources []RuntimeSource) ([]RuntimeSource, error) {
 	f.got = append([]RuntimeSource(nil), sources...)
@@ -496,6 +509,87 @@ func TestConnectorRuntimeManagerReconcileFetchesZenProxyClientSources(t *testing
 	}
 	if got := extractStringOption(runtimeSources[0].Options, "connector_proxy_id"); got != "proxy-1" {
 		t.Fatalf("unexpected connector proxy id metadata: %q", got)
+	}
+}
+
+func TestZenProxyFetchRetriesTransientTransportError(t *testing.T) {
+	requestCount := 0
+	runtime := &connectorRuntimeManager{
+		ctx: context.Background(),
+		httpClient: &http.Client{Transport: connectorRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+			requestCount++
+			if got := req.Header.Get("Authorization"); got != "Bearer zen-key" {
+				t.Fatalf("unexpected auth header on attempt %d: %q", requestCount, got)
+			}
+			if requestCount == 1 {
+				return nil, connectorTimeoutError{}
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(`{"count":1,"proxies":[{"id":"proxy-1","name":"HTTP Node","type":"http","outbound":{"type":"http","server":"proxy.example.com","server_port":8080}}]}`)),
+				Request:    req,
+			}, nil
+		})},
+	}
+
+	fetched, err := runtime.fetchZenProxyConnectorSource(
+		&config.Config{},
+		RuntimeSource{ID: "zen", Kind: SourceKindConnector, Name: "Zen", Input: "https://zen.example.com"},
+		zenProxyConnectorConfig{APIKey: "zen-key", Count: 1},
+		2*time.Second,
+	)
+	if err != nil {
+		t.Fatalf("fetchZenProxyConnectorSource() error = %v", err)
+	}
+	if len(fetched) != 1 || requestCount != 2 {
+		t.Fatalf("expected one fetched source after two attempts, got sources=%d attempts=%d", len(fetched), requestCount)
+	}
+}
+
+func TestZenProxyFetchRetriesOnlyTransientStatuses(t *testing.T) {
+	tests := []struct {
+		name         string
+		firstStatus  int
+		wantAttempts int
+		wantError    bool
+	}{
+		{name: "service unavailable", firstStatus: http.StatusServiceUnavailable, wantAttempts: 2},
+		{name: "unauthorized", firstStatus: http.StatusUnauthorized, wantAttempts: 1, wantError: true},
+		{name: "rate limited", firstStatus: http.StatusTooManyRequests, wantAttempts: 1, wantError: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			requestCount := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				requestCount++
+				if requestCount == 1 {
+					http.Error(w, http.StatusText(test.firstStatus), test.firstStatus)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"count":1,"proxies":[{"id":"proxy-1","name":"HTTP Node","type":"http","outbound":{"type":"http","server":"proxy.example.com","server_port":8080}}]}`))
+			}))
+			defer server.Close()
+
+			runtime := newConnectorRuntimeManager(context.Background(), defaultLogger{}).(*connectorRuntimeManager)
+			fetched, err := runtime.fetchZenProxyConnectorSource(
+				&config.Config{},
+				RuntimeSource{ID: "zen", Kind: SourceKindConnector, Name: "Zen", Input: server.URL},
+				zenProxyConnectorConfig{APIKey: "zen-key", Count: 1},
+				2*time.Second,
+			)
+			if (err != nil) != test.wantError {
+				t.Fatalf("error = %v, wantError=%v", err, test.wantError)
+			}
+			if !test.wantError && len(fetched) != 1 {
+				t.Fatalf("expected one fetched source, got %d", len(fetched))
+			}
+			if requestCount != test.wantAttempts {
+				t.Fatalf("attempts = %d, want %d", requestCount, test.wantAttempts)
+			}
+		})
 	}
 }
 

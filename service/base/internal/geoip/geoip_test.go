@@ -1,6 +1,11 @@
 package geoip
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 func TestExtractHostFromURISupportsHTTPAndSOCKS5(t *testing.T) {
 	tests := []struct {
@@ -16,5 +21,22 @@ func TestExtractHostFromURISupportsHTTPAndSOCKS5(t *testing.T) {
 		if got := extractHostFromURI(tt.uri); got != tt.want {
 			t.Fatalf("%s: extractHostFromURI(%q) = %q, want %q", tt.name, tt.uri, got, tt.want)
 		}
+	}
+}
+
+func TestEnsureDatabaseRejectsCorruptExistingMMDB(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "corrupt.mmdb")
+	data := make([]byte, 2048)
+	copy(data[len(data)-len("MaxMind.com"):], "MaxMind.com")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := EnsureDatabase(path)
+	if err == nil {
+		t.Fatal("EnsureDatabase() accepted a corrupt existing MMDB")
+	}
+	if !strings.Contains(err.Error(), "validate existing geoip database") {
+		t.Fatalf("EnsureDatabase() error = %v, want existing database validation error", err)
 	}
 }
