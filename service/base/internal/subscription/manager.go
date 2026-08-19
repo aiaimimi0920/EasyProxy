@@ -47,6 +47,7 @@ type refreshReloadIntent interface {
 type refreshReloader interface {
 	BeginReloadIntent(context.Context) (refreshReloadIntent, error)
 	CurrentPortMap() map[string]uint16
+	CurrentEphemeralNodes() []config.NodeConfig
 	ReloadWithPortMapAndEphemeralNodes(*config.Config, map[string]uint16, []config.NodeConfig) error
 }
 
@@ -60,6 +61,10 @@ func (r boxManagerRefreshReloader) BeginReloadIntent(ctx context.Context) (refre
 
 func (r boxManagerRefreshReloader) CurrentPortMap() map[string]uint16 {
 	return r.manager.CurrentPortMap()
+}
+
+func (r boxManagerRefreshReloader) CurrentEphemeralNodes() []config.NodeConfig {
+	return r.manager.CurrentEphemeralNodes()
 }
 
 func (r boxManagerRefreshReloader) ReloadWithPortMapAndEphemeralNodes(
@@ -605,16 +610,19 @@ func (m *Manager) doRefresh() {
 	}
 	defer reloadIntent.End()
 
-	portMap := reloader.CurrentPortMap()
 	newCfg := m.createNewConfig(ephemeralNodes)
-
-	if err := reloader.ReloadWithPortMapAndEphemeralNodes(newCfg, portMap, ephemeralNodes); err != nil {
-		m.logger.Errorf("reload failed: %v", err)
-		m.mu.Lock()
-		m.status.LastError = err.Error()
-		m.status.LastRefresh = time.Now()
-		m.mu.Unlock()
-		return
+	if runtimeNodeSetsEqual(ephemeralNodes, reloader.CurrentEphemeralNodes()) {
+		m.logger.Infof("runtime source set unchanged; skipped sing-box reload")
+	} else {
+		portMap := reloader.CurrentPortMap()
+		if err := reloader.ReloadWithPortMapAndEphemeralNodes(newCfg, portMap, ephemeralNodes); err != nil {
+			m.logger.Errorf("reload failed: %v", err)
+			m.mu.Lock()
+			m.status.LastError = err.Error()
+			m.status.LastRefresh = time.Now()
+			m.mu.Unlock()
+			return
+		}
 	}
 
 	if err := m.syncRuntimeNodesToStore(newCfg.Nodes); err != nil {
@@ -635,6 +643,37 @@ func (m *Manager) doRefresh() {
 	m.mu.Unlock()
 
 	m.logger.Infof("subscription refresh completed, %d total nodes active (%d runtime-generated)", totalNodes, len(ephemeralNodes))
+}
+
+// runtimeNodeSetsEqual ignores publication order and runtime-assigned ports.
+// Every source-owned field remains part of the comparison, including embedded
+// credentials and source metadata.
+func runtimeNodeSetsEqual(left, right []config.NodeConfig) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	counts := make(map[string]int, len(left))
+	for _, node := range left {
+		node.Port = 0
+		encoded, err := json.Marshal(node)
+		if err != nil {
+			return false
+		}
+		counts[string(encoded)]++
+	}
+	for _, node := range right {
+		node.Port = 0
+		encoded, err := json.Marshal(node)
+		if err != nil {
+			return false
+		}
+		key := string(encoded)
+		if counts[key] == 0 {
+			return false
+		}
+		counts[key]--
+	}
+	return true
 }
 
 func (m *Manager) recordRefreshError(err error) {

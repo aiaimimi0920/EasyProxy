@@ -293,7 +293,7 @@ func DefaultManagementProbeTargets() []string {
 // SubscriptionRefreshConfig controls subscription auto-refresh and reload settings.
 type SubscriptionRefreshConfig struct {
 	Enabled            bool          `yaml:"enabled"`              // 是否启用定时刷新
-	Interval           time.Duration `yaml:"interval"`             // 刷新间隔，默认 1 小时
+	Interval           time.Duration `yaml:"interval"`             // 刷新间隔，默认 24 小时
 	Timeout            time.Duration `yaml:"timeout"`              // 获取订阅的超时时间
 	HealthCheckTimeout time.Duration `yaml:"health_check_timeout"` // 新节点健康检查超时
 	DrainTimeout       time.Duration `yaml:"drain_timeout"`        // 旧实例排空超时时间
@@ -643,7 +643,7 @@ func (c *Config) applyDefaults() error {
 
 	// Subscription refresh defaults
 	if c.SubscriptionRefresh.Interval <= 0 {
-		c.SubscriptionRefresh.Interval = 1 * time.Hour
+		c.SubscriptionRefresh.Interval = 24 * time.Hour
 	}
 	if c.SubscriptionRefresh.Timeout <= 0 {
 		c.SubscriptionRefresh.Timeout = 30 * time.Second
@@ -658,7 +658,7 @@ func (c *Config) applyDefaults() error {
 		c.SubscriptionRefresh.MinAvailableNodes = 1
 	}
 	if c.SourceSync.RefreshInterval <= 0 {
-		c.SourceSync.RefreshInterval = 5 * time.Minute
+		c.SourceSync.RefreshInterval = 1 * time.Hour
 	}
 	if c.SourceSync.RequestTimeout <= 0 {
 		c.SourceSync.RequestTimeout = 15 * time.Second

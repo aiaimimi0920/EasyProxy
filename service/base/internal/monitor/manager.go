@@ -1185,14 +1185,24 @@ func (m *Manager) ClearNodes() {
 	m.nodes = make(map[string]*entry)
 }
 
-// Register ensures a node is tracked and returns its entry.
-// If the node already exists, its info is updated but monitoring stats
-// (latency, success/failure counts, etc.) are preserved.
+// Register ensures a node is tracked and returns its entry. Monitoring state is
+// preserved across reloads only when both the tag and non-empty URI are stable.
 func (m *Manager) Register(info NodeInfo) *EntryHandle {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	minUptime, minRate := m.longLivedThresholds()
 	e, ok := m.nodes[info.Tag]
+	if ok {
+		e.mu.RLock()
+		currentURI := strings.TrimSpace(e.info.URI)
+		candidateURI := strings.TrimSpace(info.URI)
+		sameIdentity := (candidateURI != "" && currentURI == candidateURI) ||
+			(candidateURI == "" && currentURI == "" && e.reloadGen == m.reloadGen)
+		e.mu.RUnlock()
+		if !sameIdentity {
+			ok = false
+		}
+	}
 	if !ok {
 		e = &entry{
 			owner:              m,
@@ -1214,6 +1224,9 @@ func (m *Manager) Register(info NodeInfo) *EntryHandle {
 			// generation; SetProbe will publish the candidate closure separately.
 			e.probe = nil
 			e.probeRevision++
+			// The node identity is unchanged, so its last known health remains
+			// valid while the replacement probe closure is installed.
+			e.healthGen = m.reloadGen
 		}
 		e.reloadGen = m.reloadGen
 		if e.firstSeenAt.IsZero() {

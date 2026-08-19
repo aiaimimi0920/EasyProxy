@@ -35,6 +35,9 @@ export interface NodeSnapshot extends NodeInfo {
   last_latency_ms: number
   available: boolean
   initial_check_done: boolean
+  traffic_proven_usable: boolean
+  effective_available: boolean
+  availability_source?: string
   total_upload: number
   total_download: number
   timeline?: TimelineEvent[]
@@ -45,6 +48,10 @@ export interface NodeSnapshot extends NodeInfo {
 export interface NodesResponse {
   nodes: NodeSnapshot[]
   total_nodes: number
+  all_total_nodes: number
+  available_nodes: number
+  probe_available_nodes: number
+  traffic_proven_nodes: number
   total_upload: number
   total_download: number
   upload_speed?: number

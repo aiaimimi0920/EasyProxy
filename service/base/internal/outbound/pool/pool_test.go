@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -116,6 +118,44 @@ func TestHTTPProbeTargetRejectsOpenAIAuthChallenge403(t *testing.T) {
 	}
 	if _, err := httpProbeTarget(conn, target, true); err == nil {
 		t.Fatal("expected openai auth 403 probe to fail")
+	}
+}
+
+func TestHTTPProbeTargetUsesWarmSecondRequestDelay(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if requests.Add(1) == 1 {
+			time.Sleep(80 * time.Millisecond)
+		} else {
+			time.Sleep(5 * time.Millisecond)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	conn, err := net.Dial("tcp", server.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("dial tls server: %v", err)
+	}
+	defer conn.Close()
+	target := monitor.ProbeTargetSpec{
+		Original: "https://www.gstatic.com/generate_204",
+		Scheme:   "https",
+		Host:     "www.gstatic.com",
+		Port:     443,
+		Path:     "/generate_204",
+		HostHdr:  "www.gstatic.com",
+		Dst:      M.ParseSocksaddrHostPort("www.gstatic.com", 443),
+	}
+	duration, err := httpProbeTarget(conn, target, true)
+	if err != nil {
+		t.Fatalf("httpProbeTarget() error = %v", err)
+	}
+	if got := requests.Load(); got != 2 {
+		t.Fatalf("probe request count = %d, want 2", got)
+	}
+	if duration >= 50*time.Millisecond {
+		t.Fatalf("unified delay = %v, want warm second-request latency", duration)
 	}
 }
 
@@ -334,7 +374,7 @@ func startConnectProxy(t *testing.T) (string, func()) {
 	return server.Listener.Addr().String(), server.Close
 }
 
-func TestRunProbeTargetsForMemberPrefersLocalHTTPProxy(t *testing.T) {
+func TestRunProbeTargetsForMemberDoesNotHideRawOutboundFailureBehindLocalProxy(t *testing.T) {
 	tlsServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/generate_204" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
@@ -398,12 +438,8 @@ func TestRunProbeTargetsForMemberPrefersLocalHTTPProxy(t *testing.T) {
 		},
 	}
 
-	duration, err := p.runProbeTargetsForMember(context.Background(), member, targets)
-	if err != nil {
-		t.Fatalf("runProbeTargetsForMember() error = %v", err)
-	}
-	if duration <= 0 {
-		t.Fatalf("expected positive probe duration, got %v", duration)
+	if _, err := p.runProbeTargetsForMember(context.Background(), member, targets); err == nil || !strings.Contains(err.Error(), "intentionally unavailable") {
+		t.Fatalf("runProbeTargetsForMember() error = %v, want raw outbound failure", err)
 	}
 }
 

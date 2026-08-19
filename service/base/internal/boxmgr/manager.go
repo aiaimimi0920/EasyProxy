@@ -2155,6 +2155,14 @@ func (m *Manager) CurrentPortMap() map[string]uint16 {
 	return m.cfg.BuildPortMap()
 }
 
+// CurrentEphemeralNodes returns a copy of the runtime-generated source set
+// currently published by the manager.
+func (m *Manager) CurrentEphemeralNodes() []config.NodeConfig {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return cloneNodes(m.ephemeralNodes)
+}
+
 // --- Helper functions ---
 
 // portBindErrorRegex matches "listen tcp4 0.0.0.0:24282: bind: address already in use"

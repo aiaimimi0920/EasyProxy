@@ -206,7 +206,7 @@ geoip:
 # ───────────────────────────────────────────────────────────────
 # subscription_refresh:
 #   enabled: false              # 是否启用定时刷新
-#   interval: 1h                # 刷新间隔（默认 1 小时）
+#   interval: 24h               # 刷新间隔（默认 24 小时）
 #   timeout: 30s                # 获取订阅的超时时间
 #   health_check_timeout: 60s   # 新节点健康检查超时
 #   drain_timeout: 30s          # 旧实例排空超时时间
@@ -221,7 +221,7 @@ geoip:
 #   enabled: false
 #   manifest_url: "https://misub.example.com/api/manifest/profile-id"
 #   manifest_token: "replace-with-manifest-token"
-#   refresh_interval: 5m
+#   refresh_interval: 1h
 #   request_timeout: 15s
 #   default_direct_proxy_scheme: http   # 裸 residential 输入默认补成 http://
 #   fallback_subscriptions:

@@ -32,7 +32,7 @@ const defaultSettings: SettingsData = {
   management_health_check_interval: '2h0m0s',
 
   sub_refresh_enabled: false,
-  sub_refresh_interval: '1h0m0s',
+  sub_refresh_interval: '24h0m0s',
   sub_refresh_timeout: '30s',
   sub_refresh_health_check_timeout: '2m0s',
   sub_refresh_drain_timeout: '30s',
@@ -41,7 +41,7 @@ const defaultSettings: SettingsData = {
   source_sync_enabled: false,
   source_sync_manifest_url: '',
   source_sync_manifest_token: '',
-  source_sync_refresh_interval: '5m0s',
+  source_sync_refresh_interval: '1h0m0s',
   source_sync_request_timeout: '15s',
   source_sync_fallback_subscriptions: [],
   source_sync_default_direct_proxy_scheme: 'http',

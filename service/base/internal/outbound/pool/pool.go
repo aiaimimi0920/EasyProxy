@@ -888,8 +888,8 @@ func (p *poolOutbound) makeReleaseFunc(member *memberState) func() {
 	}
 }
 
-// httpProbe performs an HTTP probe through the connection and measures TTFB.
-// It sends a minimal HTTP request and waits for the first byte of response.
+// httpProbe performs an HTTP probe through the connection and measures unified
+// delay using the same warm keep-alive request semantics as Mihomo URLTest.
 func httpProbe(conn net.Conn, destination M.Socksaddr, skipCertVerify ...bool) (time.Duration, error) {
 	return httpProbeTarget(conn, monitor.ProbeTargetSpec{
 		Scheme:  map[bool]string{true: "https", false: "http"}[destination.Port == 443],
@@ -902,6 +902,8 @@ func httpProbe(conn net.Conn, destination M.Socksaddr, skipCertVerify ...bool) (
 }
 
 func httpProbeTarget(conn net.Conn, target monitor.ProbeTargetSpec, skipCertVerify ...bool) (time.Duration, error) {
+	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+	defer conn.SetDeadline(time.Time{})
 	probeConn := conn
 	host := target.Host
 	hostHeader := target.HostHdr
@@ -928,41 +930,66 @@ func httpProbeTarget(conn net.Conn, target monitor.ProbeTargetSpec, skipCertVeri
 	if path == "" {
 		path = "/"
 	}
-	req := fmt.Sprintf("GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\nUser-Agent: Mozilla/5.0\r\nAccept: */*\r\n\r\n", path, hostHeader)
-
-	_ = probeConn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-
-	start := time.Now()
-
-	if _, err := probeConn.Write([]byte(req)); err != nil {
-		return 0, fmt.Errorf("write request: %w", err)
-	}
-
-	_ = probeConn.SetReadDeadline(time.Now().Add(10 * time.Second))
-
+	req := fmt.Sprintf("HEAD %s HTTP/1.1\r\nHost: %s\r\nConnection: keep-alive\r\nUser-Agent: EasyProxy-URLTest/1.0\r\nAccept: */*\r\n\r\n", path, hostHeader)
 	reader := bufio.NewReader(probeConn)
+	firstDuration, firstStatus, err := performHTTPProbeRequest(probeConn, reader, req)
+	if err != nil {
+		return 0, err
+	}
+	secondDuration, secondStatus, secondErr := performHTTPProbeRequest(probeConn, reader, req)
+	if secondErr == nil {
+		if err := validateProbeStatus(target, secondStatus); err != nil {
+			return 0, err
+		}
+		return secondDuration, nil
+	}
+	if err := validateProbeStatus(target, firstStatus); err != nil {
+		return 0, err
+	}
+	return firstDuration, nil
+}
+
+func performHTTPProbeRequest(conn net.Conn, reader *bufio.Reader, request string) (time.Duration, int, error) {
+	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	start := time.Now()
+	if _, err := conn.Write([]byte(request)); err != nil {
+		return 0, 0, fmt.Errorf("write request: %w", err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	statusLine, err := reader.ReadString('\n')
 	if err != nil {
-		return 0, fmt.Errorf("read response: %w", err)
+		return 0, 0, fmt.Errorf("read response: %w", err)
 	}
+	duration := time.Since(start)
 	parts := strings.Fields(strings.TrimSpace(statusLine))
 	if len(parts) < 2 {
-		return 0, fmt.Errorf("invalid status line: %q", strings.TrimSpace(statusLine))
+		return 0, 0, fmt.Errorf("invalid status line: %q", strings.TrimSpace(statusLine))
 	}
 	var status int
 	if _, err := fmt.Sscanf(parts[1], "%d", &status); err != nil {
-		return 0, fmt.Errorf("parse status line %q: %w", strings.TrimSpace(statusLine), err)
+		return 0, 0, fmt.Errorf("parse status line %q: %w", strings.TrimSpace(statusLine), err)
 	}
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return 0, 0, fmt.Errorf("read response headers: %w", err)
+		}
+		if line == "\r\n" || line == "\n" {
+			break
+		}
+	}
+	return duration, status, nil
+}
+
+func validateProbeStatus(target monitor.ProbeTargetSpec, status int) error {
 	if probeTargetRequiresStrictSuccessStatus(target) {
 		if status < 200 || status >= 400 {
-			return 0, fmt.Errorf("unexpected HTTP status %d from %s", status, target.Original)
+			return fmt.Errorf("unexpected HTTP status %d from %s", status, target.Original)
 		}
 	} else if status < 200 || status >= 500 {
-		return 0, fmt.Errorf("unexpected HTTP status %d from %s", status, target.Original)
+		return fmt.Errorf("unexpected HTTP status %d from %s", status, target.Original)
 	}
-
-	ttfb := time.Since(start)
-	return ttfb, nil
+	return nil
 }
 
 func probeTargetRequiresStrictSuccessStatus(target monitor.ProbeTargetSpec) bool {
@@ -1078,28 +1105,13 @@ func (p *poolOutbound) memberProbeProxyAddress(member *memberState) string {
 }
 
 func (p *poolOutbound) runProbeTargetsForMember(ctx context.Context, member *memberState, targets []monitor.ProbeTargetSpec) (time.Duration, error) {
-	var errs []string
-
-	if proxyAddress := p.memberProbeProxyAddress(member); proxyAddress != "" {
-		duration, err := p.runProbeTargetsViaHTTPProxy(ctx, proxyAddress, targets)
-		if err == nil {
-			return duration, nil
-		}
-		errs = append(errs, fmt.Sprintf("local proxy probe via %s: %v", proxyAddress, err))
-	}
-
 	if member != nil && member.outbound != nil {
-		duration, err := p.runProbeTargets(ctx, member.outbound, targets)
-		if err == nil {
-			return duration, nil
-		}
-		errs = append(errs, fmt.Sprintf("raw outbound probe: %v", err))
+		return p.runProbeTargets(ctx, member.outbound, targets)
 	}
-
-	if len(errs) == 0 {
-		return 0, E.New("member probe failed: missing outbound and local proxy metadata")
+	if proxyAddress := p.memberProbeProxyAddress(member); proxyAddress != "" {
+		return p.runProbeTargetsViaHTTPProxy(ctx, proxyAddress, targets)
 	}
-	return 0, E.New(strings.Join(errs, " | "))
+	return 0, E.New("member probe failed: missing outbound and local proxy metadata")
 }
 
 func dialContextTCP(ctx context.Context, address string) (net.Conn, error) {
@@ -1173,13 +1185,13 @@ func (p *poolOutbound) runProbeTargetsViaHTTPProxy(ctx context.Context, proxyAdd
 			conn.Close()
 			return time.Since(start), nil
 		}
-		_, err = httpProbeTarget(conn, target, p.shouldSkipProbeTLSVerify())
+		duration, err := httpProbeTarget(conn, target, p.shouldSkipProbeTLSVerify())
 		conn.Close()
 		if err != nil {
 			errs = append(errs, fmt.Sprintf("%s proxy probe: %v", target.Original, err))
 			continue
 		}
-		return time.Since(start), nil
+		return duration, nil
 	}
 	return 0, E.New("all proxy probe targets failed: ", strings.Join(errs, " | "))
 }
@@ -1197,13 +1209,13 @@ func (p *poolOutbound) runProbeTargets(ctx context.Context, outbound adapter.Out
 			conn.Close()
 			return time.Since(start), nil
 		}
-		_, err = httpProbeTarget(conn, target, p.shouldSkipProbeTLSVerify())
+		duration, err := httpProbeTarget(conn, target, p.shouldSkipProbeTLSVerify())
 		conn.Close()
 		if err != nil {
 			errs = append(errs, fmt.Sprintf("%s probe: %v", target.Original, err))
 			continue
 		}
-		return time.Since(start), nil
+		return duration, nil
 	}
 	return 0, E.New("all probe targets failed: ", strings.Join(errs, " | "))
 }

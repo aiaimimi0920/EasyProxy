@@ -140,13 +140,11 @@ export default function MonitorPanel() {
   // enabledConfigNodes not directly displayed but used implicitly in monitor node count
 
   // Runtime monitor counts (only enabled nodes that are loaded in the box)
-  const availableNodes = useMemo(
-    () => allNodes.filter((n: NodeSnapshot) => n.initial_check_done && n.available && !n.blacklisted).length,
-    [allNodes]
-  )
+  const availableNodes = data?.available_nodes
+    ?? allNodes.filter((n: NodeSnapshot) => n.effective_available && !n.blacklisted).length
 
   const unavailableNodes = useMemo(
-    () => allNodes.filter((n: NodeSnapshot) => n.initial_check_done && !n.available && !n.blacklisted).length,
+    () => allNodes.filter((n: NodeSnapshot) => n.initial_check_done && !n.effective_available && !n.blacklisted).length,
     [allNodes]
   )
 
@@ -156,15 +154,15 @@ export default function MonitorPanel() {
   )
 
   const pendingNodes = useMemo(
-    () => allNodes.filter((n: NodeSnapshot) => !n.initial_check_done && !n.blacklisted).length,
+    () => allNodes.filter((n: NodeSnapshot) => !n.initial_check_done && !n.effective_available && !n.blacklisted).length,
     [allNodes]
   )
 
   const healthRate = useMemo(() => {
-    const checked = allNodes.filter((n: NodeSnapshot) => n.initial_check_done).length
-    if (checked === 0) return -1
-    return Math.round((availableNodes / checked) * 100)
-  }, [allNodes, availableNodes])
+    const evaluated = availableNodes + unavailableNodes
+    if (evaluated === 0) return -1
+    return Math.round((availableNodes / evaluated) * 100)
+  }, [availableNodes, unavailableNodes])
 
   const avgLatency = useMemo(() => {
     const validNodes = allNodes.filter((n: NodeSnapshot) => n.last_latency_ms > 0)
@@ -209,10 +207,14 @@ export default function MonitorPanel() {
       { label: '200-300', min: 200, max: 300, count: 0, color: 'oklch(0.75 0.18 55)' },
       { label: '300+', min: 300, max: Infinity, count: 0, color: 'oklch(0.63 0.24 29)' },
       { label: '超时', min: -1, max: 0, count: 0, color: 'oklch(0.50 0.10 250)' },
+      { label: '待检查', min: -1, max: 0, count: 0, color: 'oklch(0.80 0.18 84)' },
+      { label: '无测速', min: -1, max: 0, count: 0, color: 'oklch(0.65 0.05 250)' },
     ]
     for (const node of allNodes) {
       const ms = node.last_latency_ms
-      if (ms < 0 || !node.initial_check_done) {
+      if (!node.initial_check_done) {
+        buckets[node.effective_available ? 7 : 6].count++
+      } else if (ms < 0) {
         buckets[5].count++
       } else if (ms <= 50) {
         buckets[0].count++
@@ -261,7 +263,7 @@ export default function MonitorPanel() {
       const region = node.region || 'other'
       const entry = map.get(region) || { total: 0, healthy: 0, latencies: [] }
       entry.total++
-      if (node.initial_check_done && node.available && !node.blacklisted) {
+      if (node.effective_available && !node.blacklisted) {
         entry.healthy++
       }
       if (node.last_latency_ms > 0) {
@@ -387,7 +389,7 @@ export default function MonitorPanel() {
             {healthRate >= 0 ? `${healthRate}%` : '-'}
           </div>
           <div className="text-xs font-medium text-base-content/40 relative z-10 bg-base-200/50 w-fit px-2 py-1 rounded-md">
-            {healthRate >= 0 ? `${availableNodes} / ${availableNodes + unavailableNodes} 已检查` : '等待检查'}
+            {healthRate >= 0 ? `${availableNodes} / ${availableNodes + unavailableNodes} 已判定` : '等待检查'}
           </div>
         </div>
 

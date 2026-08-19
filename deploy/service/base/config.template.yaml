@@ -112,7 +112,7 @@ management:
 
 subscription_refresh:
   enabled: true
-  interval: 2h0m0s
+  interval: 24h0m0s
   timeout: 30s
   health_check_timeout: 2m0s
   drain_timeout: 30s
@@ -128,7 +128,7 @@ source_sync:
   enabled: true
   manifest_url: "https://your-misub-domain.example.com/api/manifest/your-profile"
   manifest_token: ""
-  refresh_interval: 5m0s
+  refresh_interval: 1h0m0s
   request_timeout: 15s
   default_direct_proxy_scheme: http
   fallback_subscriptions:

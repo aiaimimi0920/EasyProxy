@@ -48,6 +48,12 @@ func (r *fakeRefreshReloader) CurrentPortMap() map[string]uint16 {
 	return nil
 }
 
+func (r *fakeRefreshReloader) CurrentEphemeralNodes() []config.NodeConfig {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]config.NodeConfig(nil), r.ephemeralNodes...)
+}
+
 func (r *fakeRefreshReloader) ReloadWithPortMapAndEphemeralNodes(
 	_ *config.Config,
 	_ map[string]uint16,
@@ -134,6 +140,56 @@ func TestDoRefreshRepeatedConfigChangesKeepPublishedEphemeralNodes(t *testing.T)
 	}
 	if status := manager.Status(); !strings.Contains(status.LastError, "configuration changed repeatedly") {
 		t.Fatalf("refresh status error = %q, want repeated configuration change", status.LastError)
+	}
+}
+
+func TestRuntimeNodeSetsEqualIgnoresOrderAndAssignedPorts(t *testing.T) {
+	left := []config.NodeConfig{
+		{Name: "one", URI: "http://one.example:80", Port: 24001, SourceKind: "subscription", SourceRef: "one"},
+		{Name: "two", URI: "http://two.example:80", Port: 24002, SourceKind: "subscription", SourceRef: "two"},
+	}
+	right := []config.NodeConfig{
+		{Name: "two", URI: "http://two.example:80", Port: 25010, SourceKind: "subscription", SourceRef: "two"},
+		{Name: "one", URI: "http://one.example:80", Port: 25011, SourceKind: "subscription", SourceRef: "one"},
+	}
+
+	if !runtimeNodeSetsEqual(left, right) {
+		t.Fatal("expected equivalent runtime node sets")
+	}
+	right[0].URI = "http://changed.example:80"
+	if runtimeNodeSetsEqual(left, right) {
+		t.Fatal("expected changed runtime node URI to require a reload")
+	}
+}
+
+func TestDoRefreshSkipsReloadWhenRuntimeSourceSetIsUnchanged(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("http://127.0.0.1:18080#stable-runtime\n"))
+	}))
+	defer server.Close()
+
+	cfg := refreshRetryTestConfig(server.URL, "stable")
+	cfg.SetFilePath(filepath.Join(t.TempDir(), "config.yaml"))
+	reloader := &fakeRefreshReloader{}
+	manager := New(
+		cfg,
+		nil,
+		WithConnectorRuntime(&fakeConnectorRuntime{}),
+		withRefreshReloader(reloader),
+	)
+
+	manager.doRefresh()
+	manager.doRefresh()
+
+	got, begins, ends, reloads := reloader.snapshot()
+	if len(got) != 1 || got[0].Name != "stable-runtime" {
+		t.Fatalf("published runtime nodes = %+v, want stable runtime node", got)
+	}
+	if begins != 2 || ends != 2 || reloads != 1 {
+		t.Fatalf("reload boundary calls = begin:%d end:%d reload:%d, want 2/2/1", begins, ends, reloads)
+	}
+	if status := manager.Status(); status.LastError != "" || status.NodeCount != 1 {
+		t.Fatalf("refresh status after no-op refresh = %+v", status)
 	}
 }
 

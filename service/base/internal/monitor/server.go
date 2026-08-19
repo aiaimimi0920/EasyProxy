@@ -1694,8 +1694,9 @@ func (s *Server) handleProbeAll(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "data: %s\n\n", fmt.Sprintf(`{"type":"start","total":%d}`, total))
 	flusher.Flush()
 
-	// Create context with timeout
-	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
+	// Budget for every queued node to receive its own 10-second probe window,
+	// even on the minimum supported worker count.
+	ctx, cancel := context.WithTimeout(r.Context(), probeAllRoundTimeout(total))
 	defer cancel()
 
 	// Probe all nodes with semaphore control
@@ -1792,6 +1793,24 @@ func (s *Server) handleProbeAll(w http.ResponseWriter, r *http.Request) {
 	// Send complete event
 	fmt.Fprintf(w, "data: %s\n\n", fmt.Sprintf(`{"type":"complete","total":%d,"success":%d,"failed":%d}`, total, successCount, failedCount))
 	flusher.Flush()
+}
+
+func probeAllRoundTimeout(total int) time.Duration {
+	const (
+		minimumWorkers = 10
+		perNodeTimeout = 10 * time.Second
+		minimumBudget  = 2 * time.Minute
+		maximumBudget  = 10 * time.Minute
+	)
+	waves := (total + minimumWorkers - 1) / minimumWorkers
+	budget := 30*time.Second + time.Duration(waves)*perNodeTimeout
+	if budget < minimumBudget {
+		return minimumBudget
+	}
+	if budget > maximumBudget {
+		return maximumBudget
+	}
+	return budget
 }
 
 func (s *Server) handleTrafficStream(w http.ResponseWriter, r *http.Request) {

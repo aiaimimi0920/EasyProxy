@@ -850,6 +850,42 @@ func TestProbeGenerationDoesNotReusePreviousAvailability(t *testing.T) {
 	}
 }
 
+func TestRegisterPreservesHealthForStableURIOnReload(t *testing.T) {
+	mgr, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	old := mgr.Register(NodeInfo{Tag: "stable-node", Name: "Stable", URI: "ss://stable.example:443"})
+	old.RecordSuccessWithLatency(42 * time.Millisecond)
+
+	mgr.BeginReload()
+	candidate := mgr.Register(NodeInfo{Tag: "stable-node", Name: "Stable renamed", URI: "ss://stable.example:443"})
+	snap := candidate.Snapshot()
+	if !snap.InitialCheckDone || !snap.Available || !snap.EffectiveAvailable || snap.LastLatencyMs != 42 {
+		t.Fatalf("stable node health was not preserved: %+v", snap)
+	}
+}
+
+func TestRegisterResetsHealthWhenURIChanges(t *testing.T) {
+	mgr, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	old := mgr.Register(NodeInfo{Tag: "rotated-node", Name: "Rotated", URI: "ss://old.example:443"})
+	old.RecordSuccessWithLatency(42 * time.Millisecond)
+
+	mgr.BeginReload()
+	candidate := mgr.Register(NodeInfo{Tag: "rotated-node", Name: "Rotated", URI: "ss://new.example:443"})
+	snap := candidate.Snapshot()
+	if snap.InitialCheckDone || snap.Available || snap.EffectiveAvailable || snap.LastLatencyMs != -1 || snap.SuccessCount != 0 {
+		t.Fatalf("changed node URI inherited stale health: %+v", snap)
+	}
+	old.RecordSuccessWithLatency(5 * time.Millisecond)
+	if snap = candidate.Snapshot(); snap.InitialCheckDone || snap.LastLatencyMs != -1 {
+		t.Fatalf("detached old handle mutated replacement node: %+v", snap)
+	}
+}
+
 func TestLateProbeCompletionCannotMutateNewGeneration(t *testing.T) {
 	mgr, err := NewManager(Config{})
 	if err != nil {

@@ -568,6 +568,19 @@ func TestApplyDefaultsSetsNeutralProbeTargets(t *testing.T) {
 	}
 }
 
+func TestApplyDefaultsUsesConservativeRefreshIntervals(t *testing.T) {
+	cfg := &Config{}
+	if err := cfg.applyDefaults(); err != nil {
+		t.Fatalf("applyDefaults() error = %v", err)
+	}
+	if got, want := cfg.SubscriptionRefresh.Interval, 24*time.Hour; got != want {
+		t.Fatalf("subscription refresh interval = %v, want %v", got, want)
+	}
+	if got, want := cfg.SourceSync.RefreshInterval, time.Hour; got != want {
+		t.Fatalf("source sync refresh interval = %v, want %v", got, want)
+	}
+}
+
 func TestNormalizeVLESSFlowCanonicalizesLegacyUDP443Variant(t *testing.T) {
 	if got := NormalizeVLESSFlow("xtls-rprx-vision-udp443"); got != "xtls-rprx-vision" {
 		t.Fatalf("expected legacy UDP443 flow to normalize, got %q", got)
