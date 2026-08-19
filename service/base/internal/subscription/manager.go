@@ -37,6 +37,14 @@ type ConnectorRuntime interface {
 // Option configures the Manager.
 type Option func(*Manager)
 
+const (
+	manualRefreshCompletionGrace = 30 * time.Second
+	manualRefreshDefaultFetch    = 30 * time.Second
+	manualRefreshDefaultHealth   = 2 * time.Minute
+	manualRefreshDefaultDrain    = 30 * time.Second
+	maximumDuration              = time.Duration(1<<63 - 1)
+)
+
 // refreshReloadIntent is the portion of boxmgr.ReloadIntent needed by the
 // refresh transaction. Keeping this small makes the fetch/retry boundary
 // independently testable without starting a sing-box instance.
@@ -308,6 +316,7 @@ func (m *Manager) RefreshNow() error {
 	hasRefreshSources := hasRuntimeRefreshSources(baseCfg)
 	timeout := baseCfg.SubscriptionRefresh.Timeout
 	healthCheckTimeout := baseCfg.SubscriptionRefresh.HealthCheckTimeout
+	drainTimeout := baseCfg.SubscriptionRefresh.DrainTimeout
 	if baseCfg.SourceSync.RequestTimeout > timeout {
 		timeout = baseCfg.SourceSync.RequestTimeout
 	}
@@ -328,7 +337,7 @@ func (m *Manager) RefreshNow() error {
 		timeout = 30 * time.Second
 	}
 
-	ctx, cancel := context.WithTimeout(m.ctx, timeout+healthCheckTimeout)
+	ctx, cancel := context.WithTimeout(m.ctx, manualRefreshWaitTimeout(timeout, healthCheckTimeout, drainTimeout))
 	defer cancel()
 
 	// Snapshot the current done channel before waiting
@@ -346,6 +355,28 @@ func (m *Manager) RefreshNow() error {
 		}
 		return nil
 	}
+}
+
+func manualRefreshWaitTimeout(fetchTimeout, healthCheckTimeout, drainTimeout time.Duration) time.Duration {
+	if fetchTimeout <= 0 {
+		fetchTimeout = manualRefreshDefaultFetch
+	}
+	if healthCheckTimeout <= 0 {
+		healthCheckTimeout = manualRefreshDefaultHealth
+	}
+	if drainTimeout <= 0 {
+		drainTimeout = manualRefreshDefaultDrain
+	}
+	// Source sync can make one manifest request followed by one source request
+	// before the reload drains the old box and probes the candidate generation.
+	waitTimeout := manualRefreshCompletionGrace
+	for _, stageTimeout := range []time.Duration{fetchTimeout, fetchTimeout, healthCheckTimeout, drainTimeout} {
+		if stageTimeout > maximumDuration-waitTimeout {
+			return maximumDuration
+		}
+		waitTimeout += stageTimeout
+	}
+	return waitTimeout
 }
 
 // Status returns the current refresh status, including dynamic config state.

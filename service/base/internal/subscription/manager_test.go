@@ -21,6 +21,23 @@ type fakeRefreshReloadIntent struct {
 	end  func()
 }
 
+func TestManualRefreshWaitTimeoutCoversAllRefreshStages(t *testing.T) {
+	got := manualRefreshWaitTimeout(30*time.Second, 2*time.Minute, 30*time.Second)
+	if want := 4 * time.Minute; got != want {
+		t.Fatalf("manualRefreshWaitTimeout() = %v, want %v", got, want)
+	}
+
+	got = manualRefreshWaitTimeout(0, -time.Second, -time.Second)
+	if want := 4 * time.Minute; got != want {
+		t.Fatalf("manualRefreshWaitTimeout() defaults = %v, want %v", got, want)
+	}
+
+	got = manualRefreshWaitTimeout(maximumDuration, maximumDuration, maximumDuration)
+	if got != maximumDuration {
+		t.Fatalf("manualRefreshWaitTimeout() overflow result = %v, want %v", got, maximumDuration)
+	}
+}
+
 func (i *fakeRefreshReloadIntent) End() {
 	i.once.Do(i.end)
 }
