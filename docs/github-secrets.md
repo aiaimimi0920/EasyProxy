@@ -74,11 +74,19 @@ specific values:
 | `EASYPROXY_AGGREGATOR_ISSUE91_SUB_URL_B64` | Secret, optional | Encoded shared seed relay URL. |
 | `EASYPROXY_AGGREGATOR_ISSUE91_UPSTREAM_URL_B64` | Secret, optional | Encoded fallback upstream URL. |
 | `EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL` | Variable | Post-deploy artifact base URL. |
+| `EASYPROXY_AGGREGATOR_EFFECTIVE_URL` | Variable | Exact canonical stable URL: `<public-base>/subs/effective.txt`. |
 | `EASYPROXY_AGGREGATOR_ENABLE_SCHEDULE` | Variable | Enables scheduled runs when `true`. |
+| `EASYPROXY_AGGREGATOR_MIN_STABLE_NODES` | Variable, optional | Absolute promotion floor; defaults to `1`. |
+| `EASYPROXY_AGGREGATOR_MIN_SOURCE_COUNT` | Variable, optional | Absolute discovery-source floor; defaults to `1`. |
+| `EASYPROXY_AGGREGATOR_MAX_NODE_DROP_RATIO` | Variable, optional | Maximum relative node drop; defaults to `0.60`. |
+| `EASYPROXY_AGGREGATOR_MAX_SOURCE_DROP_RATIO` | Variable, optional | Maximum relative source drop; defaults to `0.80`. |
 
 These names are migration adapters, not a second topology authority. Resource
 identity and schedule decisions must move behind `easyproxyctl` rather than be
 reimplemented in workflow YAML.
+
+The safe object layout, promotion order, and recovery paths are documented in
+[`aggregator-publication.md`](aggregator-publication.md).
 
 ## Local scripts
 

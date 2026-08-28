@@ -16,9 +16,12 @@ Formal production recommendation:
 - Cloudflare Pages + Functions
 - D1 as the primary persistent store
 - aggregator discovery sync source:
-  - `https://sub.aiaimimi.com/internal/crawledsubs.json`
+  - `<aggregator-public-base>/internal/crawledsubs.json`
 - aggregator stable public source:
-  - `https://sub.aiaimimi.com/subs/clash.yaml`
+  - `<aggregator-public-base>/subs/effective.txt`
+
+The base URL is operator-owned and configured through repository variables;
+MiSub synchronization verifies the stable manifest before consuming it.
 
 Current deployed instance:
 

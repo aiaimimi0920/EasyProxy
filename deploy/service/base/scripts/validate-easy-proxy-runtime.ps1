@@ -277,7 +277,7 @@ if (-not $directValidated) {
 
 $fallbackSubscriptions = @(Get-EasyProxyRuntimeValue -Object $sourceSyncConfig -Name 'fallback_subscriptions' -Default @())
 if ($fallbackSubscriptions.Count -lt 1) {
-    $fallbackSubscriptions = @("https://sub.aiaimimi.com/subs/clash.yaml")
+    throw "Runtime config must define source_sync.fallback_subscriptions; no maintainer-owned fallback is assumed."
 }
 $null = Invoke-Audit `
     -ScenarioName "fallback-subscription" `

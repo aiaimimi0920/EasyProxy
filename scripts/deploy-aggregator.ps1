@@ -4,7 +4,6 @@ param(
     [string]$Ref = "main",
     [ValidateSet("bootstrap", "update")]
     [string]$DeploymentMode = "update",
-    [bool]$RunVerification = $true,
     [bool]$ForceDeploy = $false,
     [switch]$SkipSecretUpdate,
     [switch]$SkipWorkflowTrigger
@@ -30,7 +29,6 @@ if (-not $SkipSecretUpdate) {
 
 if (-not $SkipWorkflowTrigger) {
     Write-Host "Triggering native GitHub Actions workflow $Workflow on the current repository..." -ForegroundColor Cyan
-    $runVerificationValue = if ($RunVerification) { "true" } else { "false" }
     $forceDeployValue = if ($ForceDeploy) { "true" } else { "false" }
     Invoke-EasyProxyExternalCommand `
         -FilePath "gh" `
@@ -38,7 +36,6 @@ if (-not $SkipWorkflowTrigger) {
             "workflow", "run", $Workflow,
             "--ref", $Ref,
             "-f", "deployment_mode=$DeploymentMode",
-            "-f", "run_verification=$runVerificationValue",
             "-f", "force_deploy=$forceDeployValue"
         ) `
         -FailureMessage "Failed to trigger native aggregator workflow"

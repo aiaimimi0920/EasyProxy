@@ -9,9 +9,9 @@ Current runtime split:
 - GitHub Actions on `ubuntu-latest`
   - runs `subscribe/process.py --overwrite`
   - performs crawler and batch aggregation
-  - writes artifacts directly into the `aggregator` R2 bucket
+  - writes only release-scoped candidate objects into the configured R2 bucket
 - R2 custom domain
-  - serves published artifacts directly from `https://sub.aiaimimi.com`
+  - serves candidate, immutable release, stable, and last-known-good objects
 
 Removed from this monorepo boundary:
 
@@ -46,13 +46,16 @@ Retired legacy workflows kept only for history/manual inspection:
 
 ## Current Public Read Paths
 
-Published artifacts are now read directly from the bucket custom domain:
+Published stable artifacts are read from the fork operator's bucket custom
+domain. With a base URL of `https://sub.example.com`, the canonical paths are:
 
-- `https://sub.aiaimimi.com/subs/clash.yaml`
-- `https://sub.aiaimimi.com/subs/v2ray.txt`
-- `https://sub.aiaimimi.com/subs/singbox.json`
-- `https://sub.aiaimimi.com/subs/mixed.txt`
-- `https://sub.aiaimimi.com/internal/crawledsubs.json`
+- `https://sub.example.com/subs/clash.yaml`
+- `https://sub.example.com/subs/v2ray.txt`
+- `https://sub.example.com/subs/singbox.json`
+- `https://sub.example.com/subs/mixed.txt`
+- `https://sub.example.com/subs/effective.txt`
+- `https://sub.example.com/internal/crawledsubs.json`
+- `https://sub.example.com/manifests/stable.json`
 
 These paths are public now. There is no Worker-side token gate anymore.
 
@@ -70,6 +73,6 @@ Current note:
 - GitHub repository secrets and variables are documented in
   [docs/github-secrets.md](/C:/Users/Public/nas_home/AI/GameEditor/EasyProxy/docs/github-secrets.md).
 - GitHub Actions runtime and verification notes are documented in
-  the shared private deployment notes for the EasyProxy stack.
+  [`docs/aggregator-publication.md`](../../../docs/aggregator-publication.md).
 - The legacy external-repository dispatch path is retired; the active
   deployment and verification baseline is the native GitHub Actions batch flow above.

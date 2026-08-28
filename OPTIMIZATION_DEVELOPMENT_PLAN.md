@@ -1156,6 +1156,20 @@ connector、server IP 默认保留、Worker/Go helper/EasyProxy 真实流量验�
 
 ### Phase 5：Aggregator 安全发布
 
+状态：代码实现完成、阶段退出条件尚未验收，真实 R2/MiSub/EasyProxy 故障演练
+待 Phase 8（2026-08-29）。
+根工作流现将上游输出隔离到每次运行的 candidate，完成格式、公开读取、节点与
+来源下降门后发布 immutable release；stable 固定键逐对象验证，
+`manifests/stable.json` 最后提交，失败时从发布前快照恢复。由于 R2 不提供跨对象
+事务，这里的原子边界是 stable manifest，而不是声称所有兼容固定键同时切换。
+MiSub 同步前绑定并校验 stable manifest，EasyProxy 模板使用 fork-neutral stable
+fallback。当前环境未执行真实账户的 R2 写入失败注入、MiSub 同步和故障 fallback，
+因此不提前声明这些 Phase 8 退出条件已通过。
+
+P5-08 的“旧工作流删除”指根仓库不再保留或调用第二套旧发布入口；上游子模块
+自身的 workflows 作为 fork 同步参考继续存在，但嵌套子模块中的 workflow 不会在
+根仓库 Actions 中执行，也不属于根发布 authority。
+
 - P5-01 完成子模块化；
 - P5-02 定义用户 Fork 最小配置；
 - P5-03 生成版本化候选产物；

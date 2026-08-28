@@ -651,6 +651,7 @@ jobs:
         shell: bash
         env:
           DEPLOY_TARGET: ${{ inputs.target }}
+          AGGREGATOR_PUBLIC_BASE_URL: ${{ vars.EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL }}
           AGGREGATOR_EFFECTIVE_URL: ${{ vars.EASYPROXY_AGGREGATOR_EFFECTIVE_URL }}
           MISUB_PUBLIC_URL: ${{ vars.EASYPROXY_MISUB_PUBLIC_URL }}
           MISUB_ADDITIONAL_SUBSCRIPTIONS_JSON: ${{ vars.EASYPROXY_MISUB_ADDITIONAL_SUBSCRIPTIONS_JSON }}
@@ -665,8 +666,8 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install requests PyYAML
 
-          if [[ -z "${MISUB_PUBLIC_URL:-}" || -z "${MISUB_ADMIN_PASSWORD:-}" || -z "${MISUB_MANIFEST_TOKEN:-}" || -z "${ECH_WORKER_PUBLIC_URL:-}" || -z "${ECH_TOKEN:-}" || -z "${AGGREGATOR_EFFECTIVE_URL:-}" ]]; then
-            echo "::error::MiSub profile sync requires MISUB_PUBLIC_URL, MISUB_ADMIN_PASSWORD, MISUB_MANIFEST_TOKEN, ECH_WORKER_PUBLIC_URL, ECH_TOKEN, and AGGREGATOR_EFFECTIVE_URL."
+          if [[ -z "${MISUB_PUBLIC_URL:-}" || -z "${MISUB_ADMIN_PASSWORD:-}" || -z "${MISUB_MANIFEST_TOKEN:-}" || -z "${ECH_WORKER_PUBLIC_URL:-}" || -z "${ECH_TOKEN:-}" ]]; then
+            echo "::error::MiSub profile sync requires MISUB_PUBLIC_URL, MISUB_ADMIN_PASSWORD, MISUB_MANIFEST_TOKEN, ECH_WORKER_PUBLIC_URL, and ECH_TOKEN."
             exit 1
           fi
 
@@ -682,6 +683,15 @@ jobs:
             echo "::error::MiSub public URL is not reachable, cannot synchronize connector profile."
             exit 1
           fi
+
+          if [[ -z "${AGGREGATOR_PUBLIC_BASE_URL:-}" || -z "${AGGREGATOR_EFFECTIVE_URL:-}" ]]; then
+            echo "::error::MiSub runtime source sync requires AGGREGATOR_PUBLIC_BASE_URL and AGGREGATOR_EFFECTIVE_URL."
+            exit 1
+          fi
+          python scripts/verify-aggregator-stable.py \
+            --base-url "${AGGREGATOR_PUBLIC_BASE_URL}" \
+            --artifact-name public-effective \
+            --expected-url "${AGGREGATOR_EFFECTIVE_URL}"
 
           python - <<'PY'
           import json

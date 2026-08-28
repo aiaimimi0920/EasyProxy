@@ -16,11 +16,6 @@ env:
         options:
           - bootstrap
           - update
-      run_verification:
-        description: Verify public artifacts after publish
-        required: false
-        default: true
-        type: boolean
       force_deploy:
         description: Run even if no recent repository changes are present
         required: false
@@ -29,6 +24,10 @@ env:
 
 permissions:
   contents: read
+
+concurrency:
+  group: easyproxy-aggregator-publication
+  cancel-in-progress: false
 
 jobs:
   preflight:
@@ -119,15 +118,12 @@ jobs:
           set -euo pipefail
           if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
             mode="${{ inputs.deployment_mode }}"
-            run_verification="${{ inputs.run_verification }}"
             force_deploy="${{ inputs.force_deploy }}"
           else
             mode="update"
-            run_verification="true"
             force_deploy="false"
           fi
           echo "mode=${mode}" >> "${GITHUB_OUTPUT}"
-          echo "run_verification=${run_verification}" >> "${GITHUB_OUTPUT}"
           echo "force_deploy=${force_deploy}" >> "${GITHUB_OUTPUT}"
 
       - name: Detect relevant changes
@@ -150,6 +146,8 @@ jobs:
               deploy/upstreams/aggregator \
               scripts/deploy-aggregator.ps1 \
               scripts/materialize-aggregator-config.py \
+              scripts/materialize-aggregator-release.py \
+              scripts/promote-aggregator-release.py \
               scripts/verify-aggregator-publish.py \
               .github/workflows/deploy-aggregator.yml
           )
@@ -206,7 +204,26 @@ jobs:
           set -euo pipefail
           python scripts/materialize-aggregator-config.py \
             --template deploy/upstreams/aggregator/config/config.actions.r2.json \
-            --output upstreams/aggregator/subscribe/config/config.actions.runtime.json
+            --output upstreams/aggregator/subscribe/config/config.actions.base.runtime.json
+
+      - name: Prepare isolated candidate release
+        if: steps.change_gate.outputs.should_deploy == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_id="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_SHA:0:12}"
+          plan_path="${RUNNER_TEMP}/aggregator-publication-plan.json"
+          manifest_path="${RUNNER_TEMP}/aggregator-stable-manifest.json"
+          python scripts/materialize-aggregator-release.py \
+            --runtime-config upstreams/aggregator/subscribe/config/config.actions.base.runtime.json \
+            --run-id "${release_id}" \
+            --output-runtime-config upstreams/aggregator/subscribe/config/config.actions.runtime.json \
+            --output-plan "${plan_path}"
+          {
+            echo "EASYPROXY_AGGREGATOR_RELEASE_ID=${release_id}"
+            echo "EASYPROXY_AGGREGATOR_PUBLICATION_PLAN=${plan_path}"
+            echo "EASYPROXY_AGGREGATOR_STABLE_MANIFEST=${manifest_path}"
+          } >> "${GITHUB_ENV}"
 
       - name: Prefetch Issue #91 shared seed
         if: steps.change_gate.outputs.should_deploy == 'true'
@@ -227,15 +244,15 @@ jobs:
           set -euo pipefail
           python -u subscribe/process.py --overwrite -s subscribe/config/config.actions.runtime.json
 
-      - name: Verify published artifacts
-        if: steps.change_gate.outputs.should_deploy == 'true' && steps.deploy_mode.outputs.run_verification == 'true'
+      - name: Verify candidate core artifacts
+        if: steps.change_gate.outputs.should_deploy == 'true'
         shell: bash
         env:
           EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL: ${{ vars.EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL }}
         run: |
           set -euo pipefail
           if [[ -z "${EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL:-}" ]]; then
-            echo "::error::EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL must be set when run_verification=true."
+            echo "::error::EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL is required for candidate verification and safe promotion."
             exit 1
           fi
           python scripts/verify-aggregator-publish.py \
@@ -255,7 +272,7 @@ jobs:
           $summaryPath = Join-Path $env:RUNNER_TEMP "aggregator-effective-summary.json"
           python ./scripts/easyproxy_source_audit.py `
             --audit-id "aggregator-effective-${{ github.run_id }}" `
-            --subscription "$baseUrl/subs/clash.yaml" `
+            --subscription "$baseUrl/candidate/$env:EASYPROXY_AGGREGATOR_RELEASE_ID/subs/clash.yaml" `
             --output-path $summaryPath `
             --docker-network-name "EasyAiMi" `
             --keep-artifacts
@@ -270,42 +287,73 @@ jobs:
             --runtime-config upstreams/aggregator/subscribe/config/config.actions.runtime.json \
             --audit-summary "${EASYPROXY_AGGREGATOR_EFFECTIVE_AUDIT_SUMMARY}"
 
-      - name: Verify effective aggregator artifact
-        if: steps.change_gate.outputs.should_deploy == 'true' && steps.deploy_mode.outputs.run_verification == 'true'
+      - name: Verify complete candidate release
+        if: steps.change_gate.outputs.should_deploy == 'true'
         shell: bash
         env:
           EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL: ${{ vars.EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL }}
         run: |
           set -euo pipefail
-          python - <<'PY'
-          import json
-          import os
-          import requests
-          from pathlib import Path
+          python scripts/verify-aggregator-publish.py \
+            --base-url "${EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL}" \
+            --runtime-config upstreams/aggregator/subscribe/config/config.actions.runtime.json \
+            --require-all
 
-          runtime = json.loads(Path("upstreams/aggregator/subscribe/config/config.actions.runtime.json").read_text(encoding="utf-8"))
-          base_url = os.environ["EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL"].rstrip("/")
-          items = (runtime.get("storage") or {}).get("items") or {}
-          for item_name in ("public-effective", "public-effective-json"):
-              item = items.get(item_name) or {}
-              key = str(item.get("key") or "").strip()
-              if not key:
-                  raise RuntimeError(f"missing storage key for {item_name}")
-              url = f"{base_url}/{key.lstrip('/')}"
-              response = requests.get(url, timeout=30)
-              response.raise_for_status()
-              body = response.text.strip()
-              if not body:
-                  raise RuntimeError(f"{item_name} is empty: {url}")
-              print(f"verified {url}")
-          PY
+      - name: Promote candidate to stable with last-known-good recovery
+        if: steps.change_gate.outputs.should_deploy == 'true'
+        shell: bash
+        env:
+          EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL: ${{ vars.EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL }}
+          MIN_STABLE_NODES: ${{ vars.EASYPROXY_AGGREGATOR_MIN_STABLE_NODES }}
+          MIN_SOURCE_COUNT: ${{ vars.EASYPROXY_AGGREGATOR_MIN_SOURCE_COUNT }}
+          MAX_NODE_DROP_RATIO: ${{ vars.EASYPROXY_AGGREGATOR_MAX_NODE_DROP_RATIO }}
+          MAX_SOURCE_DROP_RATIO: ${{ vars.EASYPROXY_AGGREGATOR_MAX_SOURCE_DROP_RATIO }}
+        run: |
+          set -euo pipefail
+          aggregator_commit="$(git -C upstreams/aggregator rev-parse HEAD)"
+          python scripts/promote-aggregator-release.py \
+            --plan "${EASYPROXY_AGGREGATOR_PUBLICATION_PLAN}" \
+            --audit-summary "${EASYPROXY_AGGREGATOR_EFFECTIVE_AUDIT_SUMMARY}" \
+            --public-base-url "${EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL}" \
+            --root-commit "${GITHUB_SHA}" \
+            --aggregator-commit "${aggregator_commit}" \
+            --min-nodes "${MIN_STABLE_NODES:-1}" \
+            --min-sources "${MIN_SOURCE_COUNT:-1}" \
+            --max-node-drop-ratio "${MAX_NODE_DROP_RATIO:-0.60}" \
+            --max-source-drop-ratio "${MAX_SOURCE_DROP_RATIO:-0.80}" \
+            --output "${EASYPROXY_AGGREGATOR_STABLE_MANIFEST}"
+
+      - name: Re-verify canonical stable artifacts
+        if: steps.change_gate.outputs.should_deploy == 'true'
+        shell: bash
+        env:
+          EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL: ${{ vars.EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL }}
+          EASYPROXY_AGGREGATOR_EFFECTIVE_URL: ${{ vars.EASYPROXY_AGGREGATOR_EFFECTIVE_URL }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${EASYPROXY_AGGREGATOR_EFFECTIVE_URL:-}" ]]; then
+            echo "::error::EASYPROXY_AGGREGATOR_EFFECTIVE_URL must point at the canonical stable effective artifact."
+            exit 1
+          fi
+          python scripts/verify-aggregator-publish.py \
+            --base-url "${EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL}" \
+            --runtime-config upstreams/aggregator/subscribe/config/config.actions.base.runtime.json \
+            --require-all
+          python scripts/verify-aggregator-stable.py \
+            --base-url "${EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL}" \
+            --artifact-name public-effective \
+            --expected-url "${EASYPROXY_AGGREGATOR_EFFECTIVE_URL}"
 
       - name: Upload aggregator workflow log
         if: always() && steps.change_gate.outputs.should_deploy == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: aggregator-workflow-log
-          path: upstreams/aggregator/workflow.log
+          name: aggregator-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            upstreams/aggregator/workflow.log
+            ${{ runner.temp }}/aggregator-publication-plan.json
+            ${{ runner.temp }}/aggregator-effective-summary.json
+            ${{ runner.temp }}/aggregator-stable-manifest.json
           if-no-files-found: ignore
 
       - name: Write deployment summary
@@ -318,7 +366,11 @@ jobs:
             echo "## Aggregator deploy completed"
             echo
             echo "- mode: \`${{ steps.deploy_mode.outputs.mode }}\`"
-            echo "- verification: \`${{ steps.deploy_mode.outputs.run_verification }}\`"
+            echo "- verification: mandatory candidate, promotion, and stable gates passed"
             echo "- public base url: \`${EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL:-n/a}\`"
+            echo "- release id: \`${EASYPROXY_AGGREGATOR_RELEASE_ID}\`"
+            echo "- immutable manifest: \`${EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL%/}/releases/${EASYPROXY_AGGREGATOR_RELEASE_ID}/manifest.json\`"
+            echo "- stable manifest: \`${EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL%/}/manifests/stable.json\`"
+            echo "- last-known-good manifest: \`${EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL%/}/last-known-good/manifest.json\`"
             echo "- reason: \`${{ steps.change_gate.outputs.reason }}\`"
           } >> "${GITHUB_STEP_SUMMARY}"

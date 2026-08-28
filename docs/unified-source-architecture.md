@@ -58,12 +58,11 @@ Phase 1 defines three kinds:
 - stores `subscription`, `proxy_uri`, and `connector` entries with explicit
   `kind`
 - can auto-sync `upstreams/aggregator` exported subscriptions from
-  `https://sub.aiaimimi.com/internal/crawledsubs.json` as internal discovery
+  `<aggregator-public-base>/internal/crawledsubs.json` as internal discovery
   sources
 - re-probes those internal discovery sources inside MiSub during aggregator
   sync as a redundant operator-safety check
-- maintains a dedicated stable source for
-  `https://sub.aiaimimi.com/subs/clash.yaml`
+- maintains a dedicated stable source bound to the Aggregator stable manifest
 - maintains `aggregator-global` as the managed public profile seeded by the
   stable source and able to retain deployment-managed runtime proxy URIs plus
   configured connector references
@@ -234,9 +233,13 @@ Important boundary:
 `upstreams/aggregator` produces one canonical R2-backed subscription artifact
 per fallback profile.
 
-Current canonical public fallback URL:
+Canonical public fallback shape:
 
-- `https://sub.aiaimimi.com/subs/clash.yaml`
+- `<aggregator-public-base>/subs/effective.txt`
+
+The operator-specific base URL comes from topology. Publication writes
+`manifests/stable.json` last and retains the previous version under
+`last-known-good/`; see [`aggregator-publication.md`](aggregator-publication.md).
 
 Ownership rule:
 

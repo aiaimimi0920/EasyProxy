@@ -133,9 +133,14 @@ Current scheduler baseline:
   - supports `?source_ref=manifest:conn_zenproxy_primary` for exact ZenProxy
     connector visibility
 
-Current shared-default aggregator fallback URL:
+Fork-neutral aggregator fallback example:
 
-- `https://sub.aiaimimi.com/subs/clash.yaml`
+- `https://sub.example.com/subs/effective.txt`
+
+Replace the base domain with `cloudflare.resources.r2_public_base_url` from the
+operator topology. The path must stay bound to the `public-effective` entry in
+`manifests/stable.json`; see
+[`docs/aggregator-publication.md`](../../../docs/aggregator-publication.md).
 
 Recommended management probe target for ECH-heavy profiles:
 

@@ -31,9 +31,13 @@ def validate_v2ray_payload(content: bytes) -> None:
     if not text:
         raise RuntimeError("response body is empty")
     try:
-        base64.b64decode(text.encode("utf-8"), validate=False)
+        normalized = "".join(text.split())
+        normalized += "=" * (-len(normalized) % 4)
+        decoded = base64.b64decode(normalized.encode("ascii"), validate=True)
     except Exception as exc:  # pragma: no cover - defensive
         raise RuntimeError("response does not look like a V2Ray subscription payload") from exc
+    if not decoded.strip() or not any(scheme in decoded for scheme in (b"vmess://", b"vless://", b"trojan://", b"ss://", b"ssr://")):
+        raise RuntimeError("decoded V2Ray subscription does not contain supported proxy URIs")
 
 
 def fetch_and_validate(base_url: str, path: str, validator: Callable[[bytes], None]) -> None:
@@ -63,6 +67,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Verify published aggregator artifacts are readable and well-formed.")
     parser.add_argument("--base-url", required=True, help="Public base URL serving the aggregator artifacts.")
     parser.add_argument("--runtime-config", required=True, help="Materialized runtime config JSON.")
+    parser.add_argument(
+        "--require-all",
+        action="store_true",
+        help="Require every configured optional artifact instead of allowing a bootstrap-time absence.",
+    )
     args = parser.parse_args()
 
     runtime_path = pathlib.Path(args.runtime_config)
@@ -95,7 +104,10 @@ def main() -> int:
         key = items[item_name].get("key", "").strip()
         if not key:
             continue
-        fetch_and_check_optional(args.base_url, key, validator)
+        if args.require_all:
+            fetch_and_validate(args.base_url, key, validator)
+        else:
+            fetch_and_check_optional(args.base_url, key, validator)
 
     return 0
 

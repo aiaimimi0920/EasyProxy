@@ -181,6 +181,10 @@ deployment, GHCR publication, and GitHub Release publication. The PR validation
 entry delegates to `.github/workflows/reusable-validate.yml`; it is read-only
 and receives no production secrets.
 
+Aggregator uses candidate, immutable release, stable-manifest, and
+last-known-good layers. Fork configuration and failure recovery are documented
+in [`docs/aggregator-publication.md`](docs/aggregator-publication.md).
+
 ## `easyproxyctl`
 
 The first-party lifecycle CLI lives in `tools/easyproxyctl` and is shared by
