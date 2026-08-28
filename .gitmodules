@@ -4,3 +4,6 @@
 [submodule "upstreams/aggregator"]
 	path = upstreams/aggregator
 	url = https://github.com/aiaimimi0920/aggregator.git
+[submodule "upstreams/misub"]
+	path = upstreams/misub
+	url = https://github.com/aiaimimi0920/MiSub.git
