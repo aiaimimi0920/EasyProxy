@@ -1,0 +1,290 @@
+name: Rotate ECH Token
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+'on':
+  workflow_dispatch:
+    inputs:
+      confirm_worker_name:
+        description: Enter the exact configured Worker name
+        required: true
+        type: string
+      overlap_minutes:
+        description: Maximum old/new token overlap window
+        required: true
+        default: '30'
+        type: string
+      easyproxy_wait_seconds:
+        description: Time allowed for the dedicated EasyProxy validator to synchronize
+        required: true
+        default: '600'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: easyproxy-ech-token-rotation
+  cancel-in-progress: false
+
+jobs:
+  rotate:
+    name: Rotate with overlap, validation, and rollback
+    environment: easyproxy-ech-rotation
+    runs-on: ${{ fromJSON(vars.EASYPROXY_ROTATION_RUNNER || '["ubuntu-latest"]') }}
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: upstreams/ech-workers/go.mod
+          cache-dependency-path: upstreams/ech-workers/go.sum
+
+      - name: Install verification dependencies
+        run: python -m pip install requests websockets
+
+      - name: Validate rotation contract
+        id: contract
+        shell: bash
+        env:
+          CONFIRM_WORKER_NAME: ${{ inputs.confirm_worker_name }}
+          OVERLAP_MINUTES: ${{ inputs.overlap_minutes }}
+          ECH_TOKEN: ${{ secrets.ECH_TOKEN }}
+          ECH_TOKEN_NEXT: ${{ secrets.ECH_TOKEN_NEXT }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_EMAIL: ${{ secrets.CLOUDFLARE_AUTH_EMAIL }}
+          CLOUDFLARE_API_KEY: ${{ secrets.CLOUDFLARE_GLOBAL_API_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          MISUB_PUBLIC_URL: ${{ vars.EASYPROXY_MISUB_PUBLIC_URL }}
+          MISUB_ADMIN_PASSWORD: ${{ secrets.MISUB_ADMIN_PASSWORD }}
+          MISUB_MANIFEST_TOKEN: ${{ secrets.MISUB_MANIFEST_TOKEN }}
+          ECH_WORKER_PUBLIC_URL: ${{ vars.EASYPROXY_ECH_WORKER_PUBLIC_URL }}
+          EASYPROXY_BASE_URL: ${{ vars.EASYPROXY_ROTATION_BASE_URL }}
+          EASYPROXY_PROXY_URL: ${{ vars.EASYPROXY_ROTATION_PROXY_URL }}
+          EASYPROXY_MANAGEMENT_PASSWORD: ${{ secrets.EASYPROXY_MANAGEMENT_PASSWORD }}
+          REPOSITORY_ADMIN_TOKEN: ${{ secrets.EASYPROXY_REPOSITORY_ADMIN_TOKEN }}
+        run: |
+          set -euo pipefail
+          worker_name="$(python -c 'import json; print(json.load(open("workers/ech-workers-cloudflare/wrangler.jsonc", encoding="utf-8"))["name"])')"
+          [[ "$CONFIRM_WORKER_NAME" == "$worker_name" ]] || { echo "::error::Worker confirmation mismatch"; exit 1; }
+          for name in ECH_TOKEN ECH_TOKEN_NEXT CLOUDFLARE_ACCOUNT_ID MISUB_PUBLIC_URL MISUB_ADMIN_PASSWORD MISUB_MANIFEST_TOKEN ECH_WORKER_PUBLIC_URL EASYPROXY_BASE_URL EASYPROXY_PROXY_URL EASYPROXY_MANAGEMENT_PASSWORD REPOSITORY_ADMIN_TOKEN; do
+            [[ -n "${!name:-}" ]] || { echo "::error::$name is required"; exit 1; }
+          done
+          if [[ -z "${CLOUDFLARE_API_TOKEN:-}" && ( -z "${CLOUDFLARE_EMAIL:-}" || -z "${CLOUDFLARE_API_KEY:-}" ) ]]; then
+            echo "::error::Cloudflare API credentials are required"
+            exit 1
+          fi
+          python - <<'PY'
+          import os
+          import re
+          old = os.environ["ECH_TOKEN"]
+          new = os.environ["ECH_TOKEN_NEXT"]
+          valid = re.compile(r"^[A-Za-z0-9._~-]{32,256}$")
+          if old == new:
+              raise SystemExit("ECH_TOKEN_NEXT must differ from ECH_TOKEN")
+          if not valid.fullmatch(old) or not valid.fullmatch(new):
+              raise SystemExit("ECH tokens must be 32-256 URL-safe protocol-token characters")
+          minutes = int(os.environ["OVERLAP_MINUTES"])
+          if not 5 <= minutes <= 240:
+              raise SystemExit("overlap_minutes must be between 5 and 240")
+          PY
+          expiry="$(python - <<'PY'
+          import datetime
+          import os
+          minutes = int(os.environ["OVERLAP_MINUTES"])
+          print((datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=minutes)).isoformat())
+          PY
+          )"
+          connector_url="$(python - <<'PY'
+          import os
+          from urllib.parse import urlparse, urlunparse
+          parsed = urlparse(os.environ["ECH_WORKER_PUBLIC_URL"].rstrip("/"))
+          if not parsed.hostname:
+              raise SystemExit("ECH_WORKER_PUBLIC_URL is invalid")
+          port = parsed.port or 443
+          print(urlunparse((parsed.scheme or "https", f"{parsed.hostname}:{port}", "", "", "", "")))
+          PY
+          )"
+          python scripts/verify-cloudflare-worker-identity.py --account-id "$CLOUDFLARE_ACCOUNT_ID" --worker-name "$worker_name" --mode update
+          umask 077
+          printf '%s' "$ECH_TOKEN" > "${RUNNER_TEMP}/easyproxy-ech-old-token"
+          touch "${RUNNER_TEMP}/easyproxy-ech-rotation-started"
+          echo "worker_name=${worker_name}" >> "$GITHUB_OUTPUT"
+          echo "previous_expires_at=${expiry}" >> "$GITHUB_OUTPUT"
+          echo "connector_url=${connector_url}" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy overlap version without interrupting the old token
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_EMAIL: ${{ secrets.CLOUDFLARE_AUTH_EMAIL }}
+          CLOUDFLARE_API_KEY: ${{ secrets.CLOUDFLARE_GLOBAL_API_KEY }}
+          ECH_TOKEN: ${{ secrets.ECH_TOKEN }}
+          ECH_TOKEN_NEXT: ${{ secrets.ECH_TOKEN_NEXT }}
+          PREVIOUS_EXPIRES_AT: ${{ steps.contract.outputs.previous_expires_at }}
+        run: |
+          set -euo pipefail
+          config=workers/ech-workers-cloudflare/wrangler.jsonc
+          printf '%s' "$ECH_TOKEN" | npx --yes wrangler@4 secret put ECH_TOKEN_PREVIOUS --config "$config"
+          printf '%s' "$PREVIOUS_EXPIRES_AT" | npx --yes wrangler@4 secret put ECH_TOKEN_PREVIOUS_EXPIRES_AT --config "$config"
+          npx --yes wrangler@4 deploy --config "$config"
+          printf '%s' "$ECH_TOKEN_NEXT" | npx --yes wrangler@4 secret put ECH_TOKEN --config "$config"
+
+      - name: Verify both tokens through real Worker tunnels
+        shell: bash
+        env:
+          ECH_WORKER_PUBLIC_URL: ${{ vars.EASYPROXY_ECH_WORKER_PUBLIC_URL }}
+          ECH_TOKEN: ${{ secrets.ECH_TOKEN_NEXT }}
+          ECH_TOKEN_PREVIOUS: ${{ secrets.ECH_TOKEN }}
+        run: python scripts/verify-ech-worker-deploy.py --base-url "$ECH_WORKER_PUBLIC_URL" --previous-token accepted
+
+      - name: Build Go helper
+        working-directory: upstreams/ech-workers
+        run: go build -trimpath -o "${RUNNER_TEMP}/ech-helper" .
+
+      - name: Verify old and new tokens through the Go helper
+        shell: bash
+        env:
+          ECH_WORKER_PUBLIC_URL: ${{ vars.EASYPROXY_ECH_WORKER_PUBLIC_URL }}
+          ECH_TOKEN: ${{ secrets.ECH_TOKEN_NEXT }}
+          ECH_TOKEN_PREVIOUS: ${{ secrets.ECH_TOKEN }}
+        run: |
+          set -euo pipefail
+          python scripts/verify-ech-helper-e2e.py --helper "${RUNNER_TEMP}/ech-helper" --worker-url "$ECH_WORKER_PUBLIC_URL"
+          ECH_TOKEN="$ECH_TOKEN_PREVIOUS" python scripts/verify-ech-helper-e2e.py --helper "${RUNNER_TEMP}/ech-helper" --worker-url "$ECH_WORKER_PUBLIC_URL"
+
+      - name: Switch MiSub through a validated candidate connector
+        shell: bash
+        env:
+          MISUB_ADMIN_PASSWORD: ${{ secrets.MISUB_ADMIN_PASSWORD }}
+          MISUB_MANIFEST_TOKEN: ${{ secrets.MISUB_MANIFEST_TOKEN }}
+          ECH_TOKEN: ${{ secrets.ECH_TOKEN_NEXT }}
+          EASYPROXY_MANAGEMENT_PASSWORD: ${{ secrets.EASYPROXY_MANAGEMENT_PASSWORD }}
+          MISUB_PUBLIC_URL: ${{ vars.EASYPROXY_MISUB_PUBLIC_URL }}
+          CONNECTOR_PROFILE_ID: ${{ vars.EASYPROXY_MISUB_CONNECTOR_PROFILE_ID }}
+          RUNTIME_PROFILE_ID: ${{ vars.EASYPROXY_MISUB_MANIFEST_PROFILE_ID }}
+          EASYPROXY_BASE_URL: ${{ vars.EASYPROXY_ROTATION_BASE_URL }}
+          EASYPROXY_PROXY_URL: ${{ vars.EASYPROXY_ROTATION_PROXY_URL }}
+          EASYPROXY_WAIT_SECONDS: ${{ inputs.easyproxy_wait_seconds }}
+          CONNECTOR_URL: ${{ steps.contract.outputs.connector_url }}
+        run: |
+          set -euo pipefail
+          python scripts/sync-misub-ech-profile.py \
+            --base-url "$MISUB_PUBLIC_URL" \
+            --profile-id "${CONNECTOR_PROFILE_ID:-easyproxies-ech-runtime}" \
+            --attach-profile-id "${RUNTIME_PROFILE_ID:-aggregator-global}" \
+            --worker-url "$CONNECTOR_URL" \
+            --candidate-easyproxy-base-url "$EASYPROXY_BASE_URL" \
+            --candidate-easyproxy-proxy-url "$EASYPROXY_PROXY_URL" \
+            --candidate-easyproxy-profile-id "${RUNTIME_PROFILE_ID:-aggregator-global}" \
+            --candidate-easyproxy-wait-seconds "$EASYPROXY_WAIT_SECONDS"
+
+      - name: Persist the new canonical repository secret
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.EASYPROXY_REPOSITORY_ADMIN_TOKEN }}
+          ECH_TOKEN_NEXT: ${{ secrets.ECH_TOKEN_NEXT }}
+        run: printf '%s' "$ECH_TOKEN_NEXT" | gh secret set ECH_TOKEN --repo "$GITHUB_REPOSITORY"
+
+      - name: Revoke and remove the old Worker token
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_EMAIL: ${{ secrets.CLOUDFLARE_AUTH_EMAIL }}
+          CLOUDFLARE_API_KEY: ${{ secrets.CLOUDFLARE_GLOBAL_API_KEY }}
+          ECH_WORKER_PUBLIC_URL: ${{ vars.EASYPROXY_ECH_WORKER_PUBLIC_URL }}
+          ECH_TOKEN: ${{ secrets.ECH_TOKEN_NEXT }}
+        run: |
+          set -euo pipefail
+          config=workers/ech-workers-cloudflare/wrangler.jsonc
+          old_token="$(cat "${RUNNER_TEMP}/easyproxy-ech-old-token")"
+          printf '1970-01-01T00:00:00Z' | npx --yes wrangler@4 secret put ECH_TOKEN_PREVIOUS_EXPIRES_AT --config "$config"
+          ECH_TOKEN_PREVIOUS="$old_token" python scripts/verify-ech-worker-deploy.py --base-url "$ECH_WORKER_PUBLIC_URL" --previous-token rejected
+          printf 'y\n' | npx --yes wrangler@4 secret delete ECH_TOKEN_PREVIOUS --config "$config"
+          printf 'y\n' | npx --yes wrangler@4 secret delete ECH_TOKEN_PREVIOUS_EXPIRES_AT --config "$config"
+          ECH_TOKEN_PREVIOUS="$old_token" python scripts/verify-ech-worker-deploy.py --base-url "$ECH_WORKER_PUBLIC_URL" --previous-token rejected
+
+      - name: Restore the old token and connector after any failure
+        if: ${{ failure() }}
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_EMAIL: ${{ secrets.CLOUDFLARE_AUTH_EMAIL }}
+          CLOUDFLARE_API_KEY: ${{ secrets.CLOUDFLARE_GLOBAL_API_KEY }}
+          GH_TOKEN: ${{ secrets.EASYPROXY_REPOSITORY_ADMIN_TOKEN }}
+          MISUB_ADMIN_PASSWORD: ${{ secrets.MISUB_ADMIN_PASSWORD }}
+          MISUB_MANIFEST_TOKEN: ${{ secrets.MISUB_MANIFEST_TOKEN }}
+          ECH_TOKEN_NEXT: ${{ secrets.ECH_TOKEN_NEXT }}
+          ECH_WORKER_PUBLIC_URL: ${{ vars.EASYPROXY_ECH_WORKER_PUBLIC_URL }}
+          MISUB_PUBLIC_URL: ${{ vars.EASYPROXY_MISUB_PUBLIC_URL }}
+          CONNECTOR_PROFILE_ID: ${{ vars.EASYPROXY_MISUB_CONNECTOR_PROFILE_ID }}
+          RUNTIME_PROFILE_ID: ${{ vars.EASYPROXY_MISUB_MANIFEST_PROFILE_ID }}
+          CONNECTOR_URL: ${{ steps.contract.outputs.connector_url }}
+        run: |
+          [[ -f "${RUNNER_TEMP}/easyproxy-ech-rotation-started" ]] || exit 0
+          set +e
+          failures=0
+          old_token="$(cat "${RUNNER_TEMP}/easyproxy-ech-old-token")"
+          config=workers/ech-workers-cloudflare/wrangler.jsonc
+          rollback_expiry="$(python -c 'import datetime; print((datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(minutes=30)).isoformat())')"
+          printf '%s' "$ECH_TOKEN_NEXT" | npx --yes wrangler@4 secret put ECH_TOKEN_PREVIOUS --config "$config" || failures=1
+          printf '%s' "$rollback_expiry" | npx --yes wrangler@4 secret put ECH_TOKEN_PREVIOUS_EXPIRES_AT --config "$config" || failures=1
+          npx --yes wrangler@4 deploy --config "$config" || failures=1
+          printf '%s' "$old_token" | npx --yes wrangler@4 secret put ECH_TOKEN --config "$config" || failures=1
+          ECH_TOKEN="$old_token" python scripts/verify-ech-worker-deploy.py --base-url "$ECH_WORKER_PUBLIC_URL" || failures=1
+          if [[ "$failures" -eq 0 ]]; then
+            ECH_TOKEN="$old_token" python scripts/sync-misub-ech-profile.py \
+              --base-url "$MISUB_PUBLIC_URL" \
+              --profile-id "${CONNECTOR_PROFILE_ID:-easyproxies-ech-runtime}" \
+              --attach-profile-id "${RUNTIME_PROFILE_ID:-aggregator-global}" \
+              --worker-url "$CONNECTOR_URL" || failures=1
+          fi
+          if [[ "$failures" -eq 0 ]]; then
+            printf '%s' "$old_token" | gh secret set ECH_TOKEN --repo "$GITHUB_REPOSITORY" || failures=1
+          fi
+          if [[ "$failures" -eq 0 ]]; then
+            printf '1970-01-01T00:00:00Z' | npx --yes wrangler@4 secret put ECH_TOKEN_PREVIOUS_EXPIRES_AT --config "$config" || failures=1
+            ECH_TOKEN="$old_token" ECH_TOKEN_PREVIOUS="$ECH_TOKEN_NEXT" python scripts/verify-ech-worker-deploy.py --base-url "$ECH_WORKER_PUBLIC_URL" --previous-token rejected || failures=1
+          fi
+          if [[ "$failures" -eq 0 ]]; then
+            printf 'y\n' | npx --yes wrangler@4 secret delete ECH_TOKEN_PREVIOUS --config "$config" || failures=1
+            printf 'y\n' | npx --yes wrangler@4 secret delete ECH_TOKEN_PREVIOUS_EXPIRES_AT --config "$config" || failures=1
+          else
+            echo "::error::Automatic rollback did not complete; both tokens were left overlapped when possible."
+          fi
+          exit "$failures"
+
+      - name: Remove local token material
+        if: ${{ always() }}
+        shell: bash
+        run: rm -f "${RUNNER_TEMP}/easyproxy-ech-old-token" "${RUNNER_TEMP}/easyproxy-ech-rotation-started"
+
+      - name: Rotation summary
+        if: ${{ success() }}
+        shell: bash
+        run: |
+          {
+            echo "## ECH token rotation completed"
+            echo
+            echo "- worker: \`${{ steps.contract.outputs.worker_name }}\`"
+            echo "- overlap: old and new tokens passed Worker and helper tunnels"
+            echo "- connector: candidate validated by EasyProxy before final switch"
+            echo "- revocation: old token rejected and removed"
+          } >> "$GITHUB_STEP_SUMMARY"

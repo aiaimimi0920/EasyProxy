@@ -55,6 +55,10 @@ For GitHub-hosted deployment, store secret values in a protected GitHub
 Environment and the account/zone IDs in repository variables. See
 [`secrets-and-permissions.md`](secrets-and-permissions.md).
 
+Do not replace `ECH_TOKEN` as an update shortcut. Configure `ECH_TOKEN_NEXT`
+only when running the protected rotation workflow described in
+[`ech-lifecycle.md`](ech-lifecycle.md).
+
 ## 4. Deploy the local runtime
 
 Build from this checkout:

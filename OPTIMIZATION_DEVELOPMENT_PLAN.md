@@ -1131,6 +1131,12 @@ manifest build/verify、根 38 项测试、33 个 PowerShell 文件解析、Pyth
 
 ### Phase 4：ECH Worker 生命周期
 
+状态：实现完成，真实账户验收待 Phase 8（2026-08-29）。普通更新先证明
+现有 Token 有效并拒绝隐式轮换；独立轮换工作流实现限时双 Token、候选
+connector、server IP 默认保留、Worker/Go helper/EasyProxy 真实流量验证、
+旧 Token 撤销和保留双 Token 的失败回滚。当前环境没有 Cloudflare、MiSub、
+专用 EasyProxy 验证器凭据，因此尚未声明下列真实流量退出条件已通过。
+
 - P4-01 固定 Worker 资源身份；
 - P4-02 区分 bootstrap、update 和 rotate；
 - P4-03 实现双 Token 过渡；

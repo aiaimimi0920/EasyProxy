@@ -94,6 +94,8 @@ $env:R2_SECRET_ACCESS_KEY = '<r2-secret>'
 
 Do not commit those values. See
 [`docs/secrets-and-permissions.md`](docs/secrets-and-permissions.md).
+Ordinary ECH deployment preserves `ECH_TOKEN`; use the protected
+[`Rotate ECH Token`](docs/ech-lifecycle.md) workflow for a dual-token rotation.
 
 ## Local EasyProxy Deployment
 

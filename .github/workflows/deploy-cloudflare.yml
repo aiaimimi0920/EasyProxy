@@ -86,6 +86,15 @@ jobs:
         run: |
           python -m unittest discover -s "tests" -p "test_*.py" -v
 
+      - name: Run ECH Worker authentication tests
+        shell: pwsh
+        run: node --test workers/ech-workers-cloudflare/src/auth.test.mjs
+
+      - name: Run ECH helper tests
+        shell: pwsh
+        working-directory: upstreams/ech-workers
+        run: go test ./...
+
       - name: Run aggregator regression tests
         shell: pwsh
         run: |
@@ -451,6 +460,35 @@ jobs:
             fi
           fi
 
+      - name: Resolve exact Worker identity
+        id: worker_identity
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_EMAIL: ${{ secrets.CLOUDFLARE_AUTH_EMAIL }}
+          CLOUDFLARE_API_KEY: ${{ secrets.CLOUDFLARE_GLOBAL_API_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DEPLOYMENT_MODE: ${{ inputs.deployment_mode }}
+        run: |
+          set -euo pipefail
+          worker_name="$(python -c 'import json; print(json.load(open("workers/ech-workers-cloudflare/wrangler.jsonc", encoding="utf-8"))["name"])')"
+          python scripts/verify-cloudflare-worker-identity.py \
+            --account-id "${CLOUDFLARE_ACCOUNT_ID}" \
+            --worker-name "${worker_name}" \
+            --mode "${DEPLOYMENT_MODE}"
+          echo "worker_name=${worker_name}" >> "$GITHUB_OUTPUT"
+
+      - name: Prove update is not an implicit token rotation
+        if: ${{ inputs.deployment_mode == 'update' }}
+        shell: bash
+        env:
+          ECH_WORKER_PUBLIC_URL: ${{ vars.EASYPROXY_ECH_WORKER_PUBLIC_URL }}
+          ECH_TOKEN: ${{ secrets.ECH_TOKEN }}
+        run: |
+          set -euo pipefail
+          python -m pip install requests websockets
+          python scripts/verify-ech-worker-deploy.py --base-url "$ECH_WORKER_PUBLIC_URL"
+
       - name: Sync ech-workers-cloudflare secret
         shell: bash
         env:
@@ -477,12 +515,20 @@ jobs:
         if: ${{ inputs.run_verification }}
         shell: bash
         env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_EMAIL: ${{ secrets.CLOUDFLARE_AUTH_EMAIL }}
+          CLOUDFLARE_API_KEY: ${{ secrets.CLOUDFLARE_GLOBAL_API_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           ECH_WORKER_PUBLIC_URL: ${{ vars.EASYPROXY_ECH_WORKER_PUBLIC_URL }}
           ECH_TOKEN: ${{ secrets.ECH_TOKEN }}
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
           python -m pip install requests websockets
+          python scripts/verify-cloudflare-worker-identity.py \
+            --account-id "${CLOUDFLARE_ACCOUNT_ID}" \
+            --worker-name "${{ steps.worker_identity.outputs.worker_name }}" \
+            --mode verify
           python scripts/verify-ech-worker-deploy.py --base-url "${ECH_WORKER_PUBLIC_URL}"
 
       - name: Worker deploy summary
@@ -493,6 +539,7 @@ jobs:
             echo
             echo "- mode: \`${{ inputs.deployment_mode }}\`"
             echo "- worker config: \`workers/ech-workers-cloudflare/wrangler.jsonc\`"
+            echo "- worker name: \`${{ steps.worker_identity.outputs.worker_name }}\`"
             echo "- public url: \`${{ vars.EASYPROXY_ECH_WORKER_PUBLIC_URL || 'n/a' }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 

@@ -61,6 +61,11 @@ Verification is local/control-plane attestation. The deploy workflow additionall
 
 Runtime verifier secrets are read from environment variables. Never pass passwords, manifest tokens, access tokens, cookies, or backup passphrases as command-line arguments.
 
+Worker update also performs an exact script-name lookup before deployment.
+Token rotation is not part of update; its overlap, connector switch, real
+traffic validation, revocation, and rollback contract is documented in
+[`ech-lifecycle.md`](ech-lifecycle.md).
+
 ## Migrations
 
 MiSub migrations live in `upstreams/misub/migrations` and are applied with:

@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import os
-import time
 import sys
+import time
 from urllib.parse import urlparse, urlunparse
 
 import requests
@@ -41,9 +42,73 @@ def to_websocket_url(base_url: str) -> str:
     return urlunparse((scheme, parsed.netloc, parsed.path or "/", "", "", ""))
 
 
+def open_websocket(ws_url: str, token: str):
+    return websockets.sync.client.connect(
+        ws_url,
+        subprotocols=[token],
+        open_timeout=20,
+        close_timeout=5,
+    )
+
+
+def verify_token_accepted(ws_url: str, token: str, label: str) -> None:
+    websocket = retry(label, 10, 5, lambda: open_websocket(ws_url, token))
+    with websocket:
+        ensure(websocket.subprotocol == token, f"{label} did not echo the expected subprotocol")
+
+
+def verify_token_rejected(ws_url: str, token: str, label: str) -> None:
+    try:
+        websocket = open_websocket(ws_url, token)
+    except Exception as exc:
+        status = getattr(exc, "status_code", None)
+        response = getattr(exc, "response", None)
+        if status is None and response is not None:
+            status = getattr(response, "status_code", None)
+        ensure(status == 401, f"{label} failed for an unexpected reason: {exc}")
+        return
+    websocket.close()
+    raise RuntimeError(f"{label} unexpectedly established a WebSocket")
+
+
+def verify_tcp_tunnel(ws_url: str, token: str, target: str, host_header: str) -> None:
+    request = (
+        f"GET / HTTP/1.1\r\nHost: {host_header}\r\n"
+        "Connection: close\r\nUser-Agent: EasyProxy-ECH-Verify\r\n\r\n"
+    ).encode("ascii")
+    command = f"CONNECT:{target}|{base64.b64encode(request).decode('ascii')}|"
+    websocket = retry("ECH worker TCP tunnel", 5, 5, lambda: open_websocket(ws_url, token))
+    response = bytearray()
+    with websocket:
+        websocket.send(command)
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            message = websocket.recv(timeout=max(0.1, deadline - time.monotonic()))
+            if message == "CONNECTED":
+                continue
+            if isinstance(message, str):
+                ensure(not message.startswith("ERROR:"), message)
+                if message == "CLOSE":
+                    break
+                response.extend(message.encode("utf-8"))
+            else:
+                response.extend(message)
+            if b"HTTP/1." in response and b"\r\n\r\n" in response:
+                break
+    ensure(response.startswith(b"HTTP/1."), "ECH worker tunnel did not return an HTTP response")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Verify ech-workers-cloudflare deployment with HTTP and WebSocket probes.")
     parser.add_argument("--base-url", required=True)
+    parser.add_argument("--tunnel-target", default="example.com:80")
+    parser.add_argument("--tunnel-host", default="example.com")
+    parser.add_argument(
+        "--previous-token",
+        choices=("skip", "accepted", "rejected"),
+        default="skip",
+        help="Expected state for ECH_TOKEN_PREVIOUS during a rotation.",
+    )
     args = parser.parse_args()
 
     token = os.environ.get("ECH_TOKEN", "")
@@ -54,12 +119,22 @@ def main() -> int:
     ensure("WebSocket Proxy Server" in response.text, "Worker root response did not match expected banner")
 
     ws_url = to_websocket_url(args.base_url)
-    def open_ws():
-        return websockets.sync.client.connect(ws_url, subprotocols=[token], open_timeout=20, close_timeout=5)
+    verify_token_accepted(ws_url, token, "ECH worker current-token probe")
+    verify_tcp_tunnel(ws_url, token, args.tunnel_target, args.tunnel_host)
 
-    websocket = retry("ECH worker WebSocket probe", 10, 5, open_ws)
-    with websocket:
-        ensure(websocket.subprotocol == token, "Worker WebSocket handshake did not echo the expected subprotocol")
+    rejected_token = "easyproxy-invalid-token"
+    while rejected_token in {token, os.environ.get("ECH_TOKEN_PREVIOUS", "")}:
+        rejected_token += "-x"
+    verify_token_rejected(ws_url, rejected_token, "ECH worker invalid-token probe")
+
+    if args.previous_token != "skip":
+        previous = os.environ.get("ECH_TOKEN_PREVIOUS", "")
+        ensure(previous != "", "ECH_TOKEN_PREVIOUS is required for previous-token verification")
+        if args.previous_token == "accepted":
+            verify_token_accepted(ws_url, previous, "ECH worker previous-token probe")
+            verify_tcp_tunnel(ws_url, previous, args.tunnel_target, args.tunnel_host)
+        else:
+            verify_token_rejected(ws_url, previous, "ECH worker revoked-token probe")
 
     print(f"verified {args.base_url}")
     return 0

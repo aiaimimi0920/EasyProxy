@@ -8,6 +8,7 @@ REUSABLE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "reusable-validate.yml
 CLOUDFLARE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "deploy-cloudflare.yml"
 BACKUP_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "backup-misub.yml"
 RESTORE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "restore-misub.yml"
+ROTATE_ECH_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "rotate-ech-token.yml"
 
 
 class ValidateWorkflowContractTests(unittest.TestCase):
@@ -18,6 +19,7 @@ class ValidateWorkflowContractTests(unittest.TestCase):
         cls.cloudflare_workflow = CLOUDFLARE_WORKFLOW.read_text(encoding="utf-8")
         cls.backup_workflow = BACKUP_WORKFLOW.read_text(encoding="utf-8")
         cls.restore_workflow = RESTORE_WORKFLOW.read_text(encoding="utf-8")
+        cls.rotate_ech_workflow = ROTATE_ECH_WORKFLOW.read_text(encoding="utf-8")
 
     def test_root_ci_checks_go_format_and_vet(self):
         self.assertIn("uses: ./.github/workflows/reusable-validate.yml", self.workflow)
@@ -56,6 +58,25 @@ class ValidateWorkflowContractTests(unittest.TestCase):
         self.assertIn("DRILL_TARGET_NAME", self.restore_workflow)
         self.assertIn("Refusing ambiguous drill cleanup", self.restore_workflow)
         self.assertIn("environment: easyproxy-misub-restore", self.restore_workflow)
+
+    def test_ordinary_ech_update_preserves_the_canonical_token(self):
+        self.assertIn("secrets.ECH_TOKEN", self.cloudflare_workflow)
+        self.assertNotIn("ECH_TOKEN_NEXT", self.cloudflare_workflow)
+        self.assertIn("verify-cloudflare-worker-identity.py", self.cloudflare_workflow)
+        self.assertIn("Prove update is not an implicit token rotation", self.cloudflare_workflow)
+
+    def test_ech_rotation_has_overlap_candidate_revocation_and_rollback(self):
+        workflow = self.rotate_ech_workflow
+        self.assertIn("environment: easyproxy-ech-rotation", workflow)
+        self.assertIn("ECH_TOKEN_PREVIOUS_EXPIRES_AT", workflow)
+        self.assertIn("--previous-token accepted", workflow)
+        self.assertIn("--candidate-easyproxy-base-url", workflow)
+        self.assertIn("Persist the new canonical repository secret", workflow)
+        self.assertIn("--previous-token rejected", workflow)
+        self.assertIn("Restore the old token and connector after any failure", workflow)
+
+    def test_ech_rotation_does_not_put_tokens_in_process_arguments(self):
+        self.assertNotIn("--token", self.rotate_ech_workflow)
 
 
 if __name__ == "__main__":

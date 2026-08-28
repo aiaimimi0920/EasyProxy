@@ -1,12 +1,14 @@
 import { connect } from "cloudflare:sockets";
 
+import { selectAcceptedToken } from "./auth.mjs";
+
 const encoder = new TextEncoder();
 
 export default {
   async fetch(request, env) {
     try {
-      const expectedToken = String(env.ECH_TOKEN || "").trim();
-      if (!expectedToken) {
+      const selected = selectAcceptedToken(request.headers.get("Sec-WebSocket-Protocol"), env);
+      if (!selected.configured) {
         return new Response("ECH_TOKEN is not configured", { status: 503 });
       }
 
@@ -17,7 +19,7 @@ export default {
           : new Response("Expected WebSocket", { status: 426 });
       }
 
-      if (expectedToken && request.headers.get("Sec-WebSocket-Protocol") !== expectedToken) {
+      if (!selected.token) {
         return new Response("Unauthorized", { status: 401 });
       }
 
@@ -29,9 +31,7 @@ export default {
         status: 101,
         webSocket: client
       };
-      if (expectedToken) {
-        responseInit.headers = { "Sec-WebSocket-Protocol": expectedToken };
-      }
+      responseInit.headers = { "Sec-WebSocket-Protocol": selected.token };
       return new Response(null, responseInit);
     } catch (err) {
       return new Response(String(err), { status: 500 });

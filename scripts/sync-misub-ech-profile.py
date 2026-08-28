@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -140,11 +142,62 @@ def normalize_existing_sources(
         if not source_id.startswith(prefix):
             continue
         existing_sources.append(source)
-        connector_cfg = source.get("connector_config") or {}
+        connector_cfg = source_connector_config(source)
         server_ip = str(connector_cfg.get("server_ip", "")).strip()
         if server_ip:
             server_ips.append(server_ip)
     return existing_sources, server_ips
+
+
+def source_connector_config(source: dict[str, Any]) -> dict[str, Any]:
+    direct = source.get("connector_config")
+    if isinstance(direct, dict) and direct:
+        return direct
+    options = source.get("options")
+    nested = options.get("connector_config") if isinstance(options, dict) else None
+    return nested if isinstance(nested, dict) else {}
+
+
+def select_server_ips(explicit: list[str], existing: list[str], drop_existing: bool) -> list[str]:
+    selected = [str(item).strip() for item in explicit if str(item).strip()]
+    if selected:
+        return normalize_string_array(selected)
+    if drop_existing:
+        return []
+    return normalize_string_array(existing)
+
+
+def post_misub_state(session, base_url: str, payload: dict[str, Any], label: str) -> None:
+    response = retry(label, 10, 5, lambda: session.post(base_url + "api/misubs", json=payload, timeout=60))
+    response.raise_for_status()
+
+
+def validate_manifest_profiles(
+    session,
+    base_url: str,
+    manifest_token: str,
+    profile_ids: list[str],
+    source_ids: list[str],
+    worker_url: str,
+    access_token: str,
+) -> None:
+    for profile_id in normalize_string_array(profile_ids):
+        response = retry(
+            f"MiSub connector manifest {profile_id}",
+            10,
+            5,
+            lambda current=profile_id: session.get(
+                base_url + f"api/manifest/{current}",
+                headers={"Authorization": f"Bearer {manifest_token}"},
+                timeout=30,
+            ),
+        )
+        response.raise_for_status()
+        payload = response.json()
+        ensure(payload.get("success") is True, f"MiSub manifest {profile_id} did not report success")
+        validate_managed_connector_sources(
+            payload.get("sources") or [], source_ids, worker_url, access_token
+        )
 
 
 def build_sources(
@@ -206,10 +259,18 @@ def main() -> int:
     parser.add_argument("--source-name-prefix", default="ECH Worker Preferred")
     parser.add_argument("--source-group", default="ECH Connectors")
     parser.add_argument("--notes-prefix", default="Preferred Cloudflare entry IP")
-    parser.add_argument("--preserve-server-ips", action="store_true")
+    parser.add_argument(
+        "--drop-server-ips",
+        action="store_true",
+        help="Discard existing managed server_ip values. Preservation is the safe default.",
+    )
     parser.add_argument("--server-ip", action="append", default=[])
     parser.add_argument("--remove-profile-id", action="append", default=[])
     parser.add_argument("--attach-profile-id", action="append", default=[])
+    parser.add_argument("--candidate-easyproxy-base-url", default="")
+    parser.add_argument("--candidate-easyproxy-proxy-url", default="")
+    parser.add_argument("--candidate-easyproxy-profile-id", default="")
+    parser.add_argument("--candidate-easyproxy-wait-seconds", type=int, default=600)
     args = parser.parse_args()
 
     admin_password = os.environ.get("MISUB_ADMIN_PASSWORD", "")
@@ -248,13 +309,18 @@ def main() -> int:
     profile = find_profile(profiles, [args.profile_id, args.legacy_profile_id])
 
     existing_sources, existing_server_ips = normalize_existing_sources(misubs, args.source_id_prefix)
-    explicit_server_ips = [str(item).strip() for item in args.server_ip if str(item).strip()]
-    if explicit_server_ips:
-        selected_server_ips = explicit_server_ips
-    elif args.preserve_server_ips:
-        selected_server_ips = existing_server_ips
-    else:
-        selected_server_ips = []
+    candidate_prefix = f"{args.source_id_prefix}_candidate_"
+    existing_sources = [
+        source
+        for source in existing_sources
+        if not str(source.get("id", "")).strip().startswith(candidate_prefix)
+    ]
+    existing_server_ips = [
+        str(source_connector_config(source).get("server_ip", "")).strip()
+        for source in existing_sources
+        if str(source_connector_config(source).get("server_ip", "")).strip()
+    ]
+    selected_server_ips = select_server_ips(args.server_ip, existing_server_ips, args.drop_server_ips)
     new_sources = build_sources(
         worker_url=args.worker_url,
         access_token=access_token,
@@ -331,68 +397,92 @@ def main() -> int:
         f"MiSub attach profiles not found: {', '.join(missing_attach_profiles)}",
     )
 
+    candidate_sources = []
+    for index, source in enumerate(new_sources, start=1):
+        candidate = dict(source)
+        candidate["id"] = f"{candidate_prefix}{index}"
+        candidate["name"] = f"{source['name']} Candidate"
+        candidate_sources.append(candidate)
+    candidate_source_ids = [source["id"] for source in candidate_sources]
+    old_source_ids = [str(source.get("id", "")).strip() for source in existing_sources]
+    candidate_profiles, missing_candidate_profiles = attach_sources_to_profiles(
+        updated_profiles,
+        [args.profile_id] + args.attach_profile_id,
+        old_source_ids + candidate_source_ids,
+        args.source_id_prefix,
+    )
+    ensure(not missing_candidate_profiles, "MiSub candidate profiles could not be prepared")
+    candidate_misubs = [
+        source
+        for source in misubs
+        if not str(source.get("id", "")).strip().startswith(candidate_prefix)
+    ] + candidate_sources
+    candidate_payload = {"misubs": candidate_misubs, "profiles": candidate_profiles}
+
     update_payload = {
         "misubs": updated_misubs,
         "profiles": updated_profiles,
     }
-    update_response = retry(
-        "MiSub profile update",
-        10,
-        5,
-        lambda: session.post(base_url + "api/misubs", json=update_payload, timeout=60),
-    )
-    update_response.raise_for_status()
-
-    manifest_response = retry(
-        "MiSub connector manifest",
-        10,
-        5,
-        lambda: session.get(
-            base_url + f"api/manifest/{args.profile_id}",
-            headers={"Authorization": f"Bearer {manifest_token}"},
-            timeout=30,
-        ),
-    )
-    manifest_response.raise_for_status()
-    manifest_payload = manifest_response.json()
-    ensure(manifest_payload.get("success") is True, "MiSub manifest endpoint did not report success")
-
-    validate_managed_connector_sources(
-        manifest_payload.get("sources") or [],
-        managed_source_ids,
-        args.worker_url,
-        access_token,
-    )
-
-    for attach_profile_id in normalize_string_array(args.attach_profile_id):
-        attached_manifest_response = retry(
-            f"MiSub attached connector manifest {attach_profile_id}",
-            10,
-            5,
-            lambda profile_id=attach_profile_id: session.get(
-                base_url + f"api/manifest/{profile_id}",
-                headers={"Authorization": f"Bearer {manifest_token}"},
-                timeout=30,
-            ),
+    original_payload = {"misubs": misubs, "profiles": profiles}
+    try:
+        post_misub_state(session, base_url, candidate_payload, "MiSub candidate connector update")
+        validate_manifest_profiles(
+            session,
+            base_url,
+            manifest_token,
+            [args.profile_id] + args.attach_profile_id,
+            candidate_source_ids,
+            args.worker_url,
+            access_token,
         )
-        attached_manifest_response.raise_for_status()
-        attached_manifest_payload = attached_manifest_response.json()
-        ensure(attached_manifest_payload.get("success") is True, "MiSub attached manifest endpoint did not report success")
-        validate_managed_connector_sources(
-            attached_manifest_payload.get("sources") or [],
+        candidate_checks = [
+            args.candidate_easyproxy_base_url,
+            args.candidate_easyproxy_proxy_url,
+            args.candidate_easyproxy_profile_id,
+        ]
+        ensure(all(candidate_checks) or not any(candidate_checks), "Both candidate EasyProxy URLs are required")
+        if all(candidate_checks):
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(__file__).with_name("verify-easyproxy-ech-sync.py")),
+                    "--base-url", args.candidate_easyproxy_base_url,
+                    "--proxy-url", args.candidate_easyproxy_proxy_url,
+                    "--worker-url", args.worker_url,
+                    "--profile-id", args.candidate_easyproxy_profile_id,
+                    "--wait-seconds", str(args.candidate_easyproxy_wait_seconds),
+                ],
+                check=True,
+            )
+
+        post_misub_state(session, base_url, update_payload, "MiSub profile update")
+        validate_manifest_profiles(
+            session,
+            base_url,
+            manifest_token,
+            [args.profile_id] + args.attach_profile_id,
             managed_source_ids,
             args.worker_url,
             access_token,
         )
+    except Exception as original_error:
+        try:
+            post_misub_state(session, base_url, original_payload, "MiSub connector rollback")
+        except Exception as rollback_error:
+            raise RuntimeError(
+                f"MiSub connector update failed and rollback also failed: {rollback_error}"
+            ) from original_error
+        raise RuntimeError("MiSub connector update failed; original state restored") from original_error
 
     summary = {
         "profile_id": args.profile_id,
         "worker_url": args.worker_url,
-        "preserve_server_ips": args.preserve_server_ips,
+        "preserve_server_ips": not args.drop_server_ips,
         "removed_profile_ids": sorted(profile_ids_to_remove),
         "attached_profile_ids": normalize_string_array(args.attach_profile_id),
         "source_count": len(new_sources),
         "server_ips": selected_server_ips,
+        "validated_candidate_source_ids": candidate_source_ids,
         "updated_source_ids": [source["id"] for source in new_sources],
     }
     print(json.dumps(summary, ensure_ascii=False, indent=2))

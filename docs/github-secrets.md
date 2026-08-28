@@ -18,6 +18,9 @@ variables. Pull-request validation receives no production secrets.
 | `MISUB_CRON_SECRET` | Environment secret | MiSub cron endpoint authentication. |
 | `EASYPROXY_BACKUP_PASSPHRASE` | Environment secret | Encrypt and decrypt MiSub recovery archives. |
 | `ECH_TOKEN` | Environment secret | ECH Worker and local connector authentication. |
+| `ECH_TOKEN_NEXT` | `easyproxy-ech-rotation` Environment secret | Rotation candidate; unused by ordinary deployment. |
+| `EASYPROXY_REPOSITORY_ADMIN_TOKEN` | `easyproxy-ech-rotation` Environment secret | Fine-grained repository Secrets write token used to persist a completed rotation. |
+| `EASYPROXY_MANAGEMENT_PASSWORD` | `easyproxy-ech-rotation` Environment secret | Dedicated EasyProxy rotation-validator authentication. |
 | `R2_ACCESS_KEY_ID` | Environment secret | R2 artifact/state access key ID. |
 | `R2_SECRET_ACCESS_KEY` | Environment secret | R2 artifact/state secret key. |
 
@@ -48,6 +51,14 @@ resolve exact resource identities through `easyproxyctl`, and keep secret values
 in environment variables or standard input. MiSub update retains an encrypted
 backup before applying D1 migrations. Configure approval protection on the
 `easyproxy-misub-restore` Environment before permitting production restore.
+
+### ECH token rotation
+
+`.github/workflows/rotate-ech-token.yml` is the only supported rotation entry
+point. Protect the `easyproxy-ech-rotation` Environment and configure
+`EASYPROXY_ROTATION_BASE_URL`, `EASYPROXY_ROTATION_PROXY_URL`, and optionally
+`EASYPROXY_ROTATION_RUNNER`. The selected runner must reach a dedicated
+EasyProxy validation instance. See [`ech-lifecycle.md`](ech-lifecycle.md).
 
 ### Aggregator
 

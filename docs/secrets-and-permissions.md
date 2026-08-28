@@ -16,6 +16,9 @@ artifacts, manifests, summaries, or command arguments that are logged.
 | `MISUB_CRON_SECRET` | Environment secret | MiSub cron | cron endpoint authentication |
 | `EASYPROXY_BACKUP_PASSPHRASE` | Environment secret | MiSub backup/restore | independent age archive encryption |
 | `ECH_TOKEN` | Environment secret | ECH Worker | WebSocket connector authentication |
+| `ECH_TOKEN_NEXT` | rotation Environment secret | ECH rotation | candidate token; ordinary update never reads it |
+| `EASYPROXY_REPOSITORY_ADMIN_TOKEN` | rotation Environment secret | ECH rotation | repository Secrets write only |
+| `EASYPROXY_MANAGEMENT_PASSWORD` | rotation Environment secret | ECH rotation | dedicated EasyProxy validator authentication |
 | `R2_ACCESS_KEY_ID` | Environment secret | Aggregator/backup | selected bucket access key ID |
 | `R2_SECRET_ACCESS_KEY` | Environment secret | Aggregator/backup | selected bucket secret key |
 
@@ -28,3 +31,8 @@ variables or standard input. Do not expose them as PowerShell or executable
 arguments because process listings and test captures can persist argv. Scripts
 that temporarily map topology references to conventional environment names must
 restore the previous process environment in `finally` blocks.
+
+Keep `EASYPROXY_REPOSITORY_ADMIN_TOKEN` out of ordinary deployment jobs. It is
+needed because the workflow's default `GITHUB_TOKEN` cannot be treated as a
+general repository-secret administrator. Require manual approval on the
+`easyproxy-ech-rotation` Environment.

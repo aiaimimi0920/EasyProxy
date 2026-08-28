@@ -14,6 +14,34 @@ spec.loader.exec_module(sync_misub_ech_profile)
 
 
 class SyncMiSubEchProfileTests(unittest.TestCase):
+    def test_server_ips_are_preserved_by_default(self):
+        self.assertEqual(
+            sync_misub_ech_profile.select_server_ips([], ["1.1.1.1", "2.2.2.2"], False),
+            ["1.1.1.1", "2.2.2.2"],
+        )
+
+    def test_explicit_server_ips_replace_existing_values(self):
+        self.assertEqual(
+            sync_misub_ech_profile.select_server_ips(["3.3.3.3"], ["1.1.1.1"], False),
+            ["3.3.3.3"],
+        )
+
+    def test_server_ips_are_dropped_only_by_explicit_request(self):
+        self.assertEqual(sync_misub_ech_profile.select_server_ips([], ["1.1.1.1"], True), [])
+
+    def test_server_ip_is_read_from_nested_options_shape(self):
+        sources, server_ips = sync_misub_ech_profile.normalize_existing_sources(
+            [
+                {
+                    "id": "conn_ech_workers_pref_1",
+                    "options": {"connector_config": {"server_ip": "1.1.1.1"}},
+                }
+            ],
+            "conn_ech_workers_pref",
+        )
+        self.assertEqual(len(sources), 1)
+        self.assertEqual(server_ips, ["1.1.1.1"])
+
     def test_attach_sources_preserves_other_connectors_and_replaces_managed_ech(self):
         profiles, missing = sync_misub_ech_profile.attach_sources_to_profiles(
             profiles=[
