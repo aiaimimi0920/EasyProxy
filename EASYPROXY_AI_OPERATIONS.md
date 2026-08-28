@@ -17,12 +17,12 @@ converter.
 | upstreams/aggregator | Upstream subscription collection and renewal workflows | upstreams/aggregator/ |
 | upstreams/ech-workers | ECH worker runtime used through connector sources | upstreams/ech-workers/ |
 | workers/ech-workers-cloudflare | Cloudflare worker deployment surface | workers/ech-workers-cloudflare/ |
-| deploy/ and scripts/ | Rendering, Docker/GHCR operations, gateway assets, release checks | deploy/, scripts/ |
+| deploy/ and scripts/ | Lifecycle adapters, Docker/GHCR operations, gateway assets, release checks | deploy/, scripts/ |
 
-The main runtime configuration is the root config.yaml. The root renderer
-produces service, MiSub, and ECH-worker derived configuration. Do not edit a
-rendered file as the durable source unless the deployment is intentionally
-source-less. See README.md and scripts/render-derived-configs.ps1.
+`topology.yaml` is the non-secret deployment contract. It contains environment
+variable names, never resolved credentials. `deploy/service/base/config.yaml`
+is the persistent local runtime authority; ordinary deploys and topology updates
+must not overwrite it. There is no root renderer or second config writer.
 
 ## 2. Deployment Modes
 
@@ -34,24 +34,21 @@ Prerequisites:
 
 - PowerShell and Docker Engine/Desktop with Docker Compose.
 - A real GHCR owner and release tag, or a complete image reference.
-- A root config.yaml containing the values required by the target.
+- A validated `topology.yaml` and an initialized service runtime config.
 
-Initialize the operator configuration:
+Initialize both independent contracts:
 
-    powershell -ExecutionPolicy Bypass -File .\scripts\init-config.ps1
+    powershell -ExecutionPolicy Bypass -File .\scripts\init-topology.ps1
+    powershell -ExecutionPolicy Bypass -File .\scripts\init-runtime-config.ps1
 
-Set at least these private values before deployment:
+Resolve each environment variable name referenced by topology in the process or
+protected platform secret store. Runtime-only credentials remain in the ignored
+service config. For example:
 
-    ghcr:
-      owner: <github-owner>
-
-    serviceBase:
-      runtime:
-        management:
-          password: <management-password>
-        source_sync:
-          manifest_url: https://<your-manifest>/manifest.json
-          manifest_token: <manifest-token>
+    $env:CLOUDFLARE_ACCOUNT_ID = '<account-id>'
+    $env:CLOUDFLARE_API_TOKEN = '<deployment-token>'
+    $env:MISUB_MANIFEST_TOKEN = '<machine-token>'
+    $env:ECH_TOKEN = '<connector-token>'
 
 Add connector credentials only for enabled connectors. Keep passwords, API keys,
 access tokens, R2 keys, Cloudflare tokens, and ECH tokens in a secret store or
@@ -59,19 +56,19 @@ environment-backed config. Never commit them.
 
 Deploy a published GHCR release:
 
-    powershell -ExecutionPolicy Bypass -File .\scripts\deploy-easyproxy.ps1 -FromGhcr -ReleaseTag <release-tag>
+    powershell -ExecutionPolicy Bypass -File .\scripts\deploy-easyproxy.ps1 -TopologyPath .\topology.yaml -FromGhcr -GhcrOwner <owner> -ReleaseTag <release-tag>
 
 Equivalent root wrapper:
 
-    powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project easyproxy-ghcr -InitConfig -ReleaseTag <release-tag>
+    powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project easyproxy-ghcr -TopologyPath .\topology.yaml -ReleaseTag <release-tag>
 
 Pin a complete image directly:
 
     powershell -ExecutionPolicy Bypass -File .\scripts\deploy-easyproxy.ps1 -FromGhcr -Image ghcr.io/<owner>/easy-proxy-monorepo-service:<release-tag>
 
-The root deploy script renders deploy/service/base/config.yaml, ensures the
-runtime Docker network, pulls the image unless -SkipPull is used, writes runtime
-.env and Compose inputs, replaces the same-name runtime container, and starts it
+The root deploy script initializes the runtime config only when it is absent,
+ensures the runtime Docker network, pulls the image unless -SkipPull is used,
+writes Compose inputs, replaces the same-name runtime container, and starts it
 through Compose. The lower-level implementation is
 deploy/service/base/scripts/deploy-ghcr-runtime.ps1.
 
@@ -138,24 +135,24 @@ because an API payload contains udp_enabled or DNS fields.
 
 ## 3. Configuration Contract
 
-The root schema is config.example.yaml; the service schema is
-service/base/config.example.yaml; the rendered deployment template is
-deploy/service/base/config.template.yaml.
+The deployment schema is `topology.schema.json`; the service schema is
+`service/base/config.example.yaml`; the one-time runtime template is
+`deploy/service/base/config.template.yaml`.
 
 | Path | Meaning |
 | --- | --- |
-| serviceBase.runtime.mode | Runtime mode; pool mode is safest for Local Server |
-| serviceBase.runtime.listener | Explicit HTTP/CONNECT/mixed proxy address, protocol, and optional legacy credentials |
-| serviceBase.runtime.multi_port | Optional additional protocol ports; avoid with Local Server |
-| serviceBase.runtime.pool | Outbound selection and health pool settings |
-| serviceBase.runtime.management | Management listener, probe targets, interval, password |
-| serviceBase.runtime.routing | Smart routing, rule files, providers, strategy, optional custom listener |
-| serviceBase.runtime.local_server | Device/profile-aware local server; requires pool + mixed listener topology |
-| serviceBase.runtime.gateway | Transparent gateway settings and trusted ingress/capture policy |
-| serviceBase.runtime.source_sync | Manifest URL/token, refresh interval, fallback sources, connector runtime |
-| serviceBase.runtime.connectors | ECH, ZenProxy, and other runtime connector descriptors |
-| serviceBase.runtime.subscriptions | Direct subscription URLs |
-| serviceBase.runtime.nodes / nodes_file | Static node alternatives |
+| mode | Runtime mode; pool mode is safest for Local Server |
+| listener | Explicit HTTP/CONNECT/mixed proxy address, protocol, and optional credentials |
+| multi_port | Optional additional protocol ports; avoid with Local Server |
+| pool | Outbound selection and health pool settings |
+| management | Management listener, probe targets, interval, password |
+| routing | Smart routing, rule files, providers, strategy, optional custom listener |
+| local_server | Device/profile-aware local server; requires pool + mixed listener topology |
+| gateway | Transparent gateway settings and trusted ingress/capture policy |
+| source_sync | Manifest URL/token, refresh interval, fallback sources, connector runtime |
+| connectors | ECH, ZenProxy, and other runtime connector descriptors |
+| subscriptions | Direct subscription URLs |
+| nodes / nodes_file | Static node alternatives |
 
 Smart routing has two deployment paths:
 
@@ -165,8 +162,8 @@ Smart routing has two deployment paths:
   Editing YAML alone does not publish a host port.
 
 Local Server is deliberately incompatible with legacy multi-port, hybrid, and
-extra-listener topologies. Its effective credentials are rendered from
-local_server.auth. The password is write-only in the UI and must not be
+extra-listener topologies. Its effective credentials come from
+`local_server.auth`. The password is write-only in the UI and must not be
 recovered from a read response.
 
 ## 4. Using the Proxy
@@ -389,14 +386,15 @@ Observed read-only on 2026-08-19; this is evidence for that deployment only:
 
 ## Source Anchors
 
-- Root deployment: README.md:423-492, scripts/deploy-easyproxy.ps1.
-- Runtime schema: config.example.yaml, service/base/config.example.yaml,
-  deploy/service/base/config.template.yaml.
+- Root deployment: README.md, scripts/deploy-subproject.ps1, and
+  scripts/deploy-easyproxy.ps1.
+- Deployment/runtime schemas: topology.schema.json,
+  service/base/config.example.yaml, deploy/service/base/config.template.yaml.
 - Management routes: service/base/internal/monitor/server.go:212-255.
 - Auth: service/base/internal/monitor/server.go:1875-1922.
 - Local Server schema/routes: service/base/internal/monitor/local_server.go:32-146.
 - Dispatch protocol: service/base/internal/dispatch/server.go:53-55,280-304.
 - Gateway contract: docs/transparent-gateway.md:8-92.
 - Gateway assets: deploy/gateway/debian/README.md and docker-compose.yaml.
-- CI gates: .github/workflows/validate.yml:51-124.
-
+- CI gates: .github/workflows/validate.yml and
+  .github/workflows/reusable-validate.yml.

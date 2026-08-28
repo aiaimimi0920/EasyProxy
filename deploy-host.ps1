@@ -1,65 +1,57 @@
 param(
     [ValidateSet(
-        "easyproxy",
-        "easyproxy-ghcr",
-        "misub-pages",
-        "misub-docker",
-        "aggregator",
-        "ech-workers-cloudflare",
-        "sync-github-settings",
-        "build-easyproxy-image",
-        "build-ech-workers-image",
-        "publish-service-base-config",
-        "publish-easyproxy-image",
-        "publish-ech-workers-image",
-        "publish-core-images"
+        'easyproxy',
+        'easyproxy-ghcr',
+        'misub-pages',
+        'misub-docker',
+        'aggregator',
+        'ech-workers-cloudflare',
+        'build-easyproxy-image',
+        'build-ech-workers-image',
+        'publish-service-base-config',
+        'publish-easyproxy-image',
+        'publish-ech-workers-image',
+        'publish-core-images'
     )]
-    [string]$Project = "easyproxy",
-    [string]$ConfigPath = "config.yaml",
-    [string]$ImportCode = "",
-    [string]$BootstrapFile = "",
+    [string]$Project = 'easyproxy',
+    [string]$TopologyPath = 'topology.yaml',
+    [string]$RuntimeConfigPath = 'easyproxy-runtime.yaml',
+    [string]$ImportCode = '',
+    [string]$BootstrapFile = '',
     [switch]$NoBuild,
     [switch]$NoInstall,
-    [switch]$SkipRender,
     [switch]$DryRun,
     [switch]$SkipSecretSync,
-    [switch]$SkipSecretUpdate,
     [switch]$SkipWorkflowTrigger,
     [switch]$NoCache,
     [switch]$Push,
-    [string]$ReleaseTag = "",
-    [string]$GhcrOwner = "",
-    [string]$GhcrUsername = "",
-    [string]$GhcrToken = "",
+    [string]$ReleaseTag = '',
+    [string]$GhcrOwner = '',
+    [string]$GhcrUsername = '',
     [switch]$LoadOnly,
-    [string]$Image = "",
+    [string]$Image = '',
     [switch]$SkipPull,
-    [string]$ContainerName = "easy-proxy",
-    [string]$PoolPortBinding = "",
-    [string]$ManagementPortBinding = "",
-    [string]$MultiPortBinding = "",
-    [string]$NetworkAlias = "easy-proxy",
-    [string]$ComposeProjectName = "easy-proxy",
-    [string]$RepoOwner = "aiaimimi0920",
-    [string]$RepoName = "EasyProxy",
-    [string]$RepoRef = "main",
-    [ValidateSet("branch", "tag")]
-    [string]$RepoRefKind = "branch",
-    [string]$RepoArchiveUrl = "",
-    [string]$RepoCacheRoot = "",
+    [string]$ContainerName = 'easy-proxy',
+    [string]$PoolPortBinding = '',
+    [string]$ManagementPortBinding = '',
+    [string]$MultiPortBinding = '',
+    [string]$NetworkAlias = 'easy-proxy',
+    [string]$ComposeProjectName = 'easy-proxy',
+    [string]$RepoOwner = 'aiaimimi0920',
+    [string]$RepoName = 'EasyProxy',
+    [string]$RepoRef = 'main',
+    [string]$RepoCacheRoot = '',
     [switch]$ForceRefreshRepo,
     [switch]$ResolveRepoOnly
 )
 
 Set-StrictMode -Version Latest
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = 'Stop'
 
 function Resolve-AbsolutePath {
     param(
-        [Parameter(Mandatory = $true)]
-        [string]$Path,
-        [Parameter(Mandatory = $true)]
-        [string]$BaseDir
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$BaseDir
     )
 
     if ([System.IO.Path]::IsPathRooted($Path)) {
@@ -68,207 +60,103 @@ function Resolve-AbsolutePath {
     return [System.IO.Path]::GetFullPath((Join-Path $BaseDir $Path))
 }
 
-function Test-RepoLayout {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Root,
-        [Parameter(Mandatory = $true)]
-        [string[]]$RequiredRelativePaths
+function Test-RepositoryLayout {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    return (
+        (Test-Path -LiteralPath (Join-Path $Root 'topology.example.yaml')) -and
+        (Test-Path -LiteralPath (Join-Path $Root 'scripts\deploy-subproject.ps1')) -and
+        (Test-Path -LiteralPath (Join-Path $Root 'tools\easyproxyctl\go.mod'))
     )
-
-    foreach ($relativePath in $RequiredRelativePaths) {
-        if (-not (Test-Path -LiteralPath (Join-Path $Root $relativePath))) {
-            return $false
-        }
-    }
-    return $true
-}
-
-function Get-RepoArchiveUrlValue {
-    param(
-        [string]$Owner,
-        [string]$Name,
-        [string]$Ref,
-        [string]$Kind,
-        [string]$ExplicitUrl
-    )
-
-    if (-not [string]::IsNullOrWhiteSpace($ExplicitUrl)) {
-        return $ExplicitUrl
-    }
-    if ($Kind -eq "tag") {
-        return "https://codeload.github.com/$Owner/$Name/zip/refs/tags/$Ref"
-    }
-    return "https://codeload.github.com/$Owner/$Name/zip/refs/heads/$Ref"
-}
-
-function Ensure-RepoRoot {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$LauncherRoot,
-        [Parameter(Mandatory = $true)]
-        [string]$Owner,
-        [Parameter(Mandatory = $true)]
-        [string]$Name,
-        [Parameter(Mandatory = $true)]
-        [string]$Ref,
-        [Parameter(Mandatory = $true)]
-        [string]$RefKind,
-        [Parameter(Mandatory = $true)]
-        [string[]]$RequiredRelativePaths,
-        [string]$ArchiveUrl = "",
-        [string]$CacheRoot = "",
-        [switch]$ForceRefresh
-    )
-
-    if (Test-RepoLayout -Root $LauncherRoot -RequiredRelativePaths $RequiredRelativePaths) {
-        return [pscustomobject]@{
-            RepoRoot = $LauncherRoot
-            Source = "local"
-            ArchiveUrl = $null
-        }
-    }
-
-    $sanitizedRef = ($Ref -replace '[^A-Za-z0-9._-]', '_')
-    $resolvedCacheRoot = if ([string]::IsNullOrWhiteSpace($CacheRoot)) {
-        Join-Path $LauncherRoot ".repo-cache\$Name-$RefKind-$sanitizedRef"
-    } else {
-        Resolve-AbsolutePath -Path $CacheRoot -BaseDir $LauncherRoot
-    }
-    $archiveUrlValue = Get-RepoArchiveUrlValue -Owner $Owner -Name $Name -Ref $Ref -Kind $RefKind -ExplicitUrl $ArchiveUrl
-    $repoRoot = Join-Path $resolvedCacheRoot "repo"
-
-    if ($ForceRefresh -and (Test-Path -LiteralPath $resolvedCacheRoot)) {
-        Remove-Item -LiteralPath $resolvedCacheRoot -Recurse -Force
-    }
-
-    if (-not (Test-RepoLayout -Root $repoRoot -RequiredRelativePaths $RequiredRelativePaths)) {
-        New-Item -ItemType Directory -Force -Path $resolvedCacheRoot | Out-Null
-        $archivePath = Join-Path $resolvedCacheRoot "$Name-$sanitizedRef.zip"
-        $expandedRoot = Join-Path $resolvedCacheRoot "expanded"
-
-        if (Test-Path -LiteralPath $archivePath) {
-            Remove-Item -LiteralPath $archivePath -Force
-        }
-        if (Test-Path -LiteralPath $expandedRoot) {
-            Remove-Item -LiteralPath $expandedRoot -Recurse -Force
-        }
-        if (Test-Path -LiteralPath $repoRoot) {
-            Remove-Item -LiteralPath $repoRoot -Recurse -Force
-        }
-
-        Write-Host "[deploy-host] downloading repository archive: $archiveUrlValue" -ForegroundColor Cyan
-        $previousProgressPreference = $global:ProgressPreference
-        $global:ProgressPreference = "SilentlyContinue"
-        try {
-            Invoke-WebRequest -Uri $archiveUrlValue -OutFile $archivePath
-        } finally {
-            $global:ProgressPreference = $previousProgressPreference
-        }
-        Expand-Archive -LiteralPath $archivePath -DestinationPath $expandedRoot -Force
-
-        $extractedRoot = Get-ChildItem -LiteralPath $expandedRoot -Directory | Select-Object -First 1
-        if ($null -eq $extractedRoot) {
-            throw "Repository archive did not contain an extractable root directory: $archiveUrlValue"
-        }
-
-        Move-Item -LiteralPath $extractedRoot.FullName -Destination $repoRoot
-    }
-
-    if (-not (Test-RepoLayout -Root $repoRoot -RequiredRelativePaths $RequiredRelativePaths)) {
-        $nestedCandidate = Get-ChildItem -LiteralPath $repoRoot -Directory -ErrorAction SilentlyContinue |
-            Where-Object { Test-RepoLayout -Root $_.FullName -RequiredRelativePaths $RequiredRelativePaths } |
-            Select-Object -First 1
-        if ($null -ne $nestedCandidate) {
-            Get-ChildItem -LiteralPath $nestedCandidate.FullName -Force | ForEach-Object {
-                Move-Item -LiteralPath $_.FullName -Destination $repoRoot -Force
-            }
-            Remove-Item -LiteralPath $nestedCandidate.FullName -Recurse -Force
-        }
-    }
-
-    if (-not (Test-RepoLayout -Root $repoRoot -RequiredRelativePaths $RequiredRelativePaths)) {
-        throw "Bootstrapped repository root is missing required paths: $repoRoot"
-    }
-
-    return [pscustomobject]@{
-        RepoRoot = $repoRoot
-        Source = "bootstrapped"
-        ArchiveUrl = $archiveUrlValue
-    }
 }
 
 $launcherRoot = Split-Path -Parent $PSCommandPath
-$repoInfo = Ensure-RepoRoot `
-    -LauncherRoot $launcherRoot `
-    -Owner $RepoOwner `
-    -Name $RepoName `
-    -Ref $RepoRef `
-    -RefKind $RepoRefKind `
-    -RequiredRelativePaths @("README.md", "scripts\deploy-subproject.ps1", "config.example.yaml") `
-    -ArchiveUrl $RepoArchiveUrl `
-    -CacheRoot $RepoCacheRoot `
-    -ForceRefresh:$ForceRefreshRepo
+$repoRoot = $launcherRoot
+$source = 'local'
+if (-not (Test-RepositoryLayout -Root $repoRoot)) {
+    if ($null -eq (Get-Command git -ErrorAction SilentlyContinue)) {
+        throw 'Git is required to clone EasyProxy with its recursive submodules.'
+    }
+    $cacheRoot = if ([string]::IsNullOrWhiteSpace($RepoCacheRoot)) {
+        Join-Path $launcherRoot '.repo-cache'
+    } else {
+        Resolve-AbsolutePath -Path $RepoCacheRoot -BaseDir $launcherRoot
+    }
+    $repoRoot = Join-Path $cacheRoot "$RepoName-$RepoRef"
+    if ($ForceRefreshRepo -and (Test-Path -LiteralPath $repoRoot)) {
+        $resolvedCache = [System.IO.Path]::GetFullPath($cacheRoot)
+        $resolvedRepo = [System.IO.Path]::GetFullPath($repoRoot)
+        if (-not $resolvedRepo.StartsWith($resolvedCache + [System.IO.Path]::DirectorySeparatorChar)) {
+            throw "Refusing to refresh repository outside cache root: $resolvedRepo"
+        }
+        Remove-Item -LiteralPath $resolvedRepo -Recurse -Force
+    }
+    if (-not (Test-RepositoryLayout -Root $repoRoot)) {
+        New-Item -ItemType Directory -Force -Path $cacheRoot | Out-Null
+        $url = "https://github.com/$RepoOwner/$RepoName.git"
+        & git clone --recurse-submodules --depth 1 --branch $RepoRef $url $repoRoot
+        if ($LASTEXITCODE -ne 0) {
+            throw "Recursive EasyProxy clone failed with exit code $LASTEXITCODE"
+        }
+    }
+    $source = 'recursive-clone'
+}
+
+if (-not (Test-RepositoryLayout -Root $repoRoot)) {
+    throw "EasyProxy repository layout is incomplete: $repoRoot"
+}
 
 if ($ResolveRepoOnly) {
-    [pscustomobject]@{
-        LauncherRoot = $launcherRoot
-        RepoRoot = $repoInfo.RepoRoot
-        Source = $repoInfo.Source
-        ArchiveUrl = $repoInfo.ArchiveUrl
-    } | Format-List
+    [pscustomobject]@{ RepoRoot = $repoRoot; Source = $source } | Format-List
     return
 }
 
-$repoRoot = $repoInfo.RepoRoot
-$resolvedConfigPath = Resolve-AbsolutePath -Path $ConfigPath -BaseDir $launcherRoot
-$configExamplePath = Resolve-AbsolutePath -Path "config.example.yaml" -BaseDir $repoRoot
-$deployScript = Resolve-AbsolutePath -Path "scripts\deploy-subproject.ps1" -BaseDir $repoRoot
-
-if (-not (Test-Path -LiteralPath $resolvedConfigPath)) {
-    Copy-Item -LiteralPath $configExamplePath -Destination $resolvedConfigPath
-    Write-Host "[deploy-host] created config file from template: $resolvedConfigPath" -ForegroundColor Yellow
+$resolvedTopologyPath = Resolve-AbsolutePath -Path $TopologyPath -BaseDir $launcherRoot
+if (-not (Test-Path -LiteralPath $resolvedTopologyPath)) {
+    $topologyParent = Split-Path -Parent $resolvedTopologyPath
+    if (-not [string]::IsNullOrWhiteSpace($topologyParent)) {
+        New-Item -ItemType Directory -Force -Path $topologyParent | Out-Null
+    }
+    Copy-Item -LiteralPath (Join-Path $repoRoot 'topology.example.yaml') -Destination $resolvedTopologyPath
+    Write-Host "[deploy-host] created topology: $resolvedTopologyPath" -ForegroundColor Yellow
 }
+$resolvedRuntimeConfigPath = Resolve-AbsolutePath -Path $RuntimeConfigPath -BaseDir $launcherRoot
 
-if (-not [string]::IsNullOrWhiteSpace($ImportCode) -and -not [string]::IsNullOrWhiteSpace($BootstrapFile)) {
-    throw 'Specify either ImportCode or BootstrapFile, not both.'
-}
-if ((-not [string]::IsNullOrWhiteSpace($ImportCode) -or -not [string]::IsNullOrWhiteSpace($BootstrapFile)) -and $Project -notin @('easyproxy', 'easyproxy-ghcr')) {
-    throw "Project '$Project' does not support ImportCode/BootstrapFile bootstrap."
-}
-
-$args = @(
-    "-ExecutionPolicy", "Bypass",
-    "-File", $deployScript,
-    "-Project", $Project,
-    "-ConfigPath", $resolvedConfigPath
+$arguments = @(
+    '-ExecutionPolicy', 'Bypass',
+    '-File', (Join-Path $repoRoot 'scripts\deploy-subproject.ps1'),
+    '-Project', $Project,
+    '-TopologyPath', $resolvedTopologyPath,
+    '-RuntimeConfigPath', $resolvedRuntimeConfigPath
 )
-if (-not [string]::IsNullOrWhiteSpace($ImportCode)) { $args += @("-ImportCode", $ImportCode) }
-if (-not [string]::IsNullOrWhiteSpace($BootstrapFile)) { $args += @("-BootstrapFile", (Resolve-AbsolutePath -Path $BootstrapFile -BaseDir $launcherRoot)) }
-if (-not (Test-Path -LiteralPath $resolvedConfigPath)) {
-    $args += "-InitConfig"
+foreach ($pair in @(
+    @('ImportCode', $ImportCode),
+    @('BootstrapFile', $BootstrapFile),
+    @('ReleaseTag', $ReleaseTag),
+    @('GhcrOwner', $GhcrOwner),
+    @('GhcrUsername', $GhcrUsername),
+    @('Image', $Image),
+    @('ContainerName', $ContainerName),
+    @('PoolPortBinding', $PoolPortBinding),
+    @('ManagementPortBinding', $ManagementPortBinding),
+    @('MultiPortBinding', $MultiPortBinding),
+    @('NetworkAlias', $NetworkAlias),
+    @('ComposeProjectName', $ComposeProjectName)
+)) {
+    if (-not [string]::IsNullOrWhiteSpace([string]$pair[1])) {
+        $arguments += @("-$($pair[0])", [string]$pair[1])
+    }
 }
-if ($NoBuild) { $args += "-NoBuild" }
-if ($NoInstall) { $args += "-NoInstall" }
-if ($SkipRender) { $args += "-SkipRender" }
-if ($DryRun) { $args += "-DryRun" }
-if ($SkipSecretSync) { $args += "-SkipSecretSync" }
-if ($SkipSecretUpdate) { $args += "-SkipSecretUpdate" }
-if ($SkipWorkflowTrigger) { $args += "-SkipWorkflowTrigger" }
-if ($NoCache) { $args += "-NoCache" }
-if ($Push) { $args += "-Push" }
-if (-not [string]::IsNullOrWhiteSpace($ReleaseTag)) { $args += @("-ReleaseTag", $ReleaseTag) }
-if (-not [string]::IsNullOrWhiteSpace($GhcrOwner)) { $args += @("-GhcrOwner", $GhcrOwner) }
-if (-not [string]::IsNullOrWhiteSpace($GhcrUsername)) { $args += @("-GhcrUsername", $GhcrUsername) }
-if (-not [string]::IsNullOrWhiteSpace($GhcrToken)) { $args += @("-GhcrToken", $GhcrToken) }
-if ($LoadOnly) { $args += "-LoadOnly" }
-if (-not [string]::IsNullOrWhiteSpace($Image)) { $args += @("-Image", $Image) }
-if ($SkipPull) { $args += "-SkipPull" }
-if (-not [string]::IsNullOrWhiteSpace($ContainerName)) { $args += @("-ContainerName", $ContainerName) }
-if (-not [string]::IsNullOrWhiteSpace($PoolPortBinding)) { $args += @("-PoolPortBinding", $PoolPortBinding) }
-if (-not [string]::IsNullOrWhiteSpace($ManagementPortBinding)) { $args += @("-ManagementPortBinding", $ManagementPortBinding) }
-if (-not [string]::IsNullOrWhiteSpace($MultiPortBinding)) { $args += @("-MultiPortBinding", $MultiPortBinding) }
-if (-not [string]::IsNullOrWhiteSpace($NetworkAlias)) { $args += @("-NetworkAlias", $NetworkAlias) }
-if (-not [string]::IsNullOrWhiteSpace($ComposeProjectName)) { $args += @("-ComposeProjectName", $ComposeProjectName) }
+foreach ($switchName in @(
+    'NoBuild', 'NoInstall', 'DryRun', 'SkipSecretSync', 'SkipWorkflowTrigger',
+    'NoCache', 'Push', 'LoadOnly', 'SkipPull'
+)) {
+    if ([bool](Get-Variable -Name $switchName -ValueOnly)) {
+        $arguments += "-$switchName"
+    }
+}
 
-& powershell @args
+& powershell @arguments
+if ($LASTEXITCODE -ne 0) {
+    throw "EasyProxy deployment failed with exit code $LASTEXITCODE"
+}

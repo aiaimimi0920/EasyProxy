@@ -10,7 +10,7 @@ function Assert-EasyProxyGhcrOwnerIsSafe {
 
     $normalized = $Owner.Trim()
     if ([string]::IsNullOrWhiteSpace($normalized)) {
-        throw "$SourceDescription is empty. Set ghcr.owner in config.yaml or pass -GhcrOwner explicitly."
+        throw "$SourceDescription is empty. Set GITHUB_REPOSITORY_OWNER or pass -GhcrOwner explicitly."
     }
 
     if ($normalized -match '^(your-github-owner|change_me.*|.*placeholder.*)$') {
@@ -94,14 +94,11 @@ function Resolve-EasyProxyGhcrAuth {
         [AllowEmptyString()]
         [string]$GhcrUsername,
 
-        [AllowEmptyString()]
-        [string]$GhcrToken,
-
         [string]$DefaultOwner = 'aiaimimi0920'
     )
 
     $resolvedUsername = Resolve-EasyProxyEnvValue -CurrentValue $GhcrUsername -EnvName 'GHCR_USERNAME'
-    $resolvedToken = Resolve-EasyProxyEnvValue -CurrentValue $GhcrToken -EnvName 'GHCR_TOKEN'
+    $resolvedToken = Resolve-EasyProxyEnvValue -CurrentValue '' -EnvName 'GHCR_TOKEN'
 
     $gitCredential = $null
     if ([string]::IsNullOrWhiteSpace($resolvedToken) -or [string]::IsNullOrWhiteSpace($resolvedUsername)) {
@@ -149,8 +146,6 @@ function Invoke-EasyProxyGhcrBuildxPublish {
         [string]$Platform = 'linux/amd64',
         [AllowEmptyString()]
         [string]$GhcrUsername,
-        [AllowEmptyString()]
-        [string]$GhcrToken,
         [switch]$LoadOnly,
         [switch]$NoCache
     )
@@ -159,7 +154,7 @@ function Invoke-EasyProxyGhcrBuildxPublish {
         throw "ReleaseTag must not be empty."
     }
 
-    $auth = Resolve-EasyProxyGhcrAuth -ImagePrefix $ImagePrefix -GhcrUsername $GhcrUsername -GhcrToken $GhcrToken
+    $auth = Resolve-EasyProxyGhcrAuth -ImagePrefix $ImagePrefix -GhcrUsername $GhcrUsername
     $fullImage = "${ImagePrefix}/${ImageName}:${ReleaseTag}"
 
     $capturePath = [System.Environment]::GetEnvironmentVariable('EASYPROXY_TEST_CAPTURE_GHCR_BUILDS_PATH')

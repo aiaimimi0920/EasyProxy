@@ -1,6 +1,6 @@
 # Quick Start
 
-## Checkout
+## 1. Recursive checkout
 
 ```powershell
 git clone --recurse-submodules https://github.com/aiaimimi0920/EasyProxy.git
@@ -8,259 +8,124 @@ Set-Location EasyProxy
 git submodule status --recursive
 ```
 
-If the root repository was already cloned without submodules, run
-`git submodule update --init --recursive` before any build or deploy command.
-
-## Root Host Deploy
+## 2. Initialize the two configuration layers
 
 ```powershell
-pwsh .\deploy-host.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\init-topology.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\init-runtime-config.ps1
 ```
 
-If the host already has a live EasyProxy runtime and you need a side-by-side
-instance for validation, pass isolated bindings:
+Edit `topology.yaml` for deployment/resource choices. Its `secrets` fields are
+environment variable names, not values. Edit
+`deploy/service/base/config.yaml` for local listener, source, connector,
+routing, gateway, and management behavior.
+
+Validate deployment configuration:
 
 ```powershell
-pwsh .\deploy-host.ps1 `
-  -Project easyproxy `
-  -ContainerName easy-proxy-monorepo-service-blankfinal01 `
-  -PoolPortBinding 22324:22323 `
-  -ManagementPortBinding 29889:29888 `
-  -MultiPortBinding 26000-26500:25000-25500 `
-  -NetworkAlias easy-proxy-service-blankfinal01
+Set-Location tools/easyproxyctl
+go test ./...
+go run .\cmd\easyproxyctl topology validate --file ..\..\topology.yaml
+go run .\cmd\easyproxyctl topology names --file ..\..\topology.yaml
+Set-Location ..\..
 ```
 
-## Main Runtime
+The local runtime config is initialized only when missing. Neither topology
+validation nor an ordinary deploy overwrites subsequent WebUI/API changes.
 
-Build the frontend:
+## 3. Resolve secret references
+
+Set the environment variables named in `topology.yaml`. A minimal cloud setup
+normally includes:
 
 ```powershell
-Set-Location service/base/frontend
-npm ci
-npm run build
+$env:CLOUDFLARE_ACCOUNT_ID = '<account-id>'
+$env:CLOUDFLARE_API_TOKEN = '<least-privilege-token>'
+$env:MISUB_ADMIN_PASSWORD = '<strong-password>'
+$env:MISUB_COOKIE_SECRET = '<stable-random-secret>'
+$env:MISUB_MANIFEST_TOKEN = '<machine-token>'
+$env:MISUB_CRON_SECRET = '<cron-token>'
+$env:ECH_TOKEN = '<ech-token>'
+$env:R2_ACCESS_KEY_ID = '<r2-key-id>'
+$env:R2_SECRET_ACCESS_KEY = '<r2-secret>'
 ```
 
-Build the Go runtime:
+For GitHub-hosted deployment, store secret values in a protected GitHub
+Environment and the account/zone IDs in repository variables. See
+[`secrets-and-permissions.md`](secrets-and-permissions.md).
+
+## 4. Deploy the local runtime
+
+Build from this checkout:
 
 ```powershell
+.\scripts\deploy-subproject.ps1 -Project easyproxy -TopologyPath .\topology.yaml
+```
+
+Or pull a published image:
+
+```powershell
+.\scripts\deploy-subproject.ps1 `
+  -Project easyproxy-ghcr `
+  -TopologyPath .\topology.yaml `
+  -GhcrOwner <owner> `
+  -ReleaseTag <tag>
+```
+
+For a standalone launcher:
+
+```powershell
+pwsh .\deploy-host.ps1 -Project easyproxy-ghcr -GhcrOwner <owner> -ReleaseTag <tag>
+```
+
+`deploy-host.ps1` recursively clones all public submodules and keeps
+`topology.yaml` plus `easyproxy-runtime.yaml` outside the replaceable source
+cache.
+
+## 5. Deploy cloud components
+
+```powershell
+# MiSub Pages
+.\scripts\deploy-subproject.ps1 -Project misub-pages -TopologyPath .\topology.yaml
+
+# ECH Worker dry-run, then deploy
+.\scripts\deploy-subproject.ps1 -Project ech-workers-cloudflare `
+  -TopologyPath .\topology.yaml -DryRun
+.\scripts\deploy-subproject.ps1 -Project ech-workers-cloudflare `
+  -TopologyPath .\topology.yaml
+
+# Aggregator GitHub workflow
+.\scripts\deploy-subproject.ps1 -Project aggregator -TopologyPath .\topology.yaml
+```
+
+The local MiSub Docker compatibility path uses
+`upstreams/misub/.env`; copy `.env.example` and keep that file untracked.
+
+## 6. Trusted-LAN access
+
+In the local runtime config, use `mode: pool`, `listener.protocol: mixed`, and
+`local_server.enabled: true`, then set a strong canonical username/password.
+Restrict `22323` and `29888` to trusted LAN CIDRs. See
+[`local-server.md`](local-server.md) before exposing the service to other
+devices.
+
+## 7. Validate
+
+```powershell
+# Root contracts and scripts
+python -m unittest discover -s tests -p "test_*.py" -v
+
+# Lifecycle CLI
+Set-Location tools/easyproxyctl
+go test -count=1 ./...
+go vet ./...
+Set-Location ..\..
+
+# Runtime
 Set-Location service/base
-go mod download
-go build -tags "with_utls with_quic with_grpc with_wireguard with_gvisor" -o easy-proxy ./cmd/easy_proxies
+go test -count=1 ./...
 ```
 
-## MiSub
-
-```powershell
-Set-Location upstreams/misub
-npm ci
-npm run build
-```
-
-## Deployment Assets
-
-Module-local deployment contracts keep their stable paths even though the three
-fork-derived source directories are now submodules.
-
-Read:
-
-- `deploy/service/base/README.md`
-- `deploy/upstreams/misub/README.md`
-- `deploy/upstreams/aggregator/README.md`
-- `deploy/workers/ech-workers-cloudflare/README.md`
-
-## Root Config
-
-Initialize the operator config:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\init-config.ps1
-```
-
-Then render the module-specific config files from the root `config.yaml`:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\render-derived-configs.ps1
-```
-
-This renders:
-
-- `deploy/service/base/config.yaml`
-- `upstreams/misub/.env`
-- `workers/ech-workers-cloudflare/.dev.vars`
-
-## Local Server For LAN Devices
-
-To expose one authenticated HTTP/CONNECT/SOCKS5 entry to trusted LAN devices,
-set these root `config.yaml` values before rendering:
-
-```yaml
-serviceBase:
-  runtime:
-    mode: pool
-    listener:
-      address: 0.0.0.0
-      port: 22323
-      protocol: mixed
-    routing:
-      enabled: true
-      listen: ""
-    local_server:
-      enabled: true
-      listen: ""
-      auth:
-        username: easyproxy
-        password: "change_me_to_a_strong_shared_password"
-```
-
-Replace the `change_me...` value first; the root deployment gate rejects it as
-an unsafe placeholder.
-
-Then render and deploy with the normal root entrypoint. Configure each device
-as a standard proxy; no EasyProxy client daemon is needed. Use the base username
-for shared/IP-mapped selection or `easyproxy+dev=<device_id>` for stable explicit
-selection. Restrict host/router firewall access to trusted LAN subnets and block
-WAN/guest VLAN access to `22323` and `29888`.
-
-Read [`local-server.md`](./local-server.md) before enabling it. The guide covers
-independent Profile behavior, Docker/NAT source-IP limits, API revisions,
-credential rotation, client examples, and troubleshooting.
-
-## Root Operator Entry Points
-
-Run these from the repository root:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project easyproxy -InitConfig
-powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project easyproxy-ghcr -InitConfig -ReleaseTag release-20260502-001
-powershell -ExecutionPolicy Bypass -File .\scripts\init-config.ps1
-powershell -ExecutionPolicy Bypass -File .\scripts\render-derived-configs.ps1
-powershell -ExecutionPolicy Bypass -File .\scripts\deploy-easyproxy.ps1
-powershell -ExecutionPolicy Bypass -File .\scripts\deploy-easyproxy.ps1 -FromGhcr -ReleaseTag release-20260502-001
-powershell -ExecutionPolicy Bypass -File .\scripts\build-easyproxy-image.ps1
-powershell -ExecutionPolicy Bypass -File .\scripts\build-ech-workers-image.ps1
-powershell -ExecutionPolicy Bypass -File .\scripts\publish-service-base-config.ps1
-powershell -ExecutionPolicy Bypass -File .\scripts\deploy-misub.ps1
-powershell -ExecutionPolicy Bypass -File .\scripts\deploy-ech-workers-cloudflare.ps1
-powershell -ExecutionPolicy Bypass -File .\scripts\deploy-aggregator.ps1
-powershell -ExecutionPolicy Bypass -File .\scripts\sync-github-deployment-settings.ps1
-```
-
-Notes:
-
-- `deploy-subproject.ps1` is the recommended one-click entrypoint for
-  per-module deploy/build tasks. It can initialize `config.yaml` automatically
-  with `-InitConfig`.
-- root scripts now read defaults from `config.yaml`
-- `deploy-easyproxy.ps1` deploys `service/base` through the monorepo Docker
-  Compose contract and renders `deploy/service/base/config.yaml` first
-- `deploy-easyproxy.ps1 -FromGhcr -ReleaseTag <tag>` is the canonical local
-  rollout path when you want the target host to pull a published GHCR image
-- `deploy-misub.ps1` defaults to Cloudflare Pages mode. Use `-Mode docker`
-  if you explicitly want the Docker/VPS path.
-- `deploy-aggregator.ps1` targets the current GitHub Actions + R2 deployment
-  model through the current EasyProxy repository rather than an external repo.
-- `sync-github-deployment-settings.ps1` regenerates the ignored local
-  `config.yaml` and synchronizes GitHub deployment secrets / variables from the
-  current operator state.
-
-One-click examples:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project easyproxy -InitConfig
-powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project easyproxy-ghcr -InitConfig -ReleaseTag release-20260502-001
-powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project misub-pages -InitConfig
-powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project misub-docker -InitConfig
-powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project ech-workers-cloudflare -InitConfig
-powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project aggregator -InitConfig
-powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project sync-github-settings -InitConfig
-```
-
-## Validation
-
-Run these checks before publishing images or merging risky runtime changes:
-
-```powershell
-# Root script smoke coverage
-python -m unittest discover -s "tests" -p "test_*.py" -v
-
-# Aggregator regression coverage
-python -m unittest discover -s "upstreams/aggregator/tests" -p "test_*.py" -v
-
-# service/base critical Go packages
-Set-Location service/base
-go test ./internal/monitor
-go test ./internal/boxmgr
-go test ./internal/config
-```
-
-GitHub Actions equivalents:
-
-- `.github/workflows/validate.yml`
-- `.github/workflows/publish-ghcr-images.yml`
-  - GHCR publish now depends on the validation preflight job
-- `.github/workflows/publish-service-base-config.yml`
-  - service/base config distribution now depends on the validation preflight job
-- `.github/workflows/deploy-cloudflare.yml`
-  - Cloudflare deploys now depend on the same validation preflight job and distinguish bootstrap vs update mode
-- `.github/workflows/deploy-aggregator.yml`
-  - native aggregator publish now runs from GitHub too
-- [docs/github-secrets.md](/C:/Users/Public/nas_home/AI/GameEditor/EasyProxy/docs/github-secrets.md)
-  - configure repository secrets before using GitHub-hosted Cloudflare deploys
-- [docs/service-base-config-distribution.md](/C:/Users/Public/nas_home/AI/GameEditor/EasyProxy/docs/service-base-config-distribution.md)
-  - bootstrap/import-code path for long-lived `service/base` runtime config delivery
-
-Local runtime deployment remains script-driven on the target machine. Use
-`scripts/deploy-easyproxy.ps1` for both local build/compose and local GHCR
-rollout. The lower-level `deploy/service/base/scripts/deploy-ghcr-runtime.ps1`
-helper remains available when you explicitly want the deployment-only helper.
-
-## Import Code And Bootstrap
-
-Owner keypair generation:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\generate-import-code-keypair.ps1 `
-  -PublicKeyOutput .\tmp\easyproxy_import_code_owner_public.txt `
-  -PrivateKeyOutput .\tmp\easyproxy_import_code_owner_private.txt `
-  -BundleOutput .\tmp\easyproxy_import_code_owner_keypair.json
-```
-
-Decrypt a workflow artifact:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\decrypt-import-code.ps1 `
-  -EncryptedFilePath .\service-base-import-code.encrypted.json `
-  -PrivateKeyPath .\tmp\easyproxy_import_code_owner_private.txt `
-  -OutputPath .\tmp\service-base-import-code.decrypted.json
-```
-
-Write bootstrap JSON from a known import code:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\write-service-base-r2-bootstrap.ps1 `
-  -ImportCode "<easyproxy-import-v1...>" `
-  -OutputPath .\deploy\service\base\bootstrap\r2-bootstrap.json
-```
-
-The runtime image accepts either:
-
-- `EASY_PROXY_IMPORT_CODE`
-- or `/etc/easy-proxy/bootstrap/r2-bootstrap.json`
-
-Use the distribution guide for the full operator flow:
-
-- [docs/service-base-config-distribution.md](/C:/Users/Public/nas_home/AI/GameEditor/EasyProxy/docs/service-base-config-distribution.md)
-
-## Private Config
-
-Do not commit live deployment values.
-
-Keep private values outside Git. They may be stored as:
-
-- secrets under the shared `AIRead` archive for operator reference
-- runtime-local config under ignored files in `deploy/service/base`
-- private Cloudflare secrets in platform secret stores rather than committed
-  files
-
-Tracked scripts do not require the `AIRead` directory layout and do not probe
-it automatically.
+Pull requests call `.github/workflows/reusable-validate.yml` through
+`.github/workflows/validate.yml`. That path is read-only and receives no
+production secrets.

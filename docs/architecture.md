@@ -97,5 +97,6 @@ in this repository.
 Those materials may stay under the shared `AIRead` knowledge base and may be
 linked locally into the repo root for operator convenience, but they must
 remain ignored by Git. The monorepo does not require that archive layout:
-tracked automation consumes the root config, environment/platform secrets,
-import codes, or explicit parameters instead of probing legacy archive paths.
+tracked automation consumes non-secret topology, the persistent service runtime
+config, environment/platform secrets, import codes, or explicit non-secret
+parameters instead of probing legacy archive paths.

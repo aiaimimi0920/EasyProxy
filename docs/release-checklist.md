@@ -4,9 +4,8 @@ Use this checklist before publishing a tag or manually running the GHCR release 
 
 ## Config And Secrets
 
-1. Confirm `config.example.yaml` still contains placeholders only.
+1. Validate `topology.example.yaml` and confirm it contains environment variable references only.
 2. Confirm no live secrets were added to tracked files such as:
-   - `config.yaml`
    - `deploy/service/base/config.yaml`
    - `deploy/service/base/bootstrap/r2-bootstrap.json`
    - `upstreams/misub/.env`
@@ -61,7 +60,6 @@ CI workflows:
 
 - `.github/workflows/validate.yml`
 - `.github/workflows/publish-ghcr-images.yml`
-- `.github/workflows/publish-service-base-config.yml`
 - `.github/workflows/publish-github-release.yml`
 - `.github/workflows/deploy-cloudflare.yml`
 - `.github/workflows/deploy-aggregator.yml`
@@ -74,9 +72,8 @@ CI workflows:
    - `release-*`
    - `v*`
 4. Confirm required GitHub repository secrets are present for any Cloudflare deploy you plan to run. See [docs/github-secrets.md](/C:/Users/Public/nas_home/AI/GameEditor/EasyProxy/docs/github-secrets.md).
-5. Confirm the service/base R2 distribution secrets are present before running `.github/workflows/publish-service-base-config.yml`.
-6. If owner-only import-code artifacts are part of the release process, confirm `EASYPROXY_IMPORT_CODE_OWNER_PUBLIC_KEY` is configured and that the matching private key is still available locally.
-7. If the Local Server Web Console changed, confirm `/`, hashed assets, `#devices`, canonical login, Profile CRUD/CAS, and desktop/mobile layouts in a real browser against the final image.
+5. Confirm deployment manifests contain no resolved secret values and pass checksum verification.
+6. If the Local Server Web Console changed, confirm `/`, hashed assets, `#devices`, canonical login, Profile CRUD/CAS, and desktop/mobile layouts in a real browser against the final image.
 
 ## Upstream-Carried Modules
 

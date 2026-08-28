@@ -1,39 +1,36 @@
 param(
     [ValidateSet(
-        "easyproxy",
-        "easyproxy-ghcr",
-        "misub-pages",
-        "misub-docker",
-        "aggregator",
-        "ech-workers-cloudflare",
-        "sync-github-settings",
-        "build-easyproxy-image",
-        "build-ech-workers-image",
-        "publish-service-base-config",
-        "publish-easyproxy-image",
-        "publish-ech-workers-image",
-        "publish-core-images"
+        'easyproxy',
+        'easyproxy-ghcr',
+        'misub-pages',
+        'misub-docker',
+        'aggregator',
+        'ech-workers-cloudflare',
+        'build-easyproxy-image',
+        'build-ech-workers-image',
+        'publish-service-base-config',
+        'publish-easyproxy-image',
+        'publish-ech-workers-image',
+        'publish-core-images'
     )]
     [string]$Project,
-    [string]$ConfigPath = (Join-Path $PSScriptRoot '..\config.yaml'),
+    [string]$TopologyPath = (Join-Path $PSScriptRoot '..\topology.yaml'),
+    [string]$RuntimeConfigPath = (Join-Path $PSScriptRoot '..\deploy\service\base\config.yaml'),
+    [switch]$InitTopology,
     [string]$ImportCode = '',
     [string]$BootstrapFile = '',
-    [switch]$InitConfig,
     [switch]$NoBuild,
     [switch]$NoInstall,
-    [switch]$SkipRender,
     [switch]$DryRun,
     [switch]$SkipSecretSync,
-    [switch]$SkipSecretUpdate,
     [switch]$SkipWorkflowTrigger,
     [switch]$NoCache,
     [switch]$Push,
-    [string]$ReleaseTag,
-    [string]$GhcrOwner,
-    [string]$GhcrUsername,
-    [string]$GhcrToken,
+    [string]$ReleaseTag = '',
+    [string]$GhcrOwner = '',
+    [string]$GhcrUsername = '',
     [switch]$LoadOnly,
-    [string]$Image,
+    [string]$Image = '',
     [switch]$SkipPull,
     [string]$ContainerName = '',
     [string]$PoolPortBinding = '',
@@ -44,294 +41,117 @@ param(
 )
 
 Set-StrictMode -Version Latest
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot 'lib\easyproxy-common.ps1')
-. (Join-Path $PSScriptRoot 'lib\easyproxy-config.ps1')
+. (Join-Path $PSScriptRoot 'lib\easyproxy-topology.ps1')
 
-function Resolve-ConfigPath {
-    param([Parameter(Mandatory = $true)][string]$Path)
-
-    if ([System.IO.Path]::IsPathRooted($Path)) {
-        return $Path
-    }
-
-    return (Join-Path (Get-EasyProxyRepoRoot) $Path)
-}
-
-function Ensure-ConfigReady {
-    param(
-        [Parameter(Mandatory = $true)][string]$Path,
-        [switch]$InitIfMissing
-    )
-
-    if (Test-Path -LiteralPath $Path) {
-        return
-    }
-
-    if (-not $InitIfMissing) {
-        throw "Missing config file: $Path. Run scripts/init-config.ps1 first or pass -InitConfig."
-    }
-
-    $initScript = Join-Path $PSScriptRoot 'init-config.ps1'
-    Write-Host "config.yaml not found, initializing from template..." -ForegroundColor Yellow
-    Invoke-EasyProxyExternalCommand -FilePath "powershell" -Arguments @(
-        "-ExecutionPolicy", "Bypass",
-        "-File", $initScript,
-        "-OutputPath", $Path
-    ) -FailureMessage "Failed to initialize config.yaml from config.example.yaml"
-}
-
-function Assert-ProjectConfigReady {
+function Invoke-RepositoryScript {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$Project,
-        [Parameter(Mandatory = $true)]
-        [object]$Config
+        [string]$Name,
+        [string[]]$Arguments = @()
     )
 
-    $errors = @()
-
-    switch ($Project) {
-        { $_ -in @("easyproxy", "easyproxy-ghcr") } {
-            $serviceBase = Get-EasyProxyConfigSection -Config $Config -Name 'serviceBase'
-            $runtime = Get-EasyProxyConfigSection -Config $serviceBase -Name 'runtime'
-            $sourceSync = Get-EasyProxyConfigSection -Config $runtime -Name 'source_sync'
-            $sourceSyncEnabled = [bool](Get-EasyProxyConfigValue -Object $sourceSync -Name 'enabled' -Default $false)
-            $manifestUrl = [string](Get-EasyProxyConfigValue -Object $sourceSync -Name 'manifest_url' -Default '')
-            if ($sourceSyncEnabled -and $manifestUrl -match 'example\.com') {
-                $errors += "serviceBase.runtime.source_sync.manifest_url still uses an example domain."
-            }
-            $localServer = Get-EasyProxyConfigSection -Config $runtime -Name 'local_server'
-            $localServerEnabled = [bool](Get-EasyProxyConfigValue -Object $localServer -Name 'enabled' -Default $false)
-            if ($localServerEnabled) {
-                $mode = [string](Get-EasyProxyConfigValue -Object $runtime -Name 'mode' -Default '')
-                $listener = Get-EasyProxyConfigSection -Config $runtime -Name 'listener'
-                $listenerProtocol = [string](Get-EasyProxyConfigValue -Object $listener -Name 'protocol' -Default '')
-                $auth = Get-EasyProxyConfigSection -Config $localServer -Name 'auth'
-                $canonicalUsername = [string](Get-EasyProxyConfigValue -Object $auth -Name 'username' -Default '')
-                $canonicalPassword = [string](Get-EasyProxyConfigValue -Object $auth -Name 'password' -Default '')
-                if ($mode -ne 'pool') {
-                    $errors += "serviceBase.runtime.local_server requires mode: pool."
-                }
-                if ($listenerProtocol -ne 'mixed') {
-                    $errors += "serviceBase.runtime.local_server requires listener.protocol: mixed."
-                }
-                if ($canonicalUsername -notmatch '^[A-Za-z0-9._-]{1,64}$') {
-                    $errors += "serviceBase.runtime.local_server.auth.username must match [A-Za-z0-9._-]{1,64}."
-                }
-                if ([string]::IsNullOrWhiteSpace($canonicalPassword) -or $canonicalPassword -like '*change_me*' -or $canonicalPassword -match 'example\.com') {
-                    $errors += "serviceBase.runtime.local_server.auth.password must be a real shared secret."
-                }
-            }
-        }
-        "misub-pages" {
-            $misub = Get-EasyProxyConfigSection -Config $Config -Name 'misub'
-            $docker = Get-EasyProxyConfigSection -Config $misub -Name 'docker'
-            $env = Get-EasyProxyConfigSection -Config $docker -Name 'env'
-            $adminPassword = [string](Get-EasyProxyConfigValue -Object $env -Name 'ADMIN_PASSWORD' -Default '')
-            $cookieSecret = [string](Get-EasyProxyConfigValue -Object $env -Name 'COOKIE_SECRET' -Default '')
-            if ($adminPassword -like 'change_me*' -or [string]::IsNullOrWhiteSpace($adminPassword)) {
-                $errors += "misub.docker.env.ADMIN_PASSWORD must be set to a strong value."
-            }
-            if ($cookieSecret -like 'change_me*' -or [string]::IsNullOrWhiteSpace($cookieSecret)) {
-                $errors += "misub.docker.env.COOKIE_SECRET must be set to a stable random value."
-            }
-        }
-        "misub-docker" {
-            $misub = Get-EasyProxyConfigSection -Config $Config -Name 'misub'
-            $docker = Get-EasyProxyConfigSection -Config $misub -Name 'docker'
-            $env = Get-EasyProxyConfigSection -Config $docker -Name 'env'
-            $adminPassword = [string](Get-EasyProxyConfigValue -Object $env -Name 'ADMIN_PASSWORD' -Default '')
-            $cookieSecret = [string](Get-EasyProxyConfigValue -Object $env -Name 'COOKIE_SECRET' -Default '')
-            if ($adminPassword -like 'change_me*' -or [string]::IsNullOrWhiteSpace($adminPassword)) {
-                $errors += "misub.docker.env.ADMIN_PASSWORD must be set to a strong value."
-            }
-            if ($cookieSecret -like 'change_me*' -or [string]::IsNullOrWhiteSpace($cookieSecret)) {
-                $errors += "misub.docker.env.COOKIE_SECRET must be set to a stable random value."
-            }
-        }
-        "ech-workers-cloudflare" {
-            $worker = Get-EasyProxyConfigSection -Config $Config -Name 'echWorkersCloudflare'
-            $secrets = Get-EasyProxyConfigSection -Config $worker -Name 'secrets'
-            $echToken = [string](Get-EasyProxyConfigValue -Object $secrets -Name 'ECH_TOKEN' -Default '')
-            if ([string]::IsNullOrWhiteSpace($echToken)) {
-                $errors += "echWorkersCloudflare.secrets.ECH_TOKEN is empty."
-            }
-        }
-        "publish-service-base-config" {
-            $distribution = Get-EasyProxyConfigSection -Config $Config -Name 'distribution'
-            $serviceBaseDistribution = Get-EasyProxyConfigSection -Config $distribution -Name 'serviceBase'
-            $accountId = [string](Get-EasyProxyConfigValue -Object $serviceBaseDistribution -Name 'accountId' -Default '')
-            $bucket = [string](Get-EasyProxyConfigValue -Object $serviceBaseDistribution -Name 'bucket' -Default '')
-            if ([string]::IsNullOrWhiteSpace($accountId)) {
-                $errors += "distribution.serviceBase.accountId must be set."
-            }
-            if ([string]::IsNullOrWhiteSpace($bucket)) {
-                $errors += "distribution.serviceBase.bucket must be set."
-            }
-        }
-    }
-
-    if ($errors.Count -gt 0) {
-        $joined = ($errors | ForEach-Object { " - $_" }) -join [Environment]::NewLine
-        throw "Config validation failed for ${Project}:`n$joined"
-    }
+    $scriptPath = Join-Path $PSScriptRoot $Name
+    Invoke-EasyProxyExternalCommand `
+        -FilePath 'powershell' `
+        -Arguments (@('-ExecutionPolicy', 'Bypass', '-File', $scriptPath) + $Arguments) `
+        -FailureMessage "$Name failed"
 }
 
 if ([string]::IsNullOrWhiteSpace($Project)) {
-    throw "Missing -Project. Supported values: easyproxy, easyproxy-ghcr, misub-pages, misub-docker, aggregator, ech-workers-cloudflare, sync-github-settings, build-easyproxy-image, build-ech-workers-image, publish-service-base-config, publish-easyproxy-image, publish-ech-workers-image, publish-core-images"
+    throw 'Missing -Project. Use a value listed by the Project ValidateSet.'
 }
 
-$resolvedConfigPath = Resolve-ConfigPath -Path $ConfigPath
-$publishProjects = @("publish-easyproxy-image", "publish-ech-workers-image", "publish-core-images")
-$config = $null
-
-if ($Project -notin $publishProjects) {
-    Ensure-ConfigReady -Path $resolvedConfigPath -InitIfMissing:$InitConfig
-    $config = Read-EasyProxyConfig -ConfigPath $resolvedConfigPath
-    Assert-ProjectConfigReady -Project $Project -Config $config
+$resolvedTopologyPath = if ([System.IO.Path]::IsPathRooted($TopologyPath)) {
+    [System.IO.Path]::GetFullPath($TopologyPath)
+} else {
+    [System.IO.Path]::GetFullPath((Join-Path (Get-EasyProxyRepoRoot) $TopologyPath))
 }
-elseif ((Test-Path -LiteralPath $resolvedConfigPath)) {
-    $config = Read-EasyProxyConfig -ConfigPath $resolvedConfigPath
+if (-not (Test-Path -LiteralPath $resolvedTopologyPath)) {
+    if (-not $InitTopology) {
+        throw "Missing topology: $resolvedTopologyPath. Copy topology.example.yaml or pass -InitTopology."
+    }
+    Copy-Item -LiteralPath (Resolve-EasyProxyPath -Path 'topology.example.yaml') -Destination $resolvedTopologyPath
 }
+$null = Read-EasyProxyTopology -TopologyPath $resolvedTopologyPath
 
 switch ($Project) {
-    "easyproxy" {
-        $scriptPath = Join-Path $PSScriptRoot 'deploy-easyproxy.ps1'
-        $args = @("-ExecutionPolicy", "Bypass", "-File", $scriptPath, "-ConfigPath", $resolvedConfigPath)
-        if (-not [string]::IsNullOrWhiteSpace($ImportCode)) { $args += @("-ImportCode", $ImportCode) }
-        if (-not [string]::IsNullOrWhiteSpace($BootstrapFile)) { $args += @("-BootstrapFile", $BootstrapFile) }
-        if ($NoBuild) { $args += "-NoBuild" }
-        if ($SkipRender) { $args += "-SkipRender" }
-        if (-not [string]::IsNullOrWhiteSpace($ContainerName)) { $args += @("-ContainerName", $ContainerName) }
-        if (-not [string]::IsNullOrWhiteSpace($PoolPortBinding)) { $args += @("-PoolPortBinding", $PoolPortBinding) }
-        if (-not [string]::IsNullOrWhiteSpace($ManagementPortBinding)) { $args += @("-ManagementPortBinding", $ManagementPortBinding) }
-        if (-not [string]::IsNullOrWhiteSpace($MultiPortBinding)) { $args += @("-MultiPortBinding", $MultiPortBinding) }
-        if (-not [string]::IsNullOrWhiteSpace($NetworkAlias)) { $args += @("-NetworkAlias", $NetworkAlias) }
-        if (-not [string]::IsNullOrWhiteSpace($ComposeProjectName)) { $args += @("-ComposeProjectName", $ComposeProjectName) }
-        Invoke-EasyProxyExternalCommand -FilePath "powershell" -Arguments $args -FailureMessage "easyproxy deploy failed"
-        break
+    { $_ -in @('easyproxy', 'easyproxy-ghcr') } {
+        $arguments = @('-TopologyPath', $resolvedTopologyPath, '-RuntimeConfigPath', $RuntimeConfigPath)
+        if ($Project -eq 'easyproxy-ghcr') { $arguments += '-FromGhcr' }
+        if (-not [string]::IsNullOrWhiteSpace($ImportCode)) { $arguments += @('-ImportCode', $ImportCode) }
+        if (-not [string]::IsNullOrWhiteSpace($BootstrapFile)) { $arguments += @('-BootstrapFile', $BootstrapFile) }
+        if ($NoBuild) { $arguments += '-NoBuild' }
+        if (-not [string]::IsNullOrWhiteSpace($ReleaseTag)) { $arguments += @('-ReleaseTag', $ReleaseTag) }
+        if (-not [string]::IsNullOrWhiteSpace($GhcrOwner)) { $arguments += @('-GhcrOwner', $GhcrOwner) }
+        if (-not [string]::IsNullOrWhiteSpace($Image)) { $arguments += @('-Image', $Image) }
+        if ($SkipPull) { $arguments += '-SkipPull' }
+        foreach ($pair in @(
+            @('ContainerName', $ContainerName),
+            @('PoolPortBinding', $PoolPortBinding),
+            @('ManagementPortBinding', $ManagementPortBinding),
+            @('MultiPortBinding', $MultiPortBinding),
+            @('NetworkAlias', $NetworkAlias),
+            @('ComposeProjectName', $ComposeProjectName)
+        )) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$pair[1])) {
+                $arguments += @("-$($pair[0])", [string]$pair[1])
+            }
+        }
+        Invoke-RepositoryScript -Name 'deploy-easyproxy.ps1' -Arguments $arguments
     }
-    "easyproxy-ghcr" {
-        $scriptPath = Join-Path $PSScriptRoot 'deploy-easyproxy.ps1'
-        $args = @("-ExecutionPolicy", "Bypass", "-File", $scriptPath, "-ConfigPath", $resolvedConfigPath, "-FromGhcr")
-        if (-not [string]::IsNullOrWhiteSpace($ImportCode)) { $args += @("-ImportCode", $ImportCode) }
-        if (-not [string]::IsNullOrWhiteSpace($BootstrapFile)) { $args += @("-BootstrapFile", $BootstrapFile) }
-        if ($SkipRender) { $args += "-SkipRender" }
-        if (-not [string]::IsNullOrWhiteSpace($ReleaseTag)) { $args += @("-ReleaseTag", $ReleaseTag) }
-        if (-not [string]::IsNullOrWhiteSpace($GhcrOwner)) { $args += @("-GhcrOwner", $GhcrOwner) }
-        if (-not [string]::IsNullOrWhiteSpace($Image)) { $args += @("-Image", $Image) }
-        if (-not [string]::IsNullOrWhiteSpace($ContainerName)) { $args += @("-ContainerName", $ContainerName) }
-        if (-not [string]::IsNullOrWhiteSpace($PoolPortBinding)) { $args += @("-PoolPortBinding", $PoolPortBinding) }
-        if (-not [string]::IsNullOrWhiteSpace($ManagementPortBinding)) { $args += @("-ManagementPortBinding", $ManagementPortBinding) }
-        if (-not [string]::IsNullOrWhiteSpace($MultiPortBinding)) { $args += @("-MultiPortBinding", $MultiPortBinding) }
-        if (-not [string]::IsNullOrWhiteSpace($NetworkAlias)) { $args += @("-NetworkAlias", $NetworkAlias) }
-        if (-not [string]::IsNullOrWhiteSpace($ComposeProjectName)) { $args += @("-ComposeProjectName", $ComposeProjectName) }
-        if ($SkipPull) { $args += "-SkipPull" }
-        Invoke-EasyProxyExternalCommand -FilePath "powershell" -Arguments $args -FailureMessage "easyproxy GHCR deploy failed"
-        break
+    { $_ -in @('misub-pages', 'misub-docker') } {
+        $mode = if ($Project -eq 'misub-pages') { 'pages' } else { 'docker' }
+        $arguments = @('-TopologyPath', $resolvedTopologyPath, '-Mode', $mode)
+        if ($NoInstall) { $arguments += '-NoInstall' }
+        if ($NoBuild) { $arguments += '-NoBuild' }
+        Invoke-RepositoryScript -Name 'deploy-misub.ps1' -Arguments $arguments
     }
-    "misub-pages" {
-        $scriptPath = Join-Path $PSScriptRoot 'deploy-misub.ps1'
-        $args = @("-ExecutionPolicy", "Bypass", "-File", $scriptPath, "-ConfigPath", $resolvedConfigPath, "-Mode", "pages")
-        if ($NoInstall) { $args += "-NoInstall" }
-        if ($NoBuild) { $args += "-NoBuild" }
-        Invoke-EasyProxyExternalCommand -FilePath "powershell" -Arguments $args -FailureMessage "misub pages deploy failed"
-        break
+    'aggregator' {
+        $arguments = @('-TopologyPath', $resolvedTopologyPath)
+        if ($SkipWorkflowTrigger) { $arguments += '-SkipWorkflowTrigger' }
+        Invoke-RepositoryScript -Name 'deploy-aggregator.ps1' -Arguments $arguments
     }
-    "misub-docker" {
-        $scriptPath = Join-Path $PSScriptRoot 'deploy-misub.ps1'
-        $args = @("-ExecutionPolicy", "Bypass", "-File", $scriptPath, "-ConfigPath", $resolvedConfigPath, "-Mode", "docker")
-        if ($NoBuild) { $args += "-NoBuild" }
-        if ($SkipRender) { $args += "-SkipRender" }
-        Invoke-EasyProxyExternalCommand -FilePath "powershell" -Arguments $args -FailureMessage "misub docker deploy failed"
-        break
+    'ech-workers-cloudflare' {
+        $arguments = @('-TopologyPath', $resolvedTopologyPath)
+        if ($DryRun) { $arguments += '-DryRun' }
+        if ($SkipSecretSync) { $arguments += '-SkipSecretSync' }
+        Invoke-RepositoryScript -Name 'deploy-ech-workers-cloudflare.ps1' -Arguments $arguments
     }
-    "aggregator" {
-        $scriptPath = Join-Path $PSScriptRoot 'deploy-aggregator.ps1'
-        $args = @("-ExecutionPolicy", "Bypass", "-File", $scriptPath, "-ConfigPath", $resolvedConfigPath)
-        if ($SkipSecretUpdate) { $args += "-SkipSecretUpdate" }
-        if ($SkipWorkflowTrigger) { $args += "-SkipWorkflowTrigger" }
-        Invoke-EasyProxyExternalCommand -FilePath "powershell" -Arguments $args -FailureMessage "aggregator deploy failed"
-        break
+    { $_ -in @('build-easyproxy-image', 'build-ech-workers-image') } {
+        $name = if ($Project -eq 'build-easyproxy-image') { 'build-easyproxy-image.ps1' } else { 'build-ech-workers-image.ps1' }
+        $arguments = @()
+        if (-not [string]::IsNullOrWhiteSpace($Image)) { $arguments += @('-Image', $Image) }
+        if ($NoCache) { $arguments += '-NoCache' }
+        if ($Push) { $arguments += '-Push' }
+        Invoke-RepositoryScript -Name $name -Arguments $arguments
     }
-    "ech-workers-cloudflare" {
-        $scriptPath = Join-Path $PSScriptRoot 'deploy-ech-workers-cloudflare.ps1'
-        $args = @("-ExecutionPolicy", "Bypass", "-File", $scriptPath, "-ConfigPath", $resolvedConfigPath)
-        if ($DryRun) { $args += "-DryRun" }
-        if ($SkipRender) { $args += "-SkipRender" }
-        if ($SkipSecretSync) { $args += "-SkipSecretSync" }
-        Invoke-EasyProxyExternalCommand -FilePath "powershell" -Arguments $args -FailureMessage "ech-workers-cloudflare deploy failed"
-        break
+    'publish-service-base-config' {
+        $arguments = @('-TopologyPath', $resolvedTopologyPath, '-RuntimeConfigPath', $RuntimeConfigPath)
+        if (-not [string]::IsNullOrWhiteSpace($ReleaseTag)) { $arguments += @('-ReleaseVersion', $ReleaseTag) }
+        Invoke-RepositoryScript -Name 'publish-service-base-config.ps1' -Arguments $arguments
     }
-    "sync-github-settings" {
-        $scriptPath = Join-Path $PSScriptRoot 'sync-github-deployment-settings.ps1'
-        $args = @("-ExecutionPolicy", "Bypass", "-File", $scriptPath, "-ConfigPath", $resolvedConfigPath)
-        Invoke-EasyProxyExternalCommand -FilePath "powershell" -Arguments $args -FailureMessage "sync github deployment settings failed"
-        break
-    }
-    "build-easyproxy-image" {
-        $scriptPath = Join-Path $PSScriptRoot 'build-easyproxy-image.ps1'
-        $args = @("-ExecutionPolicy", "Bypass", "-File", $scriptPath, "-ConfigPath", $resolvedConfigPath)
-        if ($NoCache) { $args += "-NoCache" }
-        if ($Push) { $args += "-Push" }
-        Invoke-EasyProxyExternalCommand -FilePath "powershell" -Arguments $args -FailureMessage "build easyproxy image failed"
-        break
-    }
-    "build-ech-workers-image" {
-        $scriptPath = Join-Path $PSScriptRoot 'build-ech-workers-image.ps1'
-        $args = @("-ExecutionPolicy", "Bypass", "-File", $scriptPath, "-ConfigPath", $resolvedConfigPath)
-        if ($NoCache) { $args += "-NoCache" }
-        if ($Push) { $args += "-Push" }
-        Invoke-EasyProxyExternalCommand -FilePath "powershell" -Arguments $args -FailureMessage "build ech-workers image failed"
-        break
-    }
-    "publish-easyproxy-image" {
-        $scriptPath = Join-Path $PSScriptRoot 'publish-ghcr-images.ps1'
-        $args = @("-ExecutionPolicy", "Bypass", "-File", $scriptPath, "-ConfigPath", $resolvedConfigPath, "-Target", "easyproxy")
-        if (-not [string]::IsNullOrWhiteSpace($ReleaseTag)) { $args += @("-ReleaseTag", $ReleaseTag) }
-        if (-not [string]::IsNullOrWhiteSpace($GhcrOwner)) { $args += @("-GhcrOwner", $GhcrOwner) }
-        if (-not [string]::IsNullOrWhiteSpace($GhcrUsername)) { $args += @("-GhcrUsername", $GhcrUsername) }
-        if (-not [string]::IsNullOrWhiteSpace($GhcrToken)) { $args += @("-GhcrToken", $GhcrToken) }
-        if ($NoCache) { $args += "-NoCache" }
-        if ($LoadOnly) { $args += "-LoadOnly" }
-        Invoke-EasyProxyExternalCommand -FilePath "powershell" -Arguments $args -FailureMessage "publish easyproxy image failed"
-        break
-    }
-    "publish-service-base-config" {
-        $scriptPath = Join-Path $PSScriptRoot 'publish-service-base-config.ps1'
-        $args = @("-ExecutionPolicy", "Bypass", "-File", $scriptPath, "-ConfigPath", $resolvedConfigPath)
-        if (-not [string]::IsNullOrWhiteSpace($ReleaseTag)) { $args += @("-ReleaseVersion", $ReleaseTag) }
-        Invoke-EasyProxyExternalCommand -FilePath "powershell" -Arguments $args -FailureMessage "publish service-base config failed"
-        break
-    }
-    "publish-ech-workers-image" {
-        $scriptPath = Join-Path $PSScriptRoot 'publish-ghcr-images.ps1'
-        $args = @("-ExecutionPolicy", "Bypass", "-File", $scriptPath, "-ConfigPath", $resolvedConfigPath, "-Target", "ech-workers")
-        if (-not [string]::IsNullOrWhiteSpace($ReleaseTag)) { $args += @("-ReleaseTag", $ReleaseTag) }
-        if (-not [string]::IsNullOrWhiteSpace($GhcrOwner)) { $args += @("-GhcrOwner", $GhcrOwner) }
-        if (-not [string]::IsNullOrWhiteSpace($GhcrUsername)) { $args += @("-GhcrUsername", $GhcrUsername) }
-        if (-not [string]::IsNullOrWhiteSpace($GhcrToken)) { $args += @("-GhcrToken", $GhcrToken) }
-        if ($NoCache) { $args += "-NoCache" }
-        if ($LoadOnly) { $args += "-LoadOnly" }
-        Invoke-EasyProxyExternalCommand -FilePath "powershell" -Arguments $args -FailureMessage "publish ech-workers image failed"
-        break
-    }
-    "publish-core-images" {
-        $scriptPath = Join-Path $PSScriptRoot 'publish-ghcr-images.ps1'
-        $args = @("-ExecutionPolicy", "Bypass", "-File", $scriptPath, "-ConfigPath", $resolvedConfigPath, "-Target", "both")
-        if (-not [string]::IsNullOrWhiteSpace($ReleaseTag)) { $args += @("-ReleaseTag", $ReleaseTag) }
-        if (-not [string]::IsNullOrWhiteSpace($GhcrOwner)) { $args += @("-GhcrOwner", $GhcrOwner) }
-        if (-not [string]::IsNullOrWhiteSpace($GhcrUsername)) { $args += @("-GhcrUsername", $GhcrUsername) }
-        if (-not [string]::IsNullOrWhiteSpace($GhcrToken)) { $args += @("-GhcrToken", $GhcrToken) }
-        if ($NoCache) { $args += "-NoCache" }
-        if ($LoadOnly) { $args += "-LoadOnly" }
-        Invoke-EasyProxyExternalCommand -FilePath "powershell" -Arguments $args -FailureMessage "publish core images failed"
-        break
-    }
-    default {
-        throw "Unsupported project: $Project"
+    { $_ -in @('publish-easyproxy-image', 'publish-ech-workers-image', 'publish-core-images') } {
+        $target = switch ($Project) {
+            'publish-easyproxy-image' { 'easyproxy' }
+            'publish-ech-workers-image' { 'ech-workers' }
+            default { 'both' }
+        }
+        $arguments = @('-Target', $target)
+        foreach ($pair in @(
+            @('ReleaseTag', $ReleaseTag),
+            @('GhcrOwner', $GhcrOwner),
+            @('GhcrUsername', $GhcrUsername)
+        )) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$pair[1])) {
+                $arguments += @("-$($pair[0])", [string]$pair[1])
+            }
+        }
+        if ($NoCache) { $arguments += '-NoCache' }
+        if ($LoadOnly) { $arguments += '-LoadOnly' }
+        Invoke-RepositoryScript -Name 'publish-ghcr-images.ps1' -Arguments $arguments
     }
 }
 

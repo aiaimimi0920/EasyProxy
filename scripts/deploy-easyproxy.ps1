@@ -1,9 +1,9 @@
 param(
-    [string]$ConfigPath = (Join-Path $PSScriptRoot '..\config.yaml'),
+    [string]$TopologyPath = (Join-Path $PSScriptRoot '..\topology.yaml'),
+    [string]$RuntimeConfigPath = (Join-Path $PSScriptRoot '..\deploy\service\base\config.yaml'),
     [string]$ImportCode = '',
     [string]$BootstrapFile = '',
     [switch]$NoBuild,
-    [switch]$SkipRender,
     [switch]$FromGhcr,
     [string]$Image = '',
     [string]$ReleaseTag = '',
@@ -21,16 +21,21 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot 'lib\easyproxy-common.ps1')
-. (Join-Path $PSScriptRoot 'lib\easyproxy-config.ps1')
 . (Join-Path $PSScriptRoot 'lib\easyproxy-ghcr.ps1')
+. (Join-Path $PSScriptRoot 'lib\easyproxy-topology.ps1')
 
 Assert-EasyProxyCommand -Name "docker" -Hint "Install Docker Desktop or another Docker engine first."
 
-$config = Read-EasyProxyConfig -ConfigPath $ConfigPath
-$serviceBase = Get-EasyProxyConfigSection -Config $config -Name 'serviceBase'
-$composeFile = Resolve-EasyProxyPath -Path (Get-EasyProxyConfigValue -Object $serviceBase -Name 'composeFile' -Default 'deploy/service/base/docker-compose.yaml')
-$serviceOutput = Resolve-EasyProxyPath -Path (Get-EasyProxyConfigValue -Object $serviceBase -Name 'renderedConfigPath' -Default 'deploy/service/base/config.yaml') -AllowMissing
-$networkName = [string](Get-EasyProxyConfigValue -Object $serviceBase -Name 'networkName' -Default 'EasyAiMi')
+$topology = Read-EasyProxyTopology -TopologyPath $TopologyPath
+if (-not [bool]$topology.components.local_easyproxy) {
+    throw 'Topology does not enable components.local_easyproxy.'
+}
+if ([string]$topology.local.install_mode -ne 'docker') {
+    throw "This wrapper requires local.install_mode: docker."
+}
+$composeFile = Resolve-EasyProxyPath -Path 'deploy/service/base/docker-compose.yaml'
+$serviceOutput = Resolve-EasyProxyPath -Path $RuntimeConfigPath -AllowMissing
+$networkName = "$($topology.deployment_name)-network"
 $useGhcrDeploy = $FromGhcr -or -not [string]::IsNullOrWhiteSpace($Image) -or -not [string]::IsNullOrWhiteSpace($ReleaseTag)
 $bootstrapPath = Resolve-EasyProxyPath -Path 'deploy/service/base/bootstrap/r2-bootstrap.json' -AllowMissing
 $bootstrapStatePath = Resolve-EasyProxyPath -Path 'deploy/service/base/bootstrap/.import-state.json' -AllowMissing
@@ -66,15 +71,14 @@ if ($shouldBootstrapFromImport) {
         '--state-path', $bootstrapStatePath
     ) -FailureMessage 'Failed to bootstrap EasyProxy runtime config from R2'
 }
-elseif (-not $SkipRender) {
-    $render = Join-Path $PSScriptRoot 'render-derived-configs.ps1'
-    Invoke-EasyProxyExternalCommand -FilePath 'powershell' -Arguments @(
-        '-ExecutionPolicy', 'Bypass',
-        '-File', $render,
-        '-ConfigPath', (Resolve-EasyProxyPath -Path $ConfigPath),
-        '-ServiceBase',
-        '-ServiceOutput', $serviceOutput
-    ) -FailureMessage "Failed to render EasyProxy runtime config from root config"
+elseif (-not (Test-Path -LiteralPath $serviceOutput)) {
+    $template = Resolve-EasyProxyPath -Path 'deploy/service/base/config.template.yaml'
+    $serviceOutputParent = Split-Path -Parent $serviceOutput
+    if (-not [string]::IsNullOrWhiteSpace($serviceOutputParent)) {
+        New-Item -ItemType Directory -Force -Path $serviceOutputParent | Out-Null
+    }
+    Copy-Item -LiteralPath $template -Destination $serviceOutput
+    Write-Host "Initialized runtime config once: $serviceOutput" -ForegroundColor Yellow
 }
 
 Ensure-EasyProxyPathExists -Path $serviceOutput -Message "Missing rendered EasyProxy runtime config: $serviceOutput"
@@ -85,13 +89,12 @@ if ($useGhcrDeploy) {
             throw "GHCR deployment requires -Image or -ReleaseTag."
         }
 
-        $ghcr = Get-EasyProxyConfigSection -Config $config -Name 'ghcr'
         if ([string]::IsNullOrWhiteSpace($GhcrOwner)) {
-            $GhcrOwner = [string](Get-EasyProxyConfigValue -Object $ghcr -Name 'owner' -Default '')
+            $GhcrOwner = [string]$env:GITHUB_REPOSITORY_OWNER
         }
         Assert-EasyProxyGhcrOwnerIsSafe -Owner $GhcrOwner -SourceDescription "GHCR owner"
 
-        $serviceImageName = [string](Get-EasyProxyConfigValue -Object $ghcr -Name 'serviceImageName' -Default 'easy-proxy-monorepo-service')
+        $serviceImageName = 'easy-proxy-monorepo-service'
         $Image = "ghcr.io/$GhcrOwner/${serviceImageName}:$ReleaseTag"
     }
 

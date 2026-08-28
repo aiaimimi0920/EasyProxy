@@ -1,60 +1,50 @@
 param(
-    [string]$ConfigPath = (Join-Path $PSScriptRoot '..\config.yaml'),
-    [string]$AccountId = '',
-    [string]$Bucket = '',
-    [string]$AccessKeyId = '',
-    [string]$SecretAccessKey = '',
-    [string]$ConfigObjectKey = '',
-    [string]$ManifestObjectKey = '',
+    [string]$TopologyPath = (Join-Path $PSScriptRoot '..\topology.yaml'),
+    [string]$RuntimeConfigPath = (Join-Path $PSScriptRoot '..\deploy\service\base\config.yaml'),
     [string]$Endpoint = '',
     [string]$ReleaseVersion = '',
     [string]$ManifestOutput = ''
 )
 
 Set-StrictMode -Version Latest
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot 'lib\easyproxy-common.ps1')
-. (Join-Path $PSScriptRoot 'lib\easyproxy-config.ps1')
+. (Join-Path $PSScriptRoot 'lib\easyproxy-topology.ps1')
 
-$config = Read-EasyProxyConfig -ConfigPath $ConfigPath
-$distribution = Get-EasyProxyConfigSection -Config $config -Name 'distribution'
-$serviceBaseDistribution = Get-EasyProxyConfigSection -Config $distribution -Name 'serviceBase'
+$topology = Read-EasyProxyTopology -TopologyPath $TopologyPath
+$resourceNames = Get-EasyProxyResourceNames -TopologyPath $TopologyPath
+$accountId = Get-EasyProxyEnvironmentValue `
+    -Reference ([string]$topology.cloudflare.account_id_env) `
+    -Purpose 'R2 account selection'
+$deploymentPrefix = "runtime/$($topology.deployment_name)"
+$arguments = @(
+    '-RuntimeConfigPath', $RuntimeConfigPath,
+    '-AccountId', $accountId,
+    '-Bucket', ([string]$resourceNames.r2_bucket),
+    '-ConfigObjectKey', "$deploymentPrefix/config.yaml",
+    '-ManifestObjectKey', "$deploymentPrefix/manifest.json"
+)
+if (-not [string]::IsNullOrWhiteSpace($Endpoint)) { $arguments += @('-Endpoint', $Endpoint) }
+if (-not [string]::IsNullOrWhiteSpace($ReleaseVersion)) { $arguments += @('-ReleaseVersion', $ReleaseVersion) }
+if (-not [string]::IsNullOrWhiteSpace($ManifestOutput)) { $arguments += @('-ManifestOutput', $ManifestOutput) }
 
-if ([string]::IsNullOrWhiteSpace($AccountId)) {
-    $AccountId = [string](Get-EasyProxyConfigValue -Object $serviceBaseDistribution -Name 'accountId' -Default '')
+$previousAccessKey = [Environment]::GetEnvironmentVariable('EASYPROXY_R2_ACCESS_KEY_ID', 'Process')
+$previousSecretKey = [Environment]::GetEnvironmentVariable('EASYPROXY_R2_SECRET_ACCESS_KEY', 'Process')
+try {
+    $env:EASYPROXY_R2_ACCESS_KEY_ID = Get-EasyProxyEnvironmentValue `
+        -Reference ([string]$topology.secrets.r2_access_key_id) `
+        -Purpose 'R2 config publication'
+    $env:EASYPROXY_R2_SECRET_ACCESS_KEY = Get-EasyProxyEnvironmentValue `
+        -Reference ([string]$topology.secrets.r2_secret_access_key) `
+        -Purpose 'R2 config publication'
+    & (Join-Path $PSScriptRoot 'upload-service-base-r2-config.ps1') @arguments
+    $uploadExitCode = $LASTEXITCODE
 }
-if ([string]::IsNullOrWhiteSpace($Bucket)) {
-    $Bucket = [string](Get-EasyProxyConfigValue -Object $serviceBaseDistribution -Name 'bucket' -Default '')
+finally {
+    [Environment]::SetEnvironmentVariable('EASYPROXY_R2_ACCESS_KEY_ID', $previousAccessKey, 'Process')
+    [Environment]::SetEnvironmentVariable('EASYPROXY_R2_SECRET_ACCESS_KEY', $previousSecretKey, 'Process')
 }
-if ([string]::IsNullOrWhiteSpace($AccessKeyId)) {
-    $AccessKeyId = [string](Get-EasyProxyConfigValue -Object $serviceBaseDistribution -Name 'accessKeyId' -Default '')
-}
-if ([string]::IsNullOrWhiteSpace($SecretAccessKey)) {
-    $SecretAccessKey = [string](Get-EasyProxyConfigValue -Object $serviceBaseDistribution -Name 'secretAccessKey' -Default '')
-}
-if ([string]::IsNullOrWhiteSpace($ConfigObjectKey)) {
-    $ConfigObjectKey = [string](Get-EasyProxyConfigValue -Object $serviceBaseDistribution -Name 'configObjectKey' -Default '')
-}
-if ([string]::IsNullOrWhiteSpace($ManifestObjectKey)) {
-    $ManifestObjectKey = [string](Get-EasyProxyConfigValue -Object $serviceBaseDistribution -Name 'manifestObjectKey' -Default '')
-}
-if ([string]::IsNullOrWhiteSpace($Endpoint)) {
-    $Endpoint = [string](Get-EasyProxyConfigValue -Object $serviceBaseDistribution -Name 'endpoint' -Default '')
-}
-
-& (Join-Path $PSScriptRoot 'upload-service-base-r2-config.ps1') `
-    -ConfigPath $ConfigPath `
-    -AccountId $AccountId `
-    -Bucket $Bucket `
-    -AccessKeyId $AccessKeyId `
-    -SecretAccessKey $SecretAccessKey `
-    -ConfigObjectKey $ConfigObjectKey `
-    -ManifestObjectKey $ManifestObjectKey `
-    -Endpoint $Endpoint `
-    -ReleaseVersion $ReleaseVersion `
-    -ManifestOutput $ManifestOutput
-
-if ($LASTEXITCODE -ne 0) {
-    throw "Failed to publish service/base config distribution with exit code $LASTEXITCODE"
+if ($uploadExitCode -ne 0) {
+    throw "Failed to publish service/base runtime config with exit code $uploadExitCode"
 }

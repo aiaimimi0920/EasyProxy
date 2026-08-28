@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/aiaimimi0920/EasyProxy/topology.schema.json",
+  "title": "EasyProxy topology",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "deployment_name",
+    "release_channel",
+    "components",
+    "cloudflare",
+    "aggregator",
+    "misub",
+    "local",
+    "secrets"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "deployment_name": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,47}[a-z0-9]$"
+    },
+    "release_channel": { "enum": ["stable", "candidate"] },
+    "components": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["aggregator", "misub", "ech_worker", "local_easyproxy"],
+      "properties": {
+        "aggregator": { "type": "boolean" },
+        "misub": { "type": "boolean" },
+        "ech_worker": { "type": "boolean" },
+        "local_easyproxy": { "type": "boolean" }
+      }
+    },
+    "cloudflare": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["account_id_env", "use_pages_dev", "use_workers_dev", "resources"],
+      "properties": {
+        "account_id_env": { "$ref": "#/$defs/envName" },
+        "zone_id_env": {
+          "oneOf": [{ "$ref": "#/$defs/envName" }, { "const": "" }]
+        },
+        "use_pages_dev": { "type": "boolean" },
+        "use_workers_dev": { "type": "boolean" },
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["pages_project", "d1_database", "ech_worker", "r2_bucket", "r2_public_base_url"],
+          "properties": {
+            "pages_project": { "$ref": "#/$defs/optionalResourceName" },
+            "d1_database": { "$ref": "#/$defs/optionalResourceName" },
+            "ech_worker": { "$ref": "#/$defs/optionalResourceName" },
+            "r2_bucket": { "$ref": "#/$defs/optionalResourceName" },
+            "r2_public_base_url": {
+              "oneOf": [
+                { "type": "string", "format": "uri", "pattern": "^https://[^?#]+$" },
+                { "const": "" }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "aggregator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schedule"],
+      "properties": {
+        "schedule": {
+          "type": "string",
+          "pattern": "^\\S+\\s+\\S+\\s+\\S+\\s+\\S+\\s+\\S+$"
+        }
+      }
+    },
+    "misub": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["default_profile"],
+      "properties": {
+        "default_profile": { "type": "string", "pattern": ".*\\S.*" }
+      }
+    },
+    "local": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["install_mode", "access_mode", "release_channel"],
+      "properties": {
+        "install_mode": { "enum": ["docker", "native"] },
+        "access_mode": { "enum": ["local_server", "pool", "gateway"] },
+        "release_channel": { "enum": ["stable", "candidate"] }
+      }
+    },
+    "secrets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cloudflare_api_token",
+        "misub_admin_password",
+        "misub_cookie_secret",
+        "misub_manifest_token",
+        "misub_cron_secret",
+        "ech_token",
+        "r2_access_key_id",
+        "r2_secret_access_key"
+      ],
+      "properties": {
+        "cloudflare_api_token": { "$ref": "#/$defs/envName" },
+        "cloudflare_dns_token": {
+          "oneOf": [{ "$ref": "#/$defs/envName" }, { "const": "" }]
+        },
+        "misub_admin_password": { "$ref": "#/$defs/envName" },
+        "misub_cookie_secret": { "$ref": "#/$defs/envName" },
+        "misub_manifest_token": { "$ref": "#/$defs/envName" },
+        "misub_cron_secret": { "$ref": "#/$defs/envName" },
+        "ech_token": { "$ref": "#/$defs/envName" },
+        "r2_access_key_id": { "$ref": "#/$defs/envName" },
+        "r2_secret_access_key": { "$ref": "#/$defs/envName" }
+      }
+    }
+  },
+  "$defs": {
+    "envName": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]*$"
+    },
+    "optionalResourceName": {
+      "type": "string",
+      "pattern": "^$|^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+    }
+  }
+}

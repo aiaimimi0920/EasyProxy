@@ -4,26 +4,33 @@ Project: `EasyProxy`
 
 Release class: `complex-multi-surface`
 
-This repository follows the EasyAiMi release contract v1. The contract standardizes the operator-facing behavior of GitHub Actions, GHCR images, R2 config distribution, encrypted import-code artifacts, and blank-host local deployment. Project-specific build internals are allowed when the public contract remains stable.
+This repository follows the EasyAiMi release contract v1. The contract
+standardizes the operator-facing behavior of GitHub Actions, GHCR images, and
+blank-host local deployment. Project-specific build internals are allowed when
+the public contract remains stable.
 
 ## Standard guarantees
 
 - Manual publish workflows accept a standard `release_tag` override. Legacy `version` inputs remain supported where they already existed.
 - Publish metadata writes both `release_tag` and `version` outputs when the workflow has a release metadata step.
-- Config-bearing releases publish an R2 distribution manifest artifact and an encrypted owner import-code artifact.
-- Local deployment starts from `deploy-host.ps1` and must support an empty host directory using GHCR images plus an import code.
+- Runtime configuration is persistent local state and is not bundled into an
+  image-publication workflow or artifact.
+- Local deployment starts from `deploy-host.ps1` and supports an empty host
+  directory through recursive repository bootstrap plus GHCR images. Import
+  codes remain an explicit advanced runtime-snapshot path, not a release
+  prerequisite.
 - Deployment logic must not depend on bind mounting `C:\Users\Public\nas_home\AI\GameEditor\<Project>` source trees.
 
 ## Workflows
 
 | Component | Workflow | Tag inputs | Required artifacts | Required capabilities |
 | --- | --- | --- | --- | --- |
-| `service-and-workers` | `.github/workflows/publish-ghcr-images.yml` | `release_tag` | `service-base-r2-config-manifest, service-base-import-code-encrypted` | GHCR, R2, import-code |
-| `service-base-config` | `.github/workflows/publish-service-base-config.yml` | `release_tag` | `service-base-r2-config-manifest, service-base-import-code-encrypted` | R2, import-code |
+| `service-and-workers` | `.github/workflows/publish-ghcr-images.yml` | `release_tag` | none | GHCR |
 
 ## Project-specific exceptions
 
 - Multi-image publishing, GitHub Release, Cloudflare deploy, and aggregator deploy stay project-specific.
+- Runtime configuration is persistent local state and is not bundled into GHCR publication.
 
 ## Verification
 

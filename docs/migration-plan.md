@@ -100,8 +100,8 @@ Clone with `--recurse-submodules`. Aggregator contains the nested public
 
 - root-level CI validates root scripts, upstream regressions, MiSub, Go,
   frontend source/generated assets, and the release contract
-- the shared root config model renders and supplies operator inputs across the
-  monorepo
+- deployment topology and persistent service runtime config have separate
+  authorities; no shared root renderer rewrites runtime state
 - active deployment notes live with their owning modules under `deploy/*`
 - tracked operator scripts no longer auto-discover secrets from legacy private
   archive paths

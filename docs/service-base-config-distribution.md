@@ -1,188 +1,89 @@
-# Service Base Config Distribution
+# Runtime Config Snapshot Distribution
 
-`service/base` now supports a long-lived private config distribution path that
-is suitable for public image releases and private operator bootstrap.
+EasyProxy can publish an **explicit snapshot** of the current local runtime
+config to private Cloudflare R2. This is an advanced owner operation, not the
+normal topology deployment path and not an automatic configuration authority.
 
-The model is intentionally split into three layers:
+## Authority and safety
 
-1. `publisher`
-   - renders the effective `service/base` runtime config from the root
-     `config.yaml`
-   - uploads the rendered config and a manifest into private Cloudflare R2
-2. `owner bootstrap`
-   - generates an import code or bootstrap JSON that grants a client only the
-     minimum read access required to fetch that config
-3. `runtime`
-   - downloads the config during container startup
-   - periodically checks the manifest and refreshes the local runtime config if
-     the fingerprint changes
+- `deploy/service/base/config.yaml` (or the explicitly selected runtime file)
+  remains the local runtime authority.
+- `topology.yaml` supplies the deterministic R2 bucket name and environment
+  variable references.
+- Publication uploads the selected runtime file as-is; it does not render it
+  from another root config.
+- An ordinary deploy never downloads or overwrites a present runtime file.
+- Enabling background R2 synchronization deliberately grants the remote object
+  later-write authority and must be an explicit operator decision.
+- Runtime snapshots may contain proxy credentials and connector tokens. Keep
+  the bucket private and never upload the snapshot as a public GitHub artifact.
 
-## What Gets Published
+The former `Publish Service Base Config` workflow was removed because it mixed a
+secret root config, rendering, publication, and release behavior. Backup and
+restore workflows must use the lifecycle backup contract instead.
 
-The publishing workflow writes two objects into the private bucket:
+## Object layout
 
-- rendered runtime config
-  - default key: `service-base/config.yaml`
-- distribution manifest
-  - default key: `service-base/manifest.json`
+The local publisher writes:
 
-The manifest records:
+```text
+runtime/<deployment_name>/config.yaml
+runtime/<deployment_name>/manifest.json
+```
 
-- account id
-- bucket
-- endpoint
-- object keys
-- config hash / fingerprint
-- release version
+The distribution manifest records the account, bucket, endpoint, object keys,
+size, content type, release version, and config fingerprint. It is distinct from
+`deployment-manifest.json`, which records topology/resource/source versions.
 
-That manifest is the stable lookup point used by both bootstrap JSON and import
-codes.
+## Local publication
 
-When Local Server is enabled, the rendered runtime config also contains the
-canonical `local_server.auth` credential. The renderer normalizes that same
-credential into the listener and management compatibility fields. Do not edit
-those derived copies independently, and do not distribute a rendered Local
-Server config to hosts that are outside the intended trusted-LAN boundary.
+Prerequisites:
 
-## GitHub Workflow
-
-Primary workflow:
-
-- [publish-service-base-config.yml](/C:/Users/Public/nas_home/AI/GameEditor/EasyProxy/.github/workflows/publish-service-base-config.yml)
-
-What it does:
-
-1. runs the repository validation preflight
-2. decodes `EASYPROXY_ROOT_CONFIG_YAML_B64`
-3. renders the effective `service/base` runtime config
-4. uploads config + manifest into private R2
-5. optionally emits an encrypted owner-only import-code artifact
-6. verifies that bootstrap download works before the job is marked successful
-
-## Local Publish Example
+1. a validated `topology.yaml`;
+2. an existing runtime config;
+3. the account and R2 secret references resolved in the process environment;
+4. Python with `boto3`.
 
 ```powershell
+$env:CLOUDFLARE_ACCOUNT_ID = '<account-id>'
+$env:R2_ACCESS_KEY_ID = '<writer-key-id>'
+$env:R2_SECRET_ACCESS_KEY = '<writer-secret>'
+
 powershell -ExecutionPolicy Bypass -File .\scripts\publish-service-base-config.ps1 `
-  -ConfigPath .\config.yaml `
-  -ReleaseVersion release-20260428-001
+  -TopologyPath .\topology.yaml `
+  -RuntimeConfigPath .\deploy\service\base\config.yaml `
+  -ReleaseVersion <release-version>
 ```
 
-The script reads the `distribution.serviceBase` block from local
-`config.yaml`, renders the effective `service/base` config, and uploads the
-distribution objects to R2.
+Credentials are transferred to the Python uploader through the child process
+environment, not command-line arguments. The script never prints their values.
 
-## Import Code Flow
+## Bootstrap/import compatibility
 
-Import codes are compact bootstrap payloads that contain:
-
-- R2 account id / endpoint
-- private bucket name
-- manifest object key
-- read-only access key id / secret access key
-- sync settings
-- release version
-
-Generate a local owner keypair once:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\generate-import-code-keypair.ps1 `
-  -PublicKeyOutput .\tmp\easyproxy_import_code_owner_public.txt `
-  -PrivateKeyOutput .\tmp\easyproxy_import_code_owner_private.txt `
-  -BundleOutput .\tmp\easyproxy_import_code_owner_keypair.json
-```
-
-After storing the public key in GitHub secret
-`EASYPROXY_IMPORT_CODE_OWNER_PUBLIC_KEY`, the publish workflow can emit an
-encrypted artifact that only the matching private key can decrypt.
-
-Decrypt an owner-only artifact locally:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\decrypt-import-code.ps1 `
-  -EncryptedFilePath .\service-base-import-code.encrypted.json `
-  -PrivateKeyPath .\tmp\easyproxy_import_code_owner_private.txt `
-  -OutputPath .\tmp\service-base-import-code.decrypted.json
-```
-
-## Bootstrap JSON Flow
-
-Some operators prefer to ship an explicit bootstrap JSON file instead of
-passing an import code through environment variables.
-
-Build a bootstrap JSON from an import code:
+Existing source-less runtimes can still consume an explicit bootstrap JSON or
+an owner-provided import code:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\write-service-base-r2-bootstrap.ps1 `
-  -ImportCode "<easyproxy-import-v1...>" `
+  -ImportCode '<easyproxy-import-v1...>' `
   -OutputPath .\deploy\service\base\bootstrap\r2-bootstrap.json
 ```
 
-Build a bootstrap JSON from a manifest plus explicit read credentials:
+Then deploy with one explicit bootstrap input:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\write-service-base-r2-bootstrap.ps1 `
-  -ManifestPath .\service-base-r2-config-manifest.json `
-  -AccessKeyId "<read-access-key-id>" `
-  -SecretAccessKey "<read-secret-access-key>" `
-  -OutputPath .\deploy\service\base\bootstrap\r2-bootstrap.json
+.\scripts\deploy-easyproxy.ps1 `
+  -TopologyPath .\topology.yaml `
+  -BootstrapFile .\deploy\service\base\bootstrap\r2-bootstrap.json
 ```
 
-## Runtime Consumption
+Do not provide both `-BootstrapFile` and `-ImportCode`. Never commit bootstrap
+JSON, import codes, decrypted bundles, private keys, or downloaded runtime
+configs.
 
-The image entrypoint supports two bootstrap modes:
+## Update rule
 
-1. bootstrap file mounted into the container
-2. import code provided through environment variable
-
-### Import Code Example
-
-```powershell
-docker run --rm `
-  -p 29888:29888 `
-  -e EASY_PROXY_IMPORT_CODE="<easyproxy-import-v1...>" `
-  ghcr.io/aiaimimi0920/easy-proxy-monorepo-service:<release-tag>
-```
-
-### Bootstrap File Example
-
-```powershell
-docker run --rm `
-  -p 29888:29888 `
-  -v ${PWD}\deploy\service\base\bootstrap\r2-bootstrap.json:/etc/easy-proxy/bootstrap/r2-bootstrap.json:ro `
-  ghcr.io/aiaimimi0920/easy-proxy-monorepo-service:<release-tag>
-```
-
-At startup the image will:
-
-1. inspect the bootstrap source
-2. download the manifest and rendered config
-3. verify the expected hash when present
-4. write the runtime config file referenced by `EASY_PROXY_CONFIG_PATH`
-   (default `/etc/easy-proxy/config.yaml`)
-5. start `easy-proxy`
-
-After startup a sync loop continues to watch the manifest fingerprint and
-refreshes the runtime config if a newer release is published.
-
-For Local Server, root `config.yaml` remains the durable authority. Web Console
-Profile changes saved into a mounted rendered config can be replaced by a later
-R2/root render. Promote intended shared Profile and canonical Local Server
-changes back into the root config before publishing the next distribution.
-
-## Security Notes
-
-- The bucket is private. Access is controlled by purpose-built R2 tokens.
-- Publish credentials and runtime read credentials are separate.
-- The encrypted import-code artifact is optional, but recommended for owner-only
-  handling.
-- Local `config.yaml`, bootstrap files, and generated runtime config remain
-  ignored by Git.
-- If you rotate read credentials, regenerate import codes / bootstrap JSON and
-  republish the config distribution.
-- An R2 reader that can download the rendered config can also read the
-  canonical Local Server credential. Scope read credentials to the required
-  object prefix/host set, rotate them after suspected exposure, and treat an
-  import code or bootstrap JSON as sensitive operator material.
-- Config distribution does not create a network security boundary. Restrict
-  runtime ports `22323/29888` to trusted LAN subnets; use VPN/TLS for access
-  across untrusted networks. See [`local-server.md`](./local-server.md).
+Code updates preserve runtime data by default. A future update workflow may
+create and verify a backup before deployment, but it must not silently treat a
+missing snapshot as permission to replace the current config or create a second
+state resource.

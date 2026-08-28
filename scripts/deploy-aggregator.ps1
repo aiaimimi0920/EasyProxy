@@ -1,7 +1,7 @@
 param(
-    [string]$ConfigPath = (Join-Path $PSScriptRoot '..\config.yaml'),
-    [string]$Workflow = "",
-    [string]$Ref = "",
+    [string]$TopologyPath = (Join-Path $PSScriptRoot '..\topology.yaml'),
+    [string]$Workflow = "deploy-aggregator.yml",
+    [string]$Ref = "main",
     [ValidateSet("bootstrap", "update")]
     [string]$DeploymentMode = "update",
     [bool]$RunVerification = $true,
@@ -14,18 +14,13 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "lib\easyproxy-common.ps1")
-. (Join-Path $PSScriptRoot "lib\easyproxy-config.ps1")
+. (Join-Path $PSScriptRoot "lib\easyproxy-topology.ps1")
 
 Invoke-EasyProxyExternalCommand -FilePath "gh" -Arguments @("auth", "status") -FailureMessage "GitHub CLI is not authenticated"
 
-$config = Read-EasyProxyConfig -ConfigPath $ConfigPath
-$aggregator = Get-EasyProxyConfigSection -Config $config -Name 'aggregator'
-
-if ([string]::IsNullOrWhiteSpace($Workflow)) {
-    $Workflow = [string](Get-EasyProxyConfigValue -Object $aggregator -Name 'workflowFile' -Default 'deploy-aggregator.yml')
-}
-if ([string]::IsNullOrWhiteSpace($Ref)) {
-    $Ref = [string](Get-EasyProxyConfigValue -Object $aggregator -Name 'ref' -Default 'main')
+$topology = Read-EasyProxyTopology -TopologyPath $TopologyPath
+if (-not [bool]$topology.components.aggregator) {
+    throw 'Topology does not enable components.aggregator.'
 }
 
 if (-not $SkipSecretUpdate) {

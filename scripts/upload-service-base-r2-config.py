@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -58,8 +59,6 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Upload rendered EasyProxy service/base runtime config artifacts to Cloudflare R2.")
     parser.add_argument("--account-id", required=True)
     parser.add_argument("--bucket", required=True)
-    parser.add_argument("--access-key-id", required=True)
-    parser.add_argument("--secret-access-key", required=True)
     parser.add_argument("--config-path", required=True)
     parser.add_argument("--config-object-key", required=True)
     parser.add_argument("--manifest-object-key", required=True)
@@ -68,6 +67,11 @@ def main() -> int:
     parser.add_argument("--manifest-output", default="")
     args = parser.parse_args()
 
+    access_key_id = os.environ.get("EASYPROXY_R2_ACCESS_KEY_ID", "").strip()
+    secret_access_key = os.environ.get("EASYPROXY_R2_SECRET_ACCESS_KEY", "")
+    if not access_key_id or not secret_access_key:
+        raise SystemExit("R2 access credentials are missing from the process environment")
+
     config_path = Path(args.config_path).resolve()
     if not config_path.exists():
         raise SystemExit(f"Rendered service config not found: {config_path}")
@@ -75,8 +79,8 @@ def main() -> int:
     client = build_s3_client(
         account_id=args.account_id,
         endpoint=args.endpoint,
-        access_key_id=args.access_key_id,
-        secret_access_key=args.secret_access_key,
+        access_key_id=access_key_id,
+        secret_access_key=secret_access_key,
     )
 
     config_upload = upload_file(

@@ -52,8 +52,8 @@ device-side EasyProxy service is required.
 
 The enabled topology requires `mode: pool`, `listener.protocol: mixed`, no
 `extra_listeners`, and no conflicting `local_server.listen` /
-`routing.listen`. The root renderer derives listener and management credentials
-from the canonical Local Server credential. Legacy `multi-port` and `hybrid`
+`routing.listen`. The runtime uses the canonical `local_server.auth` credential
+for the Local Server entrypoint. Legacy `multi-port` and `hybrid`
 deployments require `local_server.enabled: false`.
 
 Docker published ports may collapse multiple LAN clients to the same observed
@@ -376,16 +376,15 @@ One-click root wrapper:
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 `
   -Project easyproxy-ghcr `
-  -InitConfig `
+  -TopologyPath .\topology.yaml `
   -ReleaseTag <release-tag>
 ```
 
 Lower-level deployment-only helper:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\render-derived-configs.ps1 `
-  -ServiceBase `
-  -ServiceOutput .\deploy\service\base\config.yaml
+powershell -ExecutionPolicy Bypass -File .\scripts\init-runtime-config.ps1 `
+  -OutputPath .\deploy\service\base\config.yaml
 
 powershell -ExecutionPolicy Bypass -File .\deploy\service\base\scripts\deploy-ghcr-runtime.ps1 `
   -ConfigPath .\deploy\service\base\config.yaml `
@@ -618,18 +617,13 @@ What the script does:
 
 Configuration resolution:
 
-- `-ConfigPath` accepts the root operator `config.yaml`; when omitted, the
-  script uses the root `config.yaml` if it exists
-- command-line values override root config values
-- without a root config, pass the required values explicitly
+- `-TopologyPath` selects the non-secret deployment topology
+- profile and public URL values may be overridden explicitly
+- ECH and MiSub credentials are resolved only from the environment references
+  named by topology; they are never accepted as command arguments
 - the script does not search `AIRead` or any legacy private-archive path
-- root config fields used by this operation are:
-  - `misub.pages.connectorProfileId`
-  - `misub.pages.publicUrl`
-  - `misub.docker.env.ADMIN_PASSWORD`
-  - `misub.docker.env.MANIFEST_TOKEN`
-  - `echWorkersCloudflare.publicUrl`
-  - `echWorkersCloudflare.secrets.ECH_TOKEN`
+- generated artifacts contain speed-test inputs/results and a redacted summary,
+  never connector tokens, MiSub data exports, or authenticated API payloads
 
 Important detail:
 
@@ -642,7 +636,7 @@ Typical reuse of an existing result file for a `MiSub`-managed profile:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\deploy\service\base\scripts\update_ech_preferred_ips.ps1 `
-  -ConfigPath .\config.yaml `
+  -TopologyPath .\topology.yaml `
   -PreferCustomDomain `
   -ReuseResultCsvPath .\tmp\ech-workers-cloudflare\preferred-ip\result.csv `
   -ApplyToMiSub
@@ -652,7 +646,7 @@ Typical full run:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\deploy\service\base\scripts\update_ech_preferred_ips.ps1 `
-  -ConfigPath .\config.yaml `
+  -TopologyPath .\topology.yaml `
   -PreferCustomDomain `
   -TopCount 5 `
   -ApplyToMiSub
@@ -660,21 +654,18 @@ powershell -ExecutionPolicy Bypass -File .\deploy\service\base\scripts\update_ec
 
 Useful override flags:
 
-- `-ConfigPath`
+- `-TopologyPath`
 - `-ProfileId`
 - `-WorkerUrl`
 - `-PreferCustomDomain`
 - `-CustomDomainUrl`
-- `-AccessToken`
 - `-MiSubBaseUrl`
-- `-AdminPassword`
-- `-ManifestToken`
 - `-TopCount`
 - `-ReuseResultCsvPath`
 - `-AllIP`
 
 `-PreferCustomDomain` uses an explicit `-CustomDomainUrl` when supplied;
-otherwise it uses `echWorkersCloudflare.publicUrl` from the root config. No
+otherwise the caller must provide the deployed custom-domain URL. No
 production Worker hostname is hardcoded as a credential or topology fallback.
 
 Recommended custom-domain migration order:
@@ -693,7 +684,7 @@ Recommended custom-domain migration order:
 
 ## Migration Notes
 
-- The current local `config.yaml` is based on the latest legacy runtime profile
+- The current `deploy/service/base/config.yaml` is based on the latest legacy runtime profile
   `node-current-machine-host-standard`.
 - Legacy flat keys such as `sub_refresh_interval` were translated to the
   current nested `subscription_refresh.*` structure expected by

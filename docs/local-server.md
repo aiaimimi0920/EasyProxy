@@ -143,64 +143,28 @@ network mode has been verified to preserve the original LAN source address.
 
 ## Configuration
 
-### Root Operator Config
+### Deployment Topology And Runtime Config
 
-The repository root `config.yaml` is the authority for script-driven deploys.
-The following excerpt enables Local Server and the shared Profile:
+`topology.yaml` selects the local component, install mode, access mode, and
+release channel. It never owns listeners, credentials, routing rules, devices,
+or Profiles. Those fields live directly in
+`deploy/service/base/config.yaml`, which is initialized once and then preserved
+across ordinary deploys and updates.
 
-```yaml
-serviceBase:
-  runtime:
-    mode: pool
-    listener:
-      address: 0.0.0.0
-      port: 22323
-      protocol: mixed
-      username: "" # Derived from local_server.auth by the renderer/runtime.
-      password: "" # Derived from local_server.auth by the renderer/runtime.
-    routing:
-      enabled: true
-      listen: ""
-      default_strategy: stable
-      use_default_rules: true
-      final_policy: PROXY
-      rules: []
-      rule_providers: []
-      long_lived:
-        min_uptime: 2h
-        min_success_rate: 0.9
-      session:
-        ttl: 10m
-    local_server:
-      enabled: true
-      listen: "" # Empty reuses listener.address:listener.port.
-      auth:
-        username: easyproxy
-        password: "change_me_to_a_strong_shared_password"
-    management:
-      enabled: true
-      listen: 0.0.0.0:29888
-      password: "" # Derived from local_server.auth.
-```
-
-Replace `change_me_to_a_strong_shared_password` before rendering or deploying;
-the root deployment gate intentionally rejects that placeholder.
-
-Render and deploy from the repository root:
+Initialize and deploy from the repository root:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\render-derived-configs.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\init-runtime-config.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project easyproxy
 ```
 
-The rendered `deploy/service/base/config.yaml` is derived state. Promote durable
-Web Console changes back into root `config.yaml` before the next root render or
-deployment, otherwise the render can replace them.
+Web Console changes persist to the same runtime file. Replace every placeholder
+credential before exposing the listener to a trusted LAN.
 
-### Direct Service Config
+### Runtime Config Example
 
-For a directly launched binary or a service-level Docker mount, use the same
-topology without the `serviceBase.runtime` wrapper:
+For the root deployment wrapper, a directly launched binary, or a service-level
+Docker mount, use the direct service schema:
 
 ```yaml
 mode: pool

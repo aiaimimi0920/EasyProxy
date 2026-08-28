@@ -1,13 +1,10 @@
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
-    [string]$ConfigPath = "",
+    [string]$TopologyPath = "",
     [string]$ProfileId = "",
     [string]$WorkerUrl = "",
     [string]$CustomDomainUrl = "",
-    [string]$AccessToken = "",
     [string]$MiSubBaseUrl = "",
-    [string]$AdminPassword = "",
-    [string]$ManifestToken = "",
     [int]$TopCount = 5,
     [string]$LocalProtocol = "socks5",
     [string]$SourceIdPrefix = "conn_ech_workers_pref",
@@ -31,7 +28,8 @@ $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Net.Http
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..\..\..")).Path
-. (Join-Path $repoRoot "scripts\lib\easyproxy-config.ps1")
+. (Join-Path $repoRoot "scripts\lib\easyproxy-common.ps1")
+. (Join-Path $repoRoot "scripts\lib\easyproxy-topology.ps1")
 
 function Resolve-OptionalPath {
     param(
@@ -218,58 +216,33 @@ function ConvertTo-EchWorkerUrl {
     return "$($uri.Scheme)://${userInfo}${hostName}:${port}${pathAndQuery}$($uri.Fragment)"
 }
 
-$rootConfig = $null
-$resolvedConfigPath = ""
-if (-not [string]::IsNullOrWhiteSpace($ConfigPath)) {
-    $resolvedConfigPath = Resolve-EasyProxyPath -Path $ConfigPath -AllowMissing
-    if (-not (Test-Path -LiteralPath $resolvedConfigPath)) {
-        throw "Config file not found: $resolvedConfigPath"
-    }
-} else {
-    $defaultConfigPath = Join-Path $repoRoot "config.yaml"
-    if (Test-Path -LiteralPath $defaultConfigPath) {
-        $resolvedConfigPath = $defaultConfigPath
+if ([string]::IsNullOrWhiteSpace($TopologyPath)) {
+    $defaultTopologyPath = Join-Path $repoRoot 'topology.yaml'
+    if (Test-Path -LiteralPath $defaultTopologyPath) {
+        $TopologyPath = $defaultTopologyPath
     }
 }
-
-if (-not [string]::IsNullOrWhiteSpace($resolvedConfigPath)) {
-    $rootConfig = Read-EasyProxyConfig -ConfigPath $resolvedConfigPath
+if ([string]::IsNullOrWhiteSpace($TopologyPath)) {
+    throw "TopologyPath is required. Initialize topology.yaml or pass its path explicitly."
 }
+$topology = Read-EasyProxyTopology -TopologyPath $TopologyPath
 
-$configuredWorkerUrl = ""
 $workerUrlSource = "explicit"
-if ($null -ne $rootConfig) {
-    $misub = Get-EasyProxyConfigSection -Config $rootConfig -Name "misub"
-    $misubPages = Get-EasyProxyConfigSection -Config $misub -Name "pages"
-    $misubDocker = Get-EasyProxyConfigSection -Config $misub -Name "docker"
-    $misubEnv = Get-EasyProxyConfigSection -Config $misubDocker -Name "env"
-    $echWorker = Get-EasyProxyConfigSection -Config $rootConfig -Name "echWorkersCloudflare"
-    $echSecrets = Get-EasyProxyConfigSection -Config $echWorker -Name "secrets"
-
-    if ([string]::IsNullOrWhiteSpace($ProfileId)) {
-        $ProfileId = [string](Get-EasyProxyConfigValue -Object $misubPages -Name "connectorProfileId" -Default "")
-    }
-    if ([string]::IsNullOrWhiteSpace($MiSubBaseUrl)) {
-        $MiSubBaseUrl = [string](Get-EasyProxyConfigValue -Object $misubPages -Name "publicUrl" -Default "")
-    }
-    if ([string]::IsNullOrWhiteSpace($AdminPassword)) {
-        $AdminPassword = [string](Get-EasyProxyConfigValue -Object $misubEnv -Name "ADMIN_PASSWORD" -Default "")
-    }
-    if ([string]::IsNullOrWhiteSpace($ManifestToken)) {
-        $ManifestToken = [string](Get-EasyProxyConfigValue -Object $misubEnv -Name "MANIFEST_TOKEN" -Default "")
-    }
-    if ([string]::IsNullOrWhiteSpace($AccessToken)) {
-        $AccessToken = [string](Get-EasyProxyConfigValue -Object $echSecrets -Name "ECH_TOKEN" -Default "")
-    }
-    $configuredWorkerUrl = [string](Get-EasyProxyConfigValue -Object $echWorker -Name "publicUrl" -Default "")
+if ([string]::IsNullOrWhiteSpace($ProfileId)) {
+    $ProfileId = [string]$topology.misub.default_profile
 }
+if ([string]::IsNullOrWhiteSpace($MiSubBaseUrl)) {
+    $names = Get-EasyProxyResourceNames -TopologyPath $TopologyPath
+    if ([bool]$topology.cloudflare.use_pages_dev) {
+        $MiSubBaseUrl = "https://$($names.pages_project).pages.dev"
+    }
+}
+$AccessToken = Get-EasyProxyEnvironmentValue -Reference ([string]$topology.secrets.ech_token) -Purpose 'ECH Worker authentication'
+$AdminPassword = Get-EasyProxyEnvironmentValue -Reference ([string]$topology.secrets.misub_admin_password) -Purpose 'MiSub administration' -Optional
+$ManifestToken = Get-EasyProxyEnvironmentValue -Reference ([string]$topology.secrets.misub_manifest_token) -Purpose 'MiSub manifest' -Optional
 if ([string]::IsNullOrWhiteSpace($WorkerUrl) -and $PreferCustomDomain -and -not [string]::IsNullOrWhiteSpace($CustomDomainUrl)) {
     $WorkerUrl = ConvertTo-EchWorkerUrl -Url $CustomDomainUrl
     $workerUrlSource = "custom_domain_override"
-}
-if ([string]::IsNullOrWhiteSpace($WorkerUrl) -and -not [string]::IsNullOrWhiteSpace($configuredWorkerUrl)) {
-    $WorkerUrl = ConvertTo-EchWorkerUrl -Url $configuredWorkerUrl
-    $workerUrlSource = "root_config"
 }
 if ([string]::IsNullOrWhiteSpace($ProfileId)) {
     $ProfileId = "easyproxies-ech-runtime"
@@ -279,10 +252,7 @@ if (-not [string]::IsNullOrWhiteSpace($WorkerUrl) -and $workerUrlSource -eq "exp
 }
 
 if ([string]::IsNullOrWhiteSpace($WorkerUrl)) {
-    throw "WorkerUrl is required. Pass -WorkerUrl, use -PreferCustomDomain, or set echWorkersCloudflare.publicUrl in config.yaml"
-}
-if ([string]::IsNullOrWhiteSpace($AccessToken)) {
-    throw "AccessToken is required. Pass -AccessToken or set echWorkersCloudflare.secrets.ECH_TOKEN in config.yaml"
+    throw "WorkerUrl is required. Pass -WorkerUrl or use -PreferCustomDomain."
 }
 if ($TopCount -lt 1) {
     throw "TopCount must be >= 1"
@@ -295,7 +265,7 @@ if (-not [System.IO.Path]::IsPathRooted($ArtifactRoot)) {
     $ArtifactRoot = Join-Path $repoRoot $ArtifactRoot
 }
 
-$runId = Get-Date -Format "yyyyMMdd-HHmmss"
+$runId = "{0}-{1}" -f (Get-Date -Format "yyyyMMdd-HHmmss-fff"), ([Guid]::NewGuid().ToString('N').Substring(0, 8))
 $artifactDir = Join-Path $ArtifactRoot $runId
 New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
 
@@ -403,7 +373,6 @@ $summary = [ordered]@{
     applied_to_misub    = $false
 }
 Write-JsonFile -Path (Join-Path $artifactDir "summary.json") -Value $summary
-Write-JsonFile -Path (Join-Path $artifactDir "selected-sources.json") -Value $selectedSources
 
 if ($ApplyToMiSub) {
     if ([string]::IsNullOrWhiteSpace($MiSubBaseUrl)) {
@@ -415,11 +384,9 @@ if ($ApplyToMiSub) {
 
     $clientState = New-JsonHttpClient
     try {
-        $loginResponse = Invoke-JsonRequest -ClientState $clientState -Method POST -Url "$MiSubBaseUrl/api/login" -Body @{ password = $AdminPassword }
-        Write-JsonFile -Path (Join-Path $artifactDir "login-response.json") -Value $loginResponse
+        $null = Invoke-JsonRequest -ClientState $clientState -Method POST -Url "$MiSubBaseUrl/api/login" -Body @{ password = $AdminPassword }
 
         $dataResponse = Invoke-JsonRequest -ClientState $clientState -Method GET -Url "$MiSubBaseUrl/api/data"
-        Write-JsonFile -Path (Join-Path $artifactDir "data-before-update.json") -Value $dataResponse
 
         $profile = @($dataResponse.profiles | Where-Object {
             ([string](Get-ObjectPropertyValue -Object $_ -Name "customId" -Default "")) -eq $ProfileId -or ([string](Get-ObjectPropertyValue -Object $_ -Name "id" -Default "")) -eq $ProfileId
@@ -459,18 +426,14 @@ if ($ApplyToMiSub) {
             misubs   = @($retainedMisubs + $selectedSources)
             profiles = @($updatedProfiles)
         }
-        Write-JsonFile -Path (Join-Path $artifactDir "misub-update-payload.json") -Value $updatePayload
-
         if ($PSCmdlet.ShouldProcess("$MiSubBaseUrl/api/misubs", "Update ECH preferred sources for $ProfileId")) {
-            $updateResponse = Invoke-JsonRequest -ClientState $clientState -Method POST -Url "$MiSubBaseUrl/api/misubs" -Body $updatePayload
-            Write-JsonFile -Path (Join-Path $artifactDir "misub-update-response.json") -Value $updateResponse
+            $null = Invoke-JsonRequest -ClientState $clientState -Method POST -Url "$MiSubBaseUrl/api/misubs" -Body $updatePayload
 
             $summary.applied_to_misub = $true
             $summary.replaced_source_ids = $existingSourceIds
             $summary.updated_profile_manual_nodes = $updatedManualNodes
 
-            $afterDataResponse = Invoke-JsonRequest -ClientState $clientState -Method GET -Url "$MiSubBaseUrl/api/data"
-            Write-JsonFile -Path (Join-Path $artifactDir "data-after-update.json") -Value $afterDataResponse
+            $null = Invoke-JsonRequest -ClientState $clientState -Method GET -Url "$MiSubBaseUrl/api/data"
         }
     } finally {
         if ($null -ne $clientState -and $null -ne $clientState.Client) {
@@ -481,12 +444,11 @@ if ($ApplyToMiSub) {
     if (-not [string]::IsNullOrWhiteSpace($ManifestToken)) {
         $manifestClient = New-JsonHttpClient
         try {
-            $manifestResponse = Invoke-JsonRequest `
+            $null = Invoke-JsonRequest `
                 -ClientState $manifestClient `
                 -Method GET `
                 -Url "$MiSubBaseUrl/api/manifest/$ProfileId" `
                 -Headers @{ Authorization = "Bearer $ManifestToken" }
-            Write-JsonFile -Path (Join-Path $artifactDir "manifest-after-update.json") -Value $manifestResponse
         } finally {
             $manifestClient.Client.Dispose()
         }

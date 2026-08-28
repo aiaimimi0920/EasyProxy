@@ -14,9 +14,10 @@
 - `deploy`、`scripts`、`tests`、`.github/workflows` 和根级运维入口；
 - EasyProxy 自己维护的文档、配置模板、发布合同和生成流程。
 
-EasyProxy 是一个单一 Git 仓库，不使用根级 submodule。`upstreams/*` 虽然保留
-上游来源属性，但仍通过当前仓库的同一个 PR 和验证流程交付。修改这些目录时，
-必须明确区分上游同步、本地携带补丁和纯文档/测试调整。
+EasyProxy 的第一方集成与部署代码位于根仓库；三个 `upstreams/*` 模块是固定到
+维护者公开 Fork commit 的根级 submodule。上游源码变更必须先进入对应 Fork PR，
+再由独立根 PR 更新已验证指针。修改时必须明确区分上游同步、EasyProxy 携带
+补丁和纯文档/测试调整，并始终使用递归子模块检出。
 
 本文采用 **增量治理**：所有新增代码和被实质扩展的职责必须符合本规范，但
 正常功能任务不需要先清偿全仓历史大文件债务。若更具体的架构、发布、安全或
@@ -77,7 +78,8 @@ EasyProxy 是一个单一 Git 仓库，不使用根级 submodule。`upstreams/*`
 ### 3.3 `upstreams/*` 规则
 
 修改 `upstreams/misub`、`upstreams/aggregator` 或 `upstreams/ech-workers` 时，
-完成报告和 PR 摘要必须标明以下一种：
+源码提交必须发生在对应维护 Fork；根仓库只更新 gitlink。完成报告和 PR 摘要
+必须标明以下一种：
 
 1. 上游同步导入；
 2. EasyProxy 本地携带补丁；
@@ -226,18 +228,18 @@ Markdown 等纯文档不执行源代码行数门禁，但应按主题拆分、�
 支持的 connector 在本地 `service/base` 物化和执行。MiSub 负责描述 connector，
 不应代替客户端执行最终代理出口。
 
-### 8.2 配置权威与派生文件
+### 8.2 配置权威与本地状态
 
-根 `config.yaml` 是脚本驱动部署的 operator source of truth，并且必须保持 Git
-ignored。`config.example.yaml` 只能包含占位符和安全示例。
+`topology.yaml` 是非敏感部署拓扑权威，只能保存 Secret 的环境变量引用；
+`deploy/service/base/config.yaml` 是本地运行时和 WebUI 持久化权威。拓扑更新与普通
+部署不得覆盖已经存在的运行时文件。
 
-`deploy/service/base/config.yaml`、`upstreams/misub/.env` 和
-`workers/ech-workers-cloudflare/.dev.vars` 是派生或本地运行材料，不得提交真实
-秘密。WebUI 保存可以修改派生运行时配置，但需要跨重部署保留的变化必须回填到
-根配置，再通过 renderer 生成派生文件。
+`upstreams/misub/.env`、`workers/ech-workers-cloudflare/.dev.vars`、bootstrap 和
+部署 manifest 属于本地或平台状态，不得提交真实秘密。旧根 `config.yaml`、派生
+renderer 和自动同步 GitHub 配置的入口已经删除，不得重新引入第二套配置决策逻辑。
 
-运行时配置来源优先级必须清晰：已有配置文件优先，其次 bootstrap，再其次是
-import code 创建 bootstrap；启用 R2 后台同步时，应明确 R2 是否拥有后续更新权。
+运行时恢复来源优先级必须清晰：已有配置文件优先，其次显式 bootstrap，再其次是
+import code 创建 bootstrap；启用远端后台同步时，应明确远端是否拥有后续更新权。
 不得让多个权威来源无声明地相互覆盖。
 
 ### 8.3 Reload、CAS 与状态发布

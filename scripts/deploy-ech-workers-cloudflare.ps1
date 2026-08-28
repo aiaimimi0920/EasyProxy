@@ -1,7 +1,6 @@
 param(
-    [string]$ConfigPath = (Join-Path $PSScriptRoot '..\config.yaml'),
+    [string]$TopologyPath = (Join-Path $PSScriptRoot '..\topology.yaml'),
     [switch]$DryRun,
-    [switch]$SkipRender,
     [switch]$SkipSecretSync
 )
 
@@ -9,43 +8,43 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "lib\easyproxy-common.ps1")
-. (Join-Path $PSScriptRoot "lib\easyproxy-config.ps1")
+. (Join-Path $PSScriptRoot "lib\easyproxy-topology.ps1")
 
 Assert-EasyProxyCommand -Name "npx" -Hint "Install Node.js first."
 
-$config = Read-EasyProxyConfig -ConfigPath $ConfigPath
-$worker = Get-EasyProxyConfigSection -Config $config -Name 'echWorkersCloudflare'
-$workerRoot = Resolve-EasyProxyPath -Path (Get-EasyProxyConfigValue -Object $worker -Name 'projectRoot' -Default 'workers/ech-workers-cloudflare')
-$wranglerConfig = Resolve-EasyProxyPath -Path (Get-EasyProxyConfigValue -Object $worker -Name 'wranglerConfig' -Default 'workers/ech-workers-cloudflare/wrangler.jsonc')
-$devVarsOutput = Resolve-EasyProxyPath -Path (Get-EasyProxyConfigValue -Object $worker -Name 'devVarsOutput' -Default 'workers/ech-workers-cloudflare/.dev.vars') -AllowMissing
+$topology = Read-EasyProxyTopology -TopologyPath $TopologyPath
+if (-not [bool]$topology.components.ech_worker) {
+    throw 'Topology does not enable components.ech_worker.'
+}
+$resourceNames = Get-EasyProxyResourceNames -TopologyPath $TopologyPath
+$workerRoot = Resolve-EasyProxyPath -Path 'workers/ech-workers-cloudflare'
+$wranglerConfig = Resolve-EasyProxyPath -Path 'workers/ech-workers-cloudflare/wrangler.jsonc'
 Ensure-EasyProxyPathExists -Path $wranglerConfig -Message "Missing wrangler config: $wranglerConfig"
 
-if (-not $SkipRender) {
-    $render = Join-Path $PSScriptRoot 'render-derived-configs.ps1'
-    Invoke-EasyProxyExternalCommand -FilePath 'powershell' -Arguments @(
-        '-ExecutionPolicy', 'Bypass',
-        '-File', $render,
-        '-ConfigPath', (Resolve-EasyProxyPath -Path $ConfigPath),
-        '-EchWorkersCloudflare',
-        '-WorkerDevVarsOutput', $devVarsOutput
-    ) -FailureMessage "Failed to render worker .dev.vars from root config"
-}
-
-$secrets = Get-EasyProxyConfigSection -Config $worker -Name 'secrets'
-$echToken = [string](Get-EasyProxyConfigValue -Object $secrets -Name 'ECH_TOKEN' -Default '')
-if (-not $DryRun -and -not $SkipSecretSync -and -not [string]::IsNullOrWhiteSpace($echToken)) {
-    Write-Host "Syncing Cloudflare secret ECH_TOKEN from root config..." -ForegroundColor Cyan
-    $echToken | npx --yes wrangler@4 secret put ECH_TOKEN --config $wranglerConfig
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to sync Cloudflare secret ECH_TOKEN"
+$previousAccountId = [Environment]::GetEnvironmentVariable('CLOUDFLARE_ACCOUNT_ID', 'Process')
+$previousApiToken = [Environment]::GetEnvironmentVariable('CLOUDFLARE_API_TOKEN', 'Process')
+try {
+    $env:CLOUDFLARE_ACCOUNT_ID = Get-EasyProxyEnvironmentValue -Reference ([string]$topology.cloudflare.account_id_env) -Purpose 'Cloudflare account selection'
+    $env:CLOUDFLARE_API_TOKEN = Get-EasyProxyEnvironmentValue -Reference ([string]$topology.secrets.cloudflare_api_token) -Purpose 'ECH Worker deployment'
+    if (-not $DryRun -and -not $SkipSecretSync) {
+        $echToken = Get-EasyProxyEnvironmentValue -Reference ([string]$topology.secrets.ech_token) -Purpose 'ECH Worker authentication'
+        Write-Host "Syncing Cloudflare secret ECH_TOKEN from the configured environment reference..." -ForegroundColor Cyan
+        $echToken | npx --yes wrangler@4 secret put ECH_TOKEN --config $wranglerConfig --name ([string]$resourceNames.ech_worker)
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to sync Cloudflare secret ECH_TOKEN"
+        }
     }
-}
 
-$args = @("--yes", "wrangler@4", "deploy", "--config", "wrangler.jsonc")
-if ($DryRun) {
-    $args += "--dry-run"
-}
+    $args = @("--yes", "wrangler@4", "deploy", "--config", "wrangler.jsonc", "--name", ([string]$resourceNames.ech_worker))
+    if ($DryRun) {
+        $args += "--dry-run"
+    }
 
-Write-Host "Deploying ech-workers-cloudflare via Wrangler..." -ForegroundColor Cyan
-Invoke-EasyProxyExternalCommand -FilePath "npx" -Arguments $args -WorkingDirectory $workerRoot -FailureMessage "ech-workers-cloudflare deploy failed"
+    Write-Host "Deploying ech-workers-cloudflare via Wrangler..." -ForegroundColor Cyan
+    Invoke-EasyProxyExternalCommand -FilePath "npx" -Arguments $args -WorkingDirectory $workerRoot -FailureMessage "ech-workers-cloudflare deploy failed"
+}
+finally {
+    [Environment]::SetEnvironmentVariable('CLOUDFLARE_ACCOUNT_ID', $previousAccountId, 'Process')
+    [Environment]::SetEnvironmentVariable('CLOUDFLARE_API_TOKEN', $previousApiToken, 'Process')
+}
 Write-Host "ech-workers-cloudflare deploy finished."

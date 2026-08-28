@@ -50,11 +50,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--build-if-missing", action="store_true")
     parser.add_argument("--config-path", default="")
     parser.add_argument("--manifest-url", default="")
-    parser.add_argument("--manifest-token", default="")
     parser.add_argument("--subscription", action="append", default=[])
     parser.add_argument("--proxy-uri", action="append", default=[])
     parser.add_argument("--fallback-subscription", action="append", default=[])
-    parser.add_argument("--connectors-json", default="")
     parser.add_argument("--output-path", default="")
     parser.add_argument("--artifact-dir", default="")
     parser.add_argument("--docker-network-name", default="EasyAiMi")
@@ -175,7 +173,7 @@ def load_connectors(connectors_json: str) -> list[dict[str, Any]]:
         return []
     payload = json.loads(connectors_json)
     if not isinstance(payload, list):
-        raise RuntimeError("--connectors-json must decode to a list")
+        raise RuntimeError("EASYPROXY_AUDIT_CONNECTORS_JSON must decode to a list")
     return payload
 
 
@@ -648,10 +646,14 @@ def main() -> int:
     proxy_uris = normalize_list(args.proxy_uri)
     fallback_subscriptions = normalize_list(args.fallback_subscription)
     dns_servers = normalize_list(args.dns_server)
-    connectors = load_connectors(args.connectors_json)
+    manifest_token = os.environ.get("EASYPROXY_AUDIT_MANIFEST_TOKEN", "")
+    connectors_json = os.environ.get("EASYPROXY_AUDIT_CONNECTORS_JSON", "")
+    connectors = load_connectors(connectors_json)
 
     if not subscriptions and not proxy_uris and not connectors and not args.manifest_url.strip():
-        raise RuntimeError("at least one of --subscription, --proxy-uri, --connectors-json, or --manifest-url is required")
+        raise RuntimeError(
+            "at least one subscription, proxy URI, connector environment payload, or manifest URL is required"
+        )
 
     scenario_timeout = args.scenario_timeout_seconds or int(policy.get("scenario_timeout_seconds", 720))
     minimum_available_nodes = args.minimum_available_nodes if args.minimum_available_nodes >= 0 else int(policy.get("minimum_available_nodes", 1))
@@ -667,44 +669,50 @@ def main() -> int:
     config_payload = build_config(
         policy,
         manifest_url=args.manifest_url,
-        manifest_token=args.manifest_token,
+        manifest_token=manifest_token,
         subscriptions=subscriptions,
         proxy_uris=proxy_uris,
         fallback_subscriptions=fallback_subscriptions,
         connectors=connectors,
         multi_port_base=multi_port_base,
     )
-    config_path.write_text(yaml.safe_dump(config_payload, sort_keys=False, allow_unicode=True), encoding="utf-8")
+    config_fd = os.open(config_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(config_fd, "w", encoding="utf-8") as config_file:
+        config_file.write(yaml.safe_dump(config_payload, sort_keys=False, allow_unicode=True))
 
     management_port = get_free_port()
     pool_port = get_free_port()
     container_name = f"easyproxy-source-audit-{args.audit_id}".lower().replace("_", "-")
     stop_container(container_name)
 
-    if args.docker_network_name.strip():
-        ensure_docker_network(args.docker_network_name.strip())
+    try:
+        if args.docker_network_name.strip():
+            ensure_docker_network(args.docker_network_name.strip())
 
-    docker_args = [
-        "docker",
-        "run",
-        "-d",
-        "--name",
-        container_name,
-        "-p",
-        f"{management_port}:29888",
-        "-p",
-        f"{pool_port}:22323",
-        "-v",
-        f"{config_path.resolve()}:/etc/easy-proxy/config.yaml",
-        "-v",
-        f"{data_dir.resolve()}:/var/lib/easy-proxy",
-    ]
-    if args.docker_network_name.strip():
-        docker_args.extend(["--network", args.docker_network_name.strip()])
-    for dns_server in dns_servers:
-        docker_args.extend(["--dns", dns_server])
-    docker_args.append(effective_image)
-    run(docker_args, capture=False, check=True)
+        docker_args = [
+            "docker",
+            "run",
+            "-d",
+            "--name",
+            container_name,
+            "-p",
+            f"{management_port}:29888",
+            "-p",
+            f"{pool_port}:22323",
+            "-v",
+            f"{config_path.resolve()}:/etc/easy-proxy/config.yaml",
+            "-v",
+            f"{data_dir.resolve()}:/var/lib/easy-proxy",
+        ]
+        if args.docker_network_name.strip():
+            docker_args.extend(["--network", args.docker_network_name.strip()])
+        for dns_server in dns_servers:
+            docker_args.extend(["--dns", dns_server])
+        docker_args.append(effective_image)
+        run(docker_args, capture=False, check=True)
+    except Exception:
+        config_path.unlink(missing_ok=True)
+        raise
 
     summary_path = Path(args.output_path) if args.output_path.strip() else artifact_dir / "summary.json"
     try:
@@ -928,10 +936,11 @@ def main() -> int:
             pass
         raise
     finally:
+        config_path.unlink(missing_ok=True)
         if not args.skip_cleanup:
             stop_container(container_name)
         if not args.keep_artifacts:
-            # Keep summary/config if output was explicitly requested, otherwise allow cleanup of transient docker data only.
+            # The secret-bearing config is always removed; other diagnostics may remain.
             pass
 
 

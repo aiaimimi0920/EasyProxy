@@ -5,7 +5,6 @@ param(
     [string]$ImagePrefix = "ghcr.io/aiaimimi0920",
     [string]$ImageName = "ech-workers-monorepo",
     [string]$GhcrUsername = $env:GHCR_USERNAME,
-    [string]$GhcrToken = $env:GHCR_TOKEN,
     [string]$Platform = "linux/amd64",
     [switch]$LoadOnly,
     [switch]$NoCache
@@ -31,6 +30,5 @@ Invoke-EasyProxyGhcrBuildxPublish `
     -ReleaseTag $ReleaseTag `
     -Platform $Platform `
     -GhcrUsername $GhcrUsername `
-    -GhcrToken $GhcrToken `
     -LoadOnly:$LoadOnly `
     -NoCache:$NoCache

@@ -1070,22 +1070,38 @@ service 管理 API smoke 与 ECH help smoke 均通过且未替换现有运行容
 
 ### Phase 2：拓扑配置和生命周期核心
 
-- P2-01 写 topology schema；
-- P2-02 建立 topology.example.yaml；
-- P2-03 建立 Secret/Variable 权限矩阵；
-- P2-04 建立确定性资源命名；
-- P2-05 实现 easyproxyctl 基础；
-- P2-06 实现 topology validate；
-- P2-07 实现 resource discover/create-or-reuse；
-- P2-08 定义 deployment-manifest；
-- P2-09 删除旧 config 权威冲突和重复 renderer；
-- P2-10 建立 reusable workflow 骨架。
+状态：已完成（2026-08-29）。
+
+- [x] P2-01 写 topology schema；
+- [x] P2-02 建立 topology.example.yaml；
+- [x] P2-03 建立 Secret/Variable 权限矩阵；
+- [x] P2-04 建立确定性资源命名；
+- [x] P2-05 实现 easyproxyctl 基础；
+- [x] P2-06 实现 topology validate；
+- [x] P2-07 实现 resource discover/create-or-reuse；
+- [x] P2-08 定义 deployment-manifest；
+- [x] P2-09 删除旧 config 权威冲突和重复 renderer；
+- [x] P2-10 建立 reusable workflow 骨架。
 
 退出条件：
 
 - 一份非敏感配置可以完全描述目标拓扑；
 - 所有旧部署入口均有明确删除或迁移决定；
 - 生命周期逻辑只有一个权威实现。
+
+完成证据：`topology.schema.json`、`topology.example.yaml` 和
+`docs/secrets-and-permissions.md` 定义非敏感拓扑；`tools/easyproxyctl`
+统一负责严格加载、语义校验、确定性命名、Bootstrap/Update 调和规则和
+带 checksum 的部署清单。清单只输出启用组件与资源，可记录 provider ID、
+immutable image、根和递归子模块 commit。旧 renderer、GitHub 设置同步和
+配置发布 workflow 已删除；`docs/topology.md` 逐项记录旧入口决定。被 Git
+忽略的本地旧 `config.yaml` 可以保留作人工迁移参考，但没有活跃脚本读取
+它。PR 验证由只读、无生产 Secret 的 reusable workflow 承担。
+
+验证：easyproxyctl 19 项 Go 测试、`go vet`、真实 topology validate、真实
+manifest build/verify、根 38 项测试、33 个 PowerShell 文件解析、Python
+语法检查、workflow/schema 解析、Go 格式检查、release contract 与
+`git diff --check` 通过。
 
 ### Phase 3：MiSub 安全部署和更新
 
