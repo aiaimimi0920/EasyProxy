@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -154,8 +155,6 @@ def build_runtime_source(uri: str, source_id: str, source_group: str, note: str,
 def main() -> int:
     parser = argparse.ArgumentParser(description="Synchronize MiSub runtime proxy profile from shared EasyProxy source audit results.")
     parser.add_argument("--base-url", required=True)
-    parser.add_argument("--admin-password", required=True)
-    parser.add_argument("--manifest-token", required=True)
     parser.add_argument("--profile-id", default="aggregator-global")
     parser.add_argument("--profile-name", default="Aggregator Global")
     parser.add_argument(
@@ -171,6 +170,11 @@ def main() -> int:
     parser.add_argument("--scenario-timeout-seconds", type=int, default=720)
     args = parser.parse_args()
 
+    admin_password = os.environ.get("MISUB_ADMIN_PASSWORD", "")
+    manifest_token = os.environ.get("MISUB_MANIFEST_TOKEN", "")
+    ensure(admin_password != "", "MISUB_ADMIN_PASSWORD is required")
+    ensure(manifest_token != "", "MISUB_MANIFEST_TOKEN is required")
+
     subscription_urls = normalize_string_array(args.subscription_url)
     ensure(subscription_urls, "At least one --subscription-url is required")
 
@@ -180,7 +184,7 @@ def main() -> int:
     def login_request():
         response = session.post(
             base_url + "api/login",
-            json={"password": args.admin_password},
+            json={"password": admin_password},
             timeout=30,
         )
         if response.status_code == 401:
@@ -297,7 +301,7 @@ def main() -> int:
         5,
         lambda: session.get(
             base_url + f"api/manifest/{args.profile_id}",
-            headers={"Authorization": f"Bearer {args.manifest_token}"},
+            headers={"Authorization": f"Bearer {manifest_token}"},
             timeout=30,
         ),
     )

@@ -14,6 +14,7 @@ artifacts, manifests, summaries, or command arguments that are logged.
 | `MISUB_COOKIE_SECRET` | Environment secret | MiSub | stable session signing key |
 | `MISUB_MANIFEST_TOKEN` | Environment secret | MiSub/EasyProxy | machine manifest authentication |
 | `MISUB_CRON_SECRET` | Environment secret | MiSub cron | cron endpoint authentication |
+| `EASYPROXY_BACKUP_PASSPHRASE` | Environment secret | MiSub backup/restore | independent age archive encryption |
 | `ECH_TOKEN` | Environment secret | ECH Worker | WebSocket connector authentication |
 | `R2_ACCESS_KEY_ID` | Environment secret | Aggregator/backup | selected bucket access key ID |
 | `R2_SECRET_ACCESS_KEY` | Environment secret | Aggregator/backup | selected bucket secret key |

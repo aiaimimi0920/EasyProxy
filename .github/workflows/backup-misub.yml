@@ -1,0 +1,98 @@
+name: Backup MiSub
+
+'on':
+  workflow_dispatch:
+    inputs:
+      pages_project:
+        description: Existing MiSub Pages project name
+        required: true
+        default: misub-git
+        type: string
+      d1_database:
+        description: Existing MiSub D1 database name
+        required: true
+        default: misub-git
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: tools/easyproxyctl/go.mod
+          cache-dependency-path: tools/easyproxyctl/go.sum
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: upstreams/misub/package-lock.json
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install PyYAML
+          npm ci --prefix upstreams/misub
+          (cd tools/easyproxyctl && go build -o "${RUNNER_TEMP}/easyproxyctl" .)
+
+      - name: Resolve exact resources and create encrypted backup
+        id: backup
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          MISUB_ADMIN_PASSWORD: ${{ secrets.MISUB_ADMIN_PASSWORD }}
+          EASYPROXY_BACKUP_PASSPHRASE: ${{ secrets.EASYPROXY_BACKUP_PASSPHRASE }}
+          MISUB_PUBLIC_URL: ${{ vars.EASYPROXY_MISUB_PUBLIC_URL }}
+          MISUB_CALLBACK_URL: ${{ vars.EASYPROXY_MISUB_CALLBACK_URL }}
+          PAGES_PROJECT: ${{ inputs.pages_project }}
+          D1_DATABASE: ${{ inputs.d1_database }}
+        run: |
+          set -euo pipefail
+          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID EASYPROXY_BACKUP_PASSPHRASE MISUB_PUBLIC_URL MISUB_CALLBACK_URL; do
+            [[ -n "${!name:-}" ]] || { echo "::error::$name is required"; exit 1; }
+          done
+          topology="${RUNNER_TEMP}/topology.yaml"
+          state="${RUNNER_TEMP}/cloud-resources.json"
+          config="${RUNNER_TEMP}/misub-wrangler.jsonc"
+          manifest="${RUNNER_TEMP}/deployment-manifest.json"
+          output="${RUNNER_TEMP}/misub-backup-${GITHUB_RUN_ID}.age"
+          python scripts/materialize-cloud-topology.py --base topology.example.yaml --output "$topology" \
+            --pages-project "$PAGES_PROJECT" --d1-database "$D1_DATABASE"
+          "${RUNNER_TEMP}/easyproxyctl" cloud update --topology "$topology" --state-output "$state" --wrangler-dir upstreams/misub
+          db_id="$(python -c "import json,sys; print(json.load(open(sys.argv[1]))['d1']['id'])" "$state")"
+          pages_id="$(python -c "import json,sys; print(json.load(open(sys.argv[1]))['pages']['id'])" "$state")"
+          deployment="$(python -c "import json,sys; print(json.load(open(sys.argv[1]))['deployment_name'])" "$state")"
+          python scripts/materialize-misub-wrangler.py --base-config upstreams/misub/wrangler.jsonc --output "$config" \
+            --project-name "$PAGES_PROJECT" --deployment-name "$deployment" \
+            --public-url "$MISUB_PUBLIC_URL" --callback-url "$MISUB_CALLBACK_URL" \
+            --d1-database-name "$D1_DATABASE" --d1-database-id "$db_id"
+          "${RUNNER_TEMP}/easyproxyctl" manifest build --topology "$topology" --output "$manifest" \
+            --resource-id "pages=$pages_id" --resource-id "d1=$db_id"
+          "${RUNNER_TEMP}/easyproxyctl" cloud verify --topology "$topology" --manifest "$manifest" \
+            --wrangler-config "$config" --state-output "$state" --wrangler-dir upstreams/misub
+          "${RUNNER_TEMP}/easyproxyctl" cloud backup --topology "$topology" --manifest "$manifest" \
+            --wrangler-config "$config" --wrangler-dir upstreams/misub --base-url "$MISUB_PUBLIC_URL" \
+            --allow-direct-d1-fallback --output "$output"
+          echo "output=$output" >> "$GITHUB_OUTPUT"
+
+      - name: Upload encrypted backup
+        uses: actions/upload-artifact@v4
+        with:
+          name: misub-backup-${{ github.run_id }}
+          path: ${{ steps.backup.outputs.output }}
+          if-no-files-found: error
+          retention-days: 30

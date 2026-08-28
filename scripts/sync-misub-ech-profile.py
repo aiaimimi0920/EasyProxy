@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from typing import Any
 
@@ -192,8 +193,6 @@ def build_sources(
 def main() -> int:
     parser = argparse.ArgumentParser(description="Synchronize the MiSub ECH connector test profile with the current worker URL/token.")
     parser.add_argument("--base-url", required=True)
-    parser.add_argument("--admin-password", required=True)
-    parser.add_argument("--manifest-token", required=True)
     parser.add_argument("--profile-id", default="easyproxies-ech-runtime")
     parser.add_argument("--legacy-profile-id", default="easyproxies-ech-test")
     parser.add_argument("--profile-name", default="EasyProxies ECH Runtime")
@@ -202,7 +201,6 @@ def main() -> int:
         default="Private profile for routing EasyProxy-managed ECH connector sources through the current self-hosted ECH Worker",
     )
     parser.add_argument("--worker-url", required=True)
-    parser.add_argument("--access-token", required=True)
     parser.add_argument("--local-protocol", default="socks5")
     parser.add_argument("--source-id-prefix", default="conn_ech_workers_pref")
     parser.add_argument("--source-name-prefix", default="ECH Worker Preferred")
@@ -214,13 +212,20 @@ def main() -> int:
     parser.add_argument("--attach-profile-id", action="append", default=[])
     args = parser.parse_args()
 
+    admin_password = os.environ.get("MISUB_ADMIN_PASSWORD", "")
+    manifest_token = os.environ.get("MISUB_MANIFEST_TOKEN", "")
+    access_token = os.environ.get("ECH_TOKEN", "")
+    ensure(admin_password != "", "MISUB_ADMIN_PASSWORD is required")
+    ensure(manifest_token != "", "MISUB_MANIFEST_TOKEN is required")
+    ensure(access_token != "", "ECH_TOKEN is required")
+
     base_url = args.base_url.rstrip("/") + "/"
     session = requests.Session()
 
     def login_request():
         response = session.post(
             base_url + "api/login",
-            json={"password": args.admin_password},
+            json={"password": admin_password},
             timeout=30,
         )
         if response.status_code == 401:
@@ -252,7 +257,7 @@ def main() -> int:
         selected_server_ips = []
     new_sources = build_sources(
         worker_url=args.worker_url,
-        access_token=args.access_token,
+        access_token=access_token,
         server_ips=selected_server_ips,
         local_protocol=args.local_protocol,
         source_id_prefix=args.source_id_prefix,
@@ -344,7 +349,7 @@ def main() -> int:
         5,
         lambda: session.get(
             base_url + f"api/manifest/{args.profile_id}",
-            headers={"Authorization": f"Bearer {args.manifest_token}"},
+            headers={"Authorization": f"Bearer {manifest_token}"},
             timeout=30,
         ),
     )
@@ -356,7 +361,7 @@ def main() -> int:
         manifest_payload.get("sources") or [],
         managed_source_ids,
         args.worker_url,
-        args.access_token,
+        access_token,
     )
 
     for attach_profile_id in normalize_string_array(args.attach_profile_id):
@@ -366,7 +371,7 @@ def main() -> int:
             5,
             lambda profile_id=attach_profile_id: session.get(
                 base_url + f"api/manifest/{profile_id}",
-                headers={"Authorization": f"Bearer {args.manifest_token}"},
+                headers={"Authorization": f"Bearer {manifest_token}"},
                 timeout=30,
             ),
         )
@@ -377,7 +382,7 @@ def main() -> int:
             attached_manifest_payload.get("sources") or [],
             managed_source_ids,
             args.worker_url,
-            args.access_token,
+            access_token,
         )
 
     summary = {

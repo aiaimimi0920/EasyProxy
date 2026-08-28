@@ -41,6 +41,7 @@ secrets:
   misub_cookie_secret: MISUB_COOKIE_SECRET
   misub_manifest_token: MISUB_MANIFEST_TOKEN
   misub_cron_secret: MISUB_CRON_SECRET
+  misub_backup_passphrase: EASYPROXY_BACKUP_PASSPHRASE
   ech_token: ECH_TOKEN
   r2_access_key_id: R2_ACCESS_KEY_ID
   r2_secret_access_key: R2_SECRET_ACCESS_KEY

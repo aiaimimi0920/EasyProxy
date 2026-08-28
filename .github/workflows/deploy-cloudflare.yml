@@ -63,8 +63,10 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version-file: service/base/go.mod
-          cache-dependency-path: service/base/go.sum
+          go-version-file: tools/easyproxyctl/go.mod
+          cache-dependency-path: |
+            service/base/go.sum
+            tools/easyproxyctl/go.sum
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -107,6 +109,12 @@ jobs:
         run: |
           go test -count=1 ./...
 
+      - name: Run easyproxyctl Go tests
+        shell: pwsh
+        working-directory: tools/easyproxyctl
+        run: |
+          go test -count=1 ./...
+
   deploy-misub-pages:
     name: Deploy MiSub Pages
     runs-on: ubuntu-latest
@@ -126,6 +134,12 @@ jobs:
           cache: npm
           cache-dependency-path: upstreams/misub/package-lock.json
 
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: tools/easyproxyctl/go.mod
+          cache-dependency-path: tools/easyproxyctl/go.sum
+
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -141,8 +155,10 @@ jobs:
           MISUB_ADMIN_PASSWORD: ${{ secrets.MISUB_ADMIN_PASSWORD }}
           MISUB_COOKIE_SECRET: ${{ secrets.MISUB_COOKIE_SECRET }}
           MISUB_MANIFEST_TOKEN: ${{ secrets.MISUB_MANIFEST_TOKEN }}
+          EASYPROXY_BACKUP_PASSPHRASE: ${{ secrets.EASYPROXY_BACKUP_PASSPHRASE }}
           MISUB_PUBLIC_URL: ${{ vars.EASYPROXY_MISUB_PUBLIC_URL }}
           MISUB_CALLBACK_URL: ${{ vars.EASYPROXY_MISUB_CALLBACK_URL }}
+          DEPLOYMENT_MODE: ${{ inputs.deployment_mode }}
         run: |
           set -euo pipefail
           for name in CLOUDFLARE_ACCOUNT_ID MISUB_ADMIN_PASSWORD MISUB_COOKIE_SECRET MISUB_MANIFEST_TOKEN MISUB_PUBLIC_URL MISUB_CALLBACK_URL; do
@@ -157,6 +173,18 @@ jobs:
               exit 1
             fi
           fi
+          if [[ "$DEPLOYMENT_MODE" == "update" && -z "${EASYPROXY_BACKUP_PASSPHRASE:-}" ]]; then
+            echo "::error::EASYPROXY_BACKUP_PASSPHRASE is required for a protected MiSub update."
+            exit 1
+          fi
+
+      - name: Install deployment helpers
+        run: python -m pip install PyYAML
+
+      - name: Build easyproxyctl
+        shell: bash
+        working-directory: tools/easyproxyctl
+        run: go build -o "${RUNNER_TEMP}/easyproxyctl" .
 
       - name: Install MiSub dependencies
         working-directory: upstreams/misub
@@ -166,10 +194,9 @@ jobs:
         working-directory: upstreams/misub
         run: npm run build
 
-      - name: Resolve MiSub Cloudflare resources
+      - name: Resolve and attest MiSub Cloudflare resources
         id: misub_resources
         shell: bash
-        working-directory: upstreams/misub
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_EMAIL: ${{ secrets.CLOUDFLARE_AUTH_EMAIL }}
@@ -179,59 +206,112 @@ jobs:
           MISUB_CALLBACK_URL: ${{ vars.EASYPROXY_MISUB_CALLBACK_URL }}
           MISUB_D1_DATABASE_NAME: ${{ vars.EASYPROXY_MISUB_D1_DATABASE_NAME }}
           MISUB_D1_DATABASE_BINDING: ${{ vars.EASYPROXY_MISUB_D1_DATABASE_BINDING }}
+          DEPLOYMENT_MODE: ${{ inputs.deployment_mode }}
+          INPUT_PROJECT_NAME: ${{ inputs.misub_project_name }}
+          INPUT_BRANCH_NAME: ${{ inputs.misub_branch }}
         run: |
           set -euo pipefail
-          mode="${{ inputs.deployment_mode }}"
-          project_name="${{ inputs.misub_project_name }}"
-          branch_name="${{ inputs.misub_branch }}"
+          mode="$DEPLOYMENT_MODE"
+          project_name="$INPUT_PROJECT_NAME"
+          branch_name="$INPUT_BRANCH_NAME"
+          git check-ref-format "refs/heads/${branch_name}" >/dev/null || { echo "::error::Invalid MiSub branch name"; exit 1; }
           db_name="${MISUB_D1_DATABASE_NAME:-$project_name}"
           db_binding="${MISUB_D1_DATABASE_BINDING:-MISUB_DB}"
-
-          if [[ "$mode" == "bootstrap" ]]; then
-            set +e
-            npx wrangler pages project create "$project_name" --production-branch "$branch_name"
-            create_status=$?
-            set -e
-            if [[ $create_status -ne 0 ]]; then
-              echo "pages project create returned ${create_status}; continuing in case the project already exists"
-            fi
-          fi
-
-          d1_list_json="$(npx wrangler d1 list --json)"
-          db_id="$(printf '%s' "$d1_list_json" | python -c "import json,sys; name=sys.argv[1]; items=json.load(sys.stdin); print(next((str(item.get('uuid') or item.get('id') or '').strip() for item in items if str(item.get('name','')).strip()==name), ''))" "$db_name")"
-
-          if [[ -z "$db_id" && "$mode" == "bootstrap" ]]; then
-            create_db_json="$(npx wrangler d1 create "$db_name" --json)"
-            db_id="$(printf '%s' "$create_db_json" | python -c "import json,sys; payload=json.load(sys.stdin); print(str(payload.get('uuid') or payload.get('id') or '').strip())")"
-          fi
-
-          if [[ -z "$db_id" ]]; then
-            echo "::error::Failed to resolve a D1 database id for ${db_name}. Use bootstrap mode to create it or pre-create the database in Cloudflare."
-            exit 1
-          fi
-
+          topology_path="${RUNNER_TEMP}/topology.yaml"
+          resource_state_path="${RUNNER_TEMP}/cloud-resources.json"
           runtime_config_path="${RUNNER_TEMP}/misub-wrangler.runtime.jsonc"
+          manifest_path="${RUNNER_TEMP}/deployment-manifest.json"
+          backup_path="${RUNNER_TEMP}/misub-before-update-${GITHUB_RUN_ID}.age"
+
+          python scripts/materialize-cloud-topology.py \
+            --base topology.example.yaml \
+            --output "$topology_path" \
+            --pages-project "$project_name" \
+            --d1-database "$db_name"
+          "${RUNNER_TEMP}/easyproxyctl" cloud "$mode" \
+            --topology "$topology_path" \
+            --state-output "$resource_state_path" \
+            --wrangler-dir upstreams/misub \
+            --production-branch "$branch_name"
+
+          db_id="$(python -c "import json,sys; print(json.load(open(sys.argv[1], encoding='utf-8'))['d1']['id'])" "$resource_state_path")"
+          pages_id="$(python -c "import json,sys; print(json.load(open(sys.argv[1], encoding='utf-8'))['pages']['id'])" "$resource_state_path")"
+          deployment_name="$(python -c "import json,sys; print(json.load(open(sys.argv[1], encoding='utf-8'))['deployment_name'])" "$resource_state_path")"
           python "${GITHUB_WORKSPACE}/scripts/materialize-misub-wrangler.py" \
             --base-config "${GITHUB_WORKSPACE}/upstreams/misub/wrangler.jsonc" \
             --output "$runtime_config_path" \
             --project-name "$project_name" \
+            --deployment-name "$deployment_name" \
             --public-url "${MISUB_PUBLIC_URL}" \
             --callback-url "${MISUB_CALLBACK_URL}" \
             --d1-binding "$db_binding" \
             --d1-database-name "$db_name" \
             --d1-database-id "$db_id"
 
+          "${RUNNER_TEMP}/easyproxyctl" manifest build \
+            --topology "$topology_path" \
+            --output "$manifest_path" \
+            --resource-id "pages=$pages_id" \
+            --resource-id "d1=$db_id"
+          "${RUNNER_TEMP}/easyproxyctl" cloud verify \
+            --topology "$topology_path" \
+            --manifest "$manifest_path" \
+            --state-output "$resource_state_path" \
+            --wrangler-config "$runtime_config_path" \
+            --wrangler-dir upstreams/misub
+
           echo "project_name=$project_name" >> "$GITHUB_OUTPUT"
           echo "branch_name=$branch_name" >> "$GITHUB_OUTPUT"
           echo "database_name=$db_name" >> "$GITHUB_OUTPUT"
           echo "database_id=$db_id" >> "$GITHUB_OUTPUT"
+          echo "topology_path=$topology_path" >> "$GITHUB_OUTPUT"
+          echo "manifest_path=$manifest_path" >> "$GITHUB_OUTPUT"
+          echo "backup_path=$backup_path" >> "$GITHUB_OUTPUT"
           echo "runtime_config_path=$runtime_config_path" >> "$GITHUB_OUTPUT"
 
-      - name: Apply MiSub runtime wrangler config
+      - name: Create encrypted pre-update MiSub backup
+        if: ${{ inputs.deployment_mode == 'update' }}
         shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_EMAIL: ${{ secrets.CLOUDFLARE_AUTH_EMAIL }}
+          CLOUDFLARE_API_KEY: ${{ secrets.CLOUDFLARE_GLOBAL_API_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          MISUB_ADMIN_PASSWORD: ${{ secrets.MISUB_ADMIN_PASSWORD }}
+          EASYPROXY_BACKUP_PASSPHRASE: ${{ secrets.EASYPROXY_BACKUP_PASSPHRASE }}
+          MISUB_PUBLIC_URL: ${{ vars.EASYPROXY_MISUB_PUBLIC_URL }}
         run: |
           set -euo pipefail
-          cp "${{ steps.misub_resources.outputs.runtime_config_path }}" upstreams/misub/wrangler.jsonc
+          "${RUNNER_TEMP}/easyproxyctl" cloud backup \
+            --topology "${{ steps.misub_resources.outputs.topology_path }}" \
+            --manifest "${{ steps.misub_resources.outputs.manifest_path }}" \
+            --wrangler-config "${{ steps.misub_resources.outputs.runtime_config_path }}" \
+            --wrangler-dir upstreams/misub \
+            --base-url "$MISUB_PUBLIC_URL" \
+            --allow-direct-d1-fallback \
+            --output "${{ steps.misub_resources.outputs.backup_path }}"
+
+      - name: Retain encrypted pre-update backup
+        if: ${{ inputs.deployment_mode == 'update' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: misub-before-update-${{ github.run_id }}
+          path: ${{ steps.misub_resources.outputs.backup_path }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Apply runtime config and expand-only D1 migrations
+        shell: bash
+        working-directory: upstreams/misub
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_EMAIL: ${{ secrets.CLOUDFLARE_AUTH_EMAIL }}
+          CLOUDFLARE_API_KEY: ${{ secrets.CLOUDFLARE_GLOBAL_API_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          cp "${{ steps.misub_resources.outputs.runtime_config_path }}" wrangler.jsonc
+          npx wrangler d1 migrations apply "${{ steps.misub_resources.outputs.database_name }}" --remote
 
       - name: Sync MiSub Pages secrets
         shell: bash
@@ -275,16 +355,21 @@ jobs:
           MISUB_ADMIN_PASSWORD: ${{ secrets.MISUB_ADMIN_PASSWORD }}
           MISUB_MANIFEST_TOKEN: ${{ secrets.MISUB_MANIFEST_TOKEN }}
           MISUB_MANIFEST_PROFILE_ID: ${{ vars.EASYPROXY_MISUB_MANIFEST_PROFILE_ID }}
+          DEPLOYED_PROJECT_NAME: ${{ steps.misub_resources.outputs.project_name }}
+          DEPLOYED_BRANCH_NAME: ${{ steps.misub_resources.outputs.branch_name }}
+          REQUESTED_BRANCH_NAME: ${{ inputs.misub_branch }}
+          DEPLOYMENT_ALIAS_URL: ${{ steps.deploy_misub.outputs['pages-deployment-alias-url'] }}
+          DEPLOYMENT_URL: ${{ steps.deploy_misub.outputs['deployment-url'] }}
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
           python -m pip install requests PyYAML
-          if [[ "${{ steps.misub_resources.outputs.branch_name }}" == "${{ inputs.misub_branch }}" && "${{ steps.misub_resources.outputs.branch_name }}" == "main" ]]; then
-            base_url="https://${{ steps.misub_resources.outputs.project_name }}.pages.dev"
+          if [[ "$DEPLOYED_BRANCH_NAME" == "$REQUESTED_BRANCH_NAME" && "$DEPLOYED_BRANCH_NAME" == "main" ]]; then
+            base_url="https://${DEPLOYED_PROJECT_NAME}.pages.dev"
           else
-            base_url="${{ steps.deploy_misub.outputs['pages-deployment-alias-url'] }}"
+            base_url="$DEPLOYMENT_ALIAS_URL"
             if [[ -z "$base_url" ]]; then
-              base_url="${{ steps.deploy_misub.outputs['deployment-url'] }}"
+              base_url="$DEPLOYMENT_URL"
             fi
             if [[ -z "$base_url" ]]; then
               base_url="${MISUB_PUBLIC_URL}"
@@ -292,23 +377,37 @@ jobs:
           fi
           python scripts/verify-misub-deploy.py \
             --base-url "${base_url}" \
-            --admin-password "${MISUB_ADMIN_PASSWORD}" \
-            --manifest-token "${MISUB_MANIFEST_TOKEN}" \
             --manifest-profile-id "${MISUB_MANIFEST_PROFILE_ID:-default}"
+
+      - name: Retain MiSub deployment manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: misub-deployment-manifest-${{ github.run_id }}
+          path: ${{ steps.misub_resources.outputs.manifest_path }}
+          if-no-files-found: error
+          retention-days: 90
 
       - name: MiSub deploy summary
         shell: bash
+        env:
+          DEPLOYMENT_MODE: ${{ inputs.deployment_mode }}
+          PROJECT_NAME: ${{ steps.misub_resources.outputs.project_name }}
+          BRANCH_NAME: ${{ steps.misub_resources.outputs.branch_name }}
+          DATABASE_NAME: ${{ steps.misub_resources.outputs.database_name }}
+          DATABASE_ID: ${{ steps.misub_resources.outputs.database_id }}
+          DEPLOYMENT_URL: ${{ steps.deploy_misub.outputs['deployment-url'] }}
+          DEPLOYMENT_ALIAS_URL: ${{ steps.deploy_misub.outputs['pages-deployment-alias-url'] }}
         run: |
           {
             echo "## MiSub Pages deploy completed"
             echo
-            echo "- mode: \`${{ inputs.deployment_mode }}\`"
-            echo "- project: \`${{ steps.misub_resources.outputs.project_name }}\`"
-            echo "- branch: \`${{ steps.misub_resources.outputs.branch_name }}\`"
-            echo "- d1 database: \`${{ steps.misub_resources.outputs.database_name }}\`"
-            echo "- d1 database id: \`${{ steps.misub_resources.outputs.database_id }}\`"
-            echo "- deployment url: \`${{ steps.deploy_misub.outputs['deployment-url'] || 'n/a' }}\`"
-            echo "- preview alias: \`${{ steps.deploy_misub.outputs['pages-deployment-alias-url'] || 'n/a' }}\`"
+            echo "- mode: \`${DEPLOYMENT_MODE}\`"
+            echo "- project: \`${PROJECT_NAME}\`"
+            echo "- branch: \`${BRANCH_NAME}\`"
+            echo "- d1 database: \`${DATABASE_NAME}\`"
+            echo "- d1 database id: \`${DATABASE_ID}\`"
+            echo "- deployment url: \`${DEPLOYMENT_URL:-n/a}\`"
+            echo "- preview alias: \`${DEPLOYMENT_ALIAS_URL:-n/a}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
   deploy-ech-workers-cloudflare:
@@ -384,9 +483,7 @@ jobs:
           set -euo pipefail
           python -m pip install --upgrade pip
           python -m pip install requests websockets
-          python scripts/verify-ech-worker-deploy.py \
-            --base-url "${ECH_WORKER_PUBLIC_URL}" \
-            --token "${ECH_TOKEN}"
+          python scripts/verify-ech-worker-deploy.py --base-url "${ECH_WORKER_PUBLIC_URL}"
 
       - name: Worker deploy summary
         shell: bash
@@ -549,8 +646,6 @@ jobs:
               sys.executable,
               "scripts/sync-misub-runtime-sources.py",
               "--base-url", os.environ["MISUB_PUBLIC_URL"],
-              "--admin-password", os.environ["MISUB_ADMIN_PASSWORD"],
-              "--manifest-token", os.environ["MISUB_MANIFEST_TOKEN"],
               "--profile-id", os.environ.get("MISUB_MANIFEST_PROFILE_ID", "aggregator-global"),
               "--profile-name", "Aggregator Global",
               "--subscription-url", os.environ["AGGREGATOR_EFFECTIVE_URL"],
@@ -570,16 +665,13 @@ jobs:
 
           python scripts/sync-misub-ech-profile.py \
             --base-url "${MISUB_PUBLIC_URL}" \
-            --admin-password "${MISUB_ADMIN_PASSWORD}" \
-            --manifest-token "${MISUB_MANIFEST_TOKEN}" \
             --profile-id "${connector_profile_id}" \
             --legacy-profile-id "easyproxies-ech-test" \
             --remove-profile-id "easyproxies-ech-preferred" \
             --profile-name "EasyProxies ECH Runtime" \
             --profile-description "Private profile for routing EasyProxy-managed ECH connector sources through the current self-hosted ECH Worker; host-local preferred IP fanout is generated on each EasyProxy runtime independently." \
             --attach-profile-id "${runtime_profile_id}" \
-            --worker-url "${ECH_WORKER_PUBLIC_URL}:443" \
-            --access-token "${ECH_TOKEN}"
+            --worker-url "${ECH_WORKER_PUBLIC_URL}:443"
 
       - name: MiSub connector profile sync summary
         shell: bash

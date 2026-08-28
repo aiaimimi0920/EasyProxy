@@ -17,9 +17,9 @@ func TestUnknownCommandFails(t *testing.T) {
 	}
 }
 
-func TestCloudCommandDoesNotFakeSuccess(t *testing.T) {
+func TestCloudCommandRequiresKnownLifecycleSubcommand(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	if code := Run([]string{"cloud", "bootstrap"}, &stdout, &stderr); code == 0 || !strings.Contains(stderr.String(), "not implemented") {
+	if code := Run([]string{"cloud", "destroy"}, &stdout, &stderr); code == 0 || !strings.Contains(stderr.String(), "unknown cloud subcommand") {
 		t.Fatalf("Run() code = %d, stderr = %q", code, stderr.String())
 	}
 }

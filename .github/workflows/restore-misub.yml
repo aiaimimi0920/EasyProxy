@@ -1,0 +1,184 @@
+name: Restore MiSub
+
+'on':
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Restore into a temporary drill D1 or the protected production D1
+        required: true
+        default: drill
+        type: choice
+        options: [drill, production]
+      backup_run_id:
+        description: Workflow run ID that produced the backup artifact
+        required: true
+        type: string
+      backup_artifact:
+        description: Backup artifact name
+        required: true
+        type: string
+      pages_project:
+        description: Protected MiSub Pages project name
+        required: true
+        default: misub-git
+        type: string
+      d1_database:
+        description: Protected MiSub D1 database name
+        required: true
+        default: misub-git
+        type: string
+      confirm_production_database_id:
+        description: Required for production; exact protected D1 database ID
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    environment: easyproxy-misub-restore
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.backup_artifact }}
+          path: ${{ runner.temp }}/backup
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.backup_run_id }}
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: tools/easyproxyctl/go.mod
+          cache-dependency-path: tools/easyproxyctl/go.sum
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: upstreams/misub/package-lock.json
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install PyYAML
+          npm ci --prefix upstreams/misub
+          (cd tools/easyproxyctl && go build -o "${RUNNER_TEMP}/easyproxyctl" .)
+
+      - name: Resolve source and restore target
+        id: context
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          MISUB_PUBLIC_URL: ${{ vars.EASYPROXY_MISUB_PUBLIC_URL }}
+          MISUB_CALLBACK_URL: ${{ vars.EASYPROXY_MISUB_CALLBACK_URL }}
+          MISUB_ADMIN_PASSWORD: ${{ secrets.MISUB_ADMIN_PASSWORD }}
+          EASYPROXY_BACKUP_PASSPHRASE: ${{ secrets.EASYPROXY_BACKUP_PASSPHRASE }}
+          RESTORE_MODE: ${{ inputs.mode }}
+          PAGES_PROJECT: ${{ inputs.pages_project }}
+          D1_DATABASE: ${{ inputs.d1_database }}
+          CONFIRM_PRODUCTION_ID: ${{ inputs.confirm_production_database_id }}
+        run: |
+          set -euo pipefail
+          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID MISUB_PUBLIC_URL MISUB_CALLBACK_URL MISUB_ADMIN_PASSWORD EASYPROXY_BACKUP_PASSPHRASE; do
+            [[ -n "${!name:-}" ]] || { echo "::error::$name is required"; exit 1; }
+          done
+          topology="${RUNNER_TEMP}/topology.yaml"
+          state="${RUNNER_TEMP}/cloud-resources.json"
+          config="${RUNNER_TEMP}/misub-wrangler.jsonc"
+          manifest="${RUNNER_TEMP}/deployment-manifest.json"
+          python scripts/materialize-cloud-topology.py --base topology.example.yaml --output "$topology" \
+            --pages-project "$PAGES_PROJECT" --d1-database "$D1_DATABASE"
+          "${RUNNER_TEMP}/easyproxyctl" cloud update --topology "$topology" --state-output "$state" --wrangler-dir upstreams/misub
+          source_id="$(python -c "import json,sys; print(json.load(open(sys.argv[1]))['d1']['id'])" "$state")"
+          pages_id="$(python -c "import json,sys; print(json.load(open(sys.argv[1]))['pages']['id'])" "$state")"
+          deployment="$(python -c "import json,sys; print(json.load(open(sys.argv[1]))['deployment_name'])" "$state")"
+          python scripts/materialize-misub-wrangler.py --base-config upstreams/misub/wrangler.jsonc --output "$config" \
+            --project-name "$PAGES_PROJECT" --deployment-name "$deployment" \
+            --public-url "$MISUB_PUBLIC_URL" --callback-url "$MISUB_CALLBACK_URL" \
+            --d1-database-name "$D1_DATABASE" --d1-database-id "$source_id"
+          "${RUNNER_TEMP}/easyproxyctl" manifest build --topology "$topology" --output "$manifest" \
+            --resource-id "pages=$pages_id" --resource-id "d1=$source_id"
+          "${RUNNER_TEMP}/easyproxyctl" cloud verify --topology "$topology" --manifest "$manifest" \
+            --wrangler-config "$config" --state-output "$state" --wrangler-dir upstreams/misub
+          archive="$(find "${RUNNER_TEMP}/backup" -maxdepth 1 -type f -name '*.age' -print -quit)"
+          [[ -n "$archive" ]] || { echo "::error::Artifact contains no .age backup"; exit 1; }
+
+          if [[ "$RESTORE_MODE" == "drill" ]]; then
+            target_name="${D1_DATABASE}-restore-drill-${GITHUB_RUN_ID}"
+            echo "DRILL_TARGET_NAME=$target_name" >> "$GITHUB_ENV"
+            create_json="$(cd upstreams/misub && npx wrangler d1 create "$target_name" --json)"
+            target_id="$(printf '%s' "$create_json" | python scripts/extract-cloudflare-resource-id.py)"
+            [[ -n "$target_id" ]] || { echo "::error::D1 drill creation returned no ID"; exit 1; }
+            echo "DRILL_TARGET_ID=$target_id" >> "$GITHUB_ENV"
+          else
+            target_name="$D1_DATABASE"
+            target_id="$source_id"
+            [[ "$CONFIRM_PRODUCTION_ID" == "$target_id" ]] || { echo "::error::Production D1 ID confirmation mismatch"; exit 1; }
+          fi
+          echo "topology=$topology" >> "$GITHUB_OUTPUT"
+          echo "config=$config" >> "$GITHUB_OUTPUT"
+          echo "manifest=$manifest" >> "$GITHUB_OUTPUT"
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+          echo "target_name=$target_name" >> "$GITHUB_OUTPUT"
+          echo "target_id=$target_id" >> "$GITHUB_OUTPUT"
+
+      - name: Restore and verify
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          MISUB_ADMIN_PASSWORD: ${{ secrets.MISUB_ADMIN_PASSWORD }}
+          EASYPROXY_BACKUP_PASSPHRASE: ${{ secrets.EASYPROXY_BACKUP_PASSPHRASE }}
+          MISUB_PUBLIC_URL: ${{ vars.EASYPROXY_MISUB_PUBLIC_URL }}
+          RESTORE_MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          args=(cloud restore --topology "${{ steps.context.outputs.topology }}" --manifest "${{ steps.context.outputs.manifest }}"
+            --wrangler-config "${{ steps.context.outputs.config }}" --wrangler-dir upstreams/misub
+            --input "${{ steps.context.outputs.archive }}" --target-database-name "${{ steps.context.outputs.target_name }}"
+            --target-database-id "${{ steps.context.outputs.target_id }}" --confirm-database-id "${{ steps.context.outputs.target_id }}")
+          if [[ "$RESTORE_MODE" == "drill" ]]; then
+            args+=(--drill)
+          else
+            args+=(--allow-production-restore --allow-direct-d1-fallback --base-url "$MISUB_PUBLIC_URL" --pre-restore-backup "${RUNNER_TEMP}/misub-before-restore-${GITHUB_RUN_ID}.age")
+          fi
+          "${RUNNER_TEMP}/easyproxyctl" "${args[@]}"
+
+      - name: Retain automatic production pre-restore backup
+        if: ${{ always() && inputs.mode == 'production' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: misub-before-restore-${{ github.run_id }}
+          path: ${{ runner.temp }}/misub-before-restore-${{ github.run_id }}.age
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Remove isolated drill database
+        if: ${{ always() && inputs.mode == 'drill' }}
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SOURCE_D1_DATABASE: ${{ inputs.d1_database }}
+        run: |
+          set -euo pipefail
+          name="${DRILL_TARGET_NAME:-}"
+          expected_id="${DRILL_TARGET_ID:-}"
+          [[ "$name" == "${SOURCE_D1_DATABASE}-restore-drill-${GITHUB_RUN_ID}" ]] || exit 0
+          list="$(cd upstreams/misub && npx wrangler d1 list --json)"
+          actual_id="$(printf '%s' "$list" | python scripts/extract-cloudflare-resource-id.py --name "$name")" || { echo "::error::Refusing ambiguous drill cleanup"; exit 1; }
+          [[ -n "$actual_id" && ( -z "$expected_id" || "$actual_id" == "$expected_id" ) ]] || { echo "::error::Refusing mismatched drill cleanup"; exit 1; }
+          (cd upstreams/misub && npx wrangler d1 delete "$name" --skip-confirmation)

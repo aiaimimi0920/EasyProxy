@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 import sys
 from urllib.parse import urljoin
@@ -32,10 +33,13 @@ def retry(label: str, attempts: int, delay_seconds: float, func):
 def main() -> int:
     parser = argparse.ArgumentParser(description="Verify MiSub Pages deployment by checking public and authenticated API routes.")
     parser.add_argument("--base-url", required=True)
-    parser.add_argument("--admin-password", required=True)
-    parser.add_argument("--manifest-token", required=True)
     parser.add_argument("--manifest-profile-id", default="default")
     args = parser.parse_args()
+
+    admin_password = os.environ.get("MISUB_ADMIN_PASSWORD", "")
+    manifest_token = os.environ.get("MISUB_MANIFEST_TOKEN", "")
+    ensure(admin_password != "", "MISUB_ADMIN_PASSWORD is required")
+    ensure(manifest_token != "", "MISUB_MANIFEST_TOKEN is required")
 
     base_url = args.base_url.rstrip("/") + "/"
     session = requests.Session()
@@ -57,7 +61,7 @@ def main() -> int:
     def login_request():
         response = session.post(
             login_url,
-            json={"password": args.admin_password},
+            json={"password": admin_password},
             timeout=30,
         )
         if response.status_code == 401:
@@ -88,27 +92,17 @@ def main() -> int:
         5,
         lambda: session.get(
             urljoin(base_url, f"api/manifest/{args.manifest_profile_id}"),
-            headers={"Authorization": f"Bearer {args.manifest_token}"},
+            headers={"Authorization": f"Bearer {manifest_token}"},
             timeout=30,
         ),
     )
-    if manifest.status_code not in (200, 404):
+    if manifest.status_code != 200:
         raise RuntimeError(f"Unexpected manifest response status: {manifest.status_code}")
-    if manifest.status_code == 200:
-        payload = manifest.json()
-        ensure(payload.get("success") is True, "MiSub manifest endpoint did not report success")
-        sources = payload.get("sources") or []
-        ensure(isinstance(sources, list), "MiSub manifest payload does not contain a sources array")
-        ensure(len(sources) > 0, "MiSub manifest payload did not return any sources")
-    else:
-        try:
-            payload = manifest.json()
-        except json.JSONDecodeError:
-            payload = {}
-        ensure(
-            str(payload.get("error", "")).strip() not in ("MANIFEST_TOKEN is not configured", "Unauthorized"),
-            "MiSub manifest verification failed due to auth/runtime configuration",
-        )
+    payload = manifest.json()
+    ensure(payload.get("success") is True, "MiSub manifest endpoint did not report success")
+    sources = payload.get("sources") or []
+    ensure(isinstance(sources, list), "MiSub manifest payload does not contain a sources array")
+    ensure(len(sources) > 0, "MiSub manifest payload did not return any sources")
 
     cron_url = urljoin(base_url, "api/cron/status")
     cron_status = retry("MiSub cron status", 10, 5, lambda: session.get(cron_url, timeout=30))

@@ -18,7 +18,7 @@ import (
 	"github.com/aiaimimi0920/EasyProxy/tools/easyproxyctl/internal/topology"
 )
 
-const version = "0.1.0"
+const version = "0.3.0"
 
 func Run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
@@ -33,8 +33,10 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		err = runTopology(args[1:], stdout, stderr)
 	case "manifest":
 		err = runManifest(args[1:], stdout, stderr)
-	case "cloud", "local":
-		err = fmt.Errorf("%s lifecycle commands are not implemented until their delivery phase", args[0])
+	case "cloud":
+		err = runCloud(args[1:], stdout, stderr)
+	case "local":
+		err = errors.New("local lifecycle commands are not implemented until their delivery phase")
 	case "help", "-h", "--help":
 		printUsage(stdout)
 		return 0

@@ -56,6 +56,7 @@ type Secrets struct {
 	MiSubCookieSecret  string `json:"misub_cookie_secret" yaml:"misub_cookie_secret"`
 	MiSubManifestToken string `json:"misub_manifest_token" yaml:"misub_manifest_token"`
 	MiSubCronSecret    string `json:"misub_cron_secret" yaml:"misub_cron_secret"`
+	MiSubBackupSecret  string `json:"misub_backup_passphrase" yaml:"misub_backup_passphrase"`
 	ECHToken           string `json:"ech_token" yaml:"ech_token"`
 	R2AccessKeyID      string `json:"r2_access_key_id" yaml:"r2_access_key_id"`
 	R2SecretAccessKey  string `json:"r2_secret_access_key" yaml:"r2_secret_access_key"`

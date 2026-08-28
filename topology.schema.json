@@ -101,6 +101,7 @@
         "misub_cookie_secret",
         "misub_manifest_token",
         "misub_cron_secret",
+        "misub_backup_passphrase",
         "ech_token",
         "r2_access_key_id",
         "r2_secret_access_key"
@@ -114,6 +115,7 @@
         "misub_cookie_secret": { "$ref": "#/$defs/envName" },
         "misub_manifest_token": { "$ref": "#/$defs/envName" },
         "misub_cron_secret": { "$ref": "#/$defs/envName" },
+        "misub_backup_passphrase": { "$ref": "#/$defs/envName" },
         "ech_token": { "$ref": "#/$defs/envName" },
         "r2_access_key_id": { "$ref": "#/$defs/envName" },
         "r2_secret_access_key": { "$ref": "#/$defs/envName" }

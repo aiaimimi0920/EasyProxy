@@ -120,6 +120,7 @@ func validateSecrets(value *Secrets) error {
 		{"misub_cookie_secret", value.MiSubCookieSecret},
 		{"misub_manifest_token", value.MiSubManifestToken},
 		{"misub_cron_secret", value.MiSubCronSecret},
+		{"misub_backup_passphrase", value.MiSubBackupSecret},
 		{"ech_token", value.ECHToken},
 		{"r2_access_key_id", value.R2AccessKeyID},
 		{"r2_secret_access_key", value.R2SecretAccessKey},

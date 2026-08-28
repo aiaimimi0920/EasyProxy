@@ -16,6 +16,7 @@ variables. Pull-request validation receives no production secrets.
 | `MISUB_COOKIE_SECRET` | Environment secret | Stable MiSub session signing. |
 | `MISUB_MANIFEST_TOKEN` | Environment secret | Machine manifest authentication. |
 | `MISUB_CRON_SECRET` | Environment secret | MiSub cron endpoint authentication. |
+| `EASYPROXY_BACKUP_PASSPHRASE` | Environment secret | Encrypt and decrypt MiSub recovery archives. |
 | `ECH_TOKEN` | Environment secret | ECH Worker and local connector authentication. |
 | `R2_ACCESS_KEY_ID` | Environment secret | R2 artifact/state access key ID. |
 | `R2_SECRET_ACCESS_KEY` | Environment secret | R2 artifact/state secret key. |
@@ -42,12 +43,11 @@ must not be committed.
 
 ### Cloudflare deployment
 
-The current Cloudflare workflow still contains adapters for its pre-control-
-plane variable names while the unified lifecycle workflow is being delivered.
-Do not add Global API Key credentials. New workflow work must resolve the names
-declared in `topology.yaml`, use a protected Environment, apply a per-deployment
-concurrency lock, and pass each required secret explicitly rather than using
-`secrets: inherit` from an untrusted caller.
+The Cloudflare deploy, backup, and restore workflows materialize a topology,
+resolve exact resource identities through `easyproxyctl`, and keep secret values
+in environment variables or standard input. MiSub update retains an encrypted
+backup before applying D1 migrations. Configure approval protection on the
+`easyproxy-misub-restore` Environment before permitting production restore.
 
 ### Aggregator
 

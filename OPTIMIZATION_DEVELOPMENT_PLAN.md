@@ -516,6 +516,7 @@ Fork 用户首版目标配置为：
 | MISUB_ADMIN_PASSWORD | GitHub Environment Secret | 是 | MiSub 管理认证 |
 | MISUB_MANIFEST_TOKEN | GitHub Environment Secret | 是 | machine manifest 认证 |
 | MISUB_CRON_SECRET | GitHub Environment Secret | 是 | 外部 Cron 认证 |
+| EASYPROXY_BACKUP_PASSPHRASE | GitHub Environment Secret | 是 | MiSub 加密备份与恢复 |
 | ECH_TOKEN | GitHub Environment Secret | 是 | ECH Worker 认证 |
 | CLOUDFLARE_ZONE_ID | Repository Variable | 否 | 自定义域名 |
 | CLOUDFLARE_DNS_TOKEN | GitHub Environment Secret | 否 | 自定义 DNS 自动化 |

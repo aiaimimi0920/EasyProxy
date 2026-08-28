@@ -12,6 +12,7 @@ def main() -> int:
     parser.add_argument("--base-config", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--project-name", required=True)
+    parser.add_argument("--deployment-name", required=True)
     parser.add_argument("--public-url", required=True)
     parser.add_argument("--callback-url", required=True)
     parser.add_argument("--d1-binding", default="MISUB_DB")
@@ -27,6 +28,9 @@ def main() -> int:
     config.setdefault("vars", {})
     config["vars"]["MISUB_PUBLIC_URL"] = args.public_url
     config["vars"]["MISUB_CALLBACK_URL"] = args.callback_url
+    config["vars"]["EASYPROXY_DEPLOYMENT_NAME"] = args.deployment_name
+    config["vars"]["CF_PAGES_PROJECT_NAME"] = args.project_name
+    config["vars"]["EASYPROXY_MISUB_D1_DATABASE_ID"] = args.d1_database_id
     config["d1_databases"] = [
         {
             "binding": args.d1_binding,
