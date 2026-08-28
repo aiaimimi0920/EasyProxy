@@ -1,3 +1,6 @@
 [submodule "upstreams/ech-workers"]
 	path = upstreams/ech-workers
 	url = https://github.com/aiaimimi0920/ech-workers.git
+[submodule "upstreams/aggregator"]
+	path = upstreams/aggregator
+	url = https://github.com/aiaimimi0920/aggregator.git
