@@ -1,5 +1,16 @@
 # Quick Start
 
+## Checkout
+
+```powershell
+git clone --recurse-submodules https://github.com/aiaimimi0920/EasyProxy.git
+Set-Location EasyProxy
+git submodule status --recursive
+```
+
+If the root repository was already cloned without submodules, run
+`git submodule update --init --recursive` before any build or deploy command.
+
 ## Root Host Deploy
 
 ```powershell
@@ -41,13 +52,14 @@ go build -tags "with_utls with_quic with_grpc with_wireguard with_gvisor" -o eas
 
 ```powershell
 Set-Location upstreams/misub
-npm install
+npm ci
 npm run build
 ```
 
 ## Deployment Assets
 
-The initial monorepo migration keeps module-local deployment contracts intact.
+Module-local deployment contracts keep their stable paths even though the three
+fork-derived source directories are now submodules.
 
 Read:
 

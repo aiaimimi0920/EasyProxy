@@ -7,14 +7,33 @@ contributor-facing repository while preserving explicit boundaries between the
 main runtime, the shared manifest registry, upstream-tracked modules, and
 deployment assets.
 
-This repository intentionally avoids root-level submodules. External
-contributors only need one repository and one pull request target.
+The three fork-derived modules are pinned as public Git submodules. First-party
+runtime, integration, deployment, and Cloudflare Worker code remains in this
+repository. Ordinary users only fork the root repository; they do not need to
+fork the submodule repositories.
 
 ## Development Workflow
 
 See `docs/development-workflow.md` for the shared cross-repository development
 rules used for local-first iteration, temporary test assets, and final
 GHCR-based validation.
+
+## Clone
+
+Clone recursively because Aggregator also contains a nested public submodule:
+
+```powershell
+git clone --recurse-submodules https://github.com/aiaimimi0920/EasyProxy.git
+Set-Location EasyProxy
+git submodule status --recursive
+```
+
+For an existing checkout:
+
+```powershell
+git submodule sync --recursive
+git submodule update --init --recursive
+```
 
 ## What Ships
 
@@ -153,8 +172,8 @@ Responsibilities:
 
 ### `upstreams/misub`
 
-The upstream-tracked shared source registry and manifest center that powers
-`service/base`.
+Public submodule pinned from the maintained `aiaimimi0920/MiSub` fork. It is the
+shared source registry and manifest center that powers `service/base`.
 
 Responsibilities:
 
@@ -165,7 +184,9 @@ Responsibilities:
 
 ### `upstreams/aggregator`
 
-The upstream-tracked fallback artifact producer.
+Public submodule pinned from the maintained `aiaimimi0920/aggregator` fork. It
+is the fallback artifact producer and contains the nested public `manager`
+submodule.
 
 Responsibilities:
 
@@ -175,7 +196,8 @@ Responsibilities:
 
 ### `upstreams/ech-workers`
 
-The upstream-tracked local ECH connector helper.
+Public submodule pinned from the maintained `aiaimimi0920/ech-workers` fork. It
+is the local ECH connector helper.
 
 Responsibilities:
 
@@ -241,7 +263,7 @@ go build -tags "with_utls with_quic with_grpc with_wireguard with_gvisor" -o eas
 
 ```powershell
 Set-Location upstreams/misub
-npm install
+npm ci
 npm run build
 ```
 

@@ -6,9 +6,22 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-$output = & docker run --rm $Image -h 2>&1
-if ($LASTEXITCODE -ne 0) {
-    throw "ech-workers help smoke failed with exit code $LASTEXITCODE"
+$output = @()
+$exitCode = -1
+$previousErrorActionPreference = $ErrorActionPreference
+try {
+    # Windows PowerShell surfaces native stderr as ErrorRecord objects even
+    # when the process exits successfully. Go's flag package writes help there.
+    $ErrorActionPreference = "Continue"
+    $output = & docker run --rm $Image -h 2>&1
+    $exitCode = $LASTEXITCODE
+}
+finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+}
+
+if ($exitCode -ne 0) {
+    throw "ech-workers help smoke failed with exit code $exitCode"
 }
 
 $text = [string]::Join([Environment]::NewLine, @($output))

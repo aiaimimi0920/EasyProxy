@@ -544,6 +544,29 @@ class ScriptSmokeTests(unittest.TestCase):
             self.assertIn("deployment_mode=bootstrap", args)
             self.assertIn("run_verification=true", args)
 
+    def test_deploy_misub_uses_locked_dependency_install(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            capture_path = Path(temp_dir) / "external.jsonl"
+            result = self.run_powershell(
+                [
+                    "-File",
+                    str(REPO_ROOT / "scripts" / "deploy-misub.ps1"),
+                    "-ConfigPath",
+                    str(REPO_ROOT / "config.example.yaml"),
+                    "-Mode",
+                    "pages",
+                ],
+                env={"EASYPROXY_TEST_CAPTURE_EXTERNAL_COMMANDS_PATH": str(capture_path)},
+            )
+
+            self.assertEqual(result.returncode, 0, msg=result.stderr or result.stdout)
+            records = read_json_lines(capture_path)
+            self.assertEqual(len(records), 3)
+            self.assertEqual(records[0]["FilePath"], "npm")
+            self.assertEqual(records[0]["Arguments"], ["ci"])
+            self.assertEqual(records[1]["Arguments"], ["run", "build"])
+            self.assertEqual(records[2]["FilePath"], "npx")
+
 
 if __name__ == "__main__":
     unittest.main()

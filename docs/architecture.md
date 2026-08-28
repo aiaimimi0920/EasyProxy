@@ -31,8 +31,8 @@ Responsibilities:
 - Cloudflare-first production deployment path
 - compatibility runtime for Docker / VPS
 
-`upstreams/misub` remains fork-derived code kept inside the monorepo because it
-defines a first-class contract for `service/base`.
+`upstreams/misub` is a public submodule pinned from the maintained EasyProxy
+fork because it defines a first-class contract for `service/base`.
 
 ### `upstreams/aggregator`
 
@@ -63,16 +63,18 @@ Responsibilities:
 - custom-domain and `workers.dev` deployment target
 - Worker-side deployment code owned directly in this repository
 
-## Why There Are No Root Submodules
+## Fork And Submodule Boundary
 
-Submodules make external contribution flow harder:
+`upstreams/misub`, `upstreams/aggregator`, and `upstreams/ech-workers` are
+public submodules pinned to commits in forks controlled by the EasyProxy
+maintainer. `workers/ech-workers-cloudflare` and `service/base` remain
+first-party root code.
 
-- contributors must discover multiple repositories
-- pull request destination becomes ambiguous
-- cross-module changes become difficult to review
-
-This monorepo keeps all public contribution in one place while preserving clear
-internal boundaries between modules.
+The root repository owns cross-module contracts, deployment automation, and
+release validation. Upstream code changes land in the corresponding fork
+first, then a root pull request updates only the verified submodule pointer.
+Aggregator has a nested public `manager` submodule, so every checkout must use
+recursive submodules.
 
 ## Deployment Assets
 

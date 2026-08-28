@@ -1,6 +1,6 @@
 # EasyProxy 全面优化开发计划
 
-> 状态：已批准进入规划阶段，尚未开始结构迁移和代码重构。
+> 状态：执行中；Phase 0 和 Phase 1 已完成，Phase 2 待开始。
 >
 > 优化前基线标签：优化前的稳定版本
 >
@@ -162,27 +162,20 @@ Git 标签只能恢复源代码和当时跟踪的文件，不能自动恢复：
 
 ## 5. 当前状态与主要问题
 
-### 5.1 上游代码目前仍是复制目录
+### 5.1 上游 Fork 与子模块迁移已完成
 
-当前根仓库没有 .gitmodules。以下目录是普通跟踪目录，而不是独立 Git 仓库：
+三个上游路径已经从历史复制目录转换为公开子模块，根仓库只固定经过
+验证的 Fork commit：
 
-- upstreams/aggregator
-- upstreams/misub
-- upstreams/ech-workers
-- workers/ech-workers-cloudflare
-
-历史文档明确记录它们最初通过排除 .git 的复制方式导入。
-
-已确认的上游来源：
-
-| 当前目录 | 上游来源 | 目标所有权 |
+| 当前目录 | 正式上游审计基线 | 根仓库固定的 Fork commit |
 | --- | --- | --- |
-| upstreams/aggregator | wzdnzd/aggregator | 我们的 Fork + 子模块 |
-| upstreams/misub | imzyb/MiSub | 我们的 Fork + 子模块 |
-| upstreams/ech-workers | hhsw2015/ech-workers | 我们的 Fork + 子模块 |
-| workers/ech-workers-cloudflare | 当前文档定义为自研 | 保留根仓库 |
+| upstreams/aggregator | wzdnzd/aggregator@27daeb847cfdcf8f7675d701b419cc420739db74 | aiaimimi0920/aggregator@a38278046b9401fed5bf6205ed41d3ec588cfac4 |
+| upstreams/misub | imzyb/MiSub@8f18021 | aiaimimi0920/MiSub@90c2a9ba752ba662290e6838a903603f0d304065 |
+| upstreams/ech-workers | hhsw2015/ech-workers@46c6c71 | aiaimimi0920/ech-workers@1244581385d50ca600524e89af0b3fdde67918e6 |
 
-在正式迁移前，仍需对三个上游目录执行 commit 级来源核对，确认当前本地改动全部可以落入我们的 Fork。
+`workers/ech-workers-cloudflare` 仍为根仓库第一方代码。Aggregator 的嵌套
+`manager` 也通过公开 URL 固定。历史 copy-sync 脚本已经删除，后续同步
+使用 Fork PR + 根子模块指针 PR 两阶段流程。
 
 ### 5.2 部署入口已存在但重复度高
 
@@ -203,6 +196,7 @@ Git 标签只能恢复源代码和当时跟踪的文件，不能自动恢复：
 - GHCR 多架构镜像；
 - R2 配置分发；
 - 部署后验证。
+- 所有 Actions checkout 均使用递归子模块检出。
 
 主要问题：
 
@@ -213,7 +207,6 @@ Git 标签只能恢复源代码和当时跟踪的文件，不能自动恢复：
 - deploy-subproject.ps1 同时调度过多产品和发布行为；
 - 根脚本与 deploy/service/base 下的运行时部署参数重复；
 - GitHub Release 只发布说明，没有正式的 Windows/Linux 原生安装包；
-- Actions 尚未统一使用递归子模块检出。
 
 ### 5.3 MiSub 数据安全基础不足
 
@@ -1047,15 +1040,17 @@ monitor 不再反向拥有构建、存储和全部运行时策略。
 
 ### Phase 1：上游 Fork 和子模块
 
-- P1-01 确认三个上游精确 commit 基线；
-- P1-02 创建或确认我们控制的 Fork；
-- P1-03 将当前本地增量迁入 Fork；
-- P1-04 为每个 Fork 创建 UPSTREAM.md；
-- P1-05 在根仓库逐个转换为子模块；
-- P1-06 所有 checkout 改为 recursive；
-- P1-07 修复嵌套子模块、Docker build context 和缓存路径；
-- P1-08 建立 upstream-sync PR 流程；
-- P1-09 删除旧 copy-sync 文档和脚本。
+状态：已完成（2026-08-29）。
+
+- [x] P1-01 确认三个上游精确 commit 基线；
+- [x] P1-02 创建或确认我们控制的 Fork；
+- [x] P1-03 将当前本地增量迁入 Fork；
+- [x] P1-04 为每个 Fork 创建 UPSTREAM.md；
+- [x] P1-05 在根仓库逐个转换为子模块；
+- [x] P1-06 所有 checkout 改为 recursive；
+- [x] P1-07 修复嵌套子模块、Docker build context 和缓存路径；
+- [x] P1-08 建立 upstream-sync PR 流程；
+- [x] P1-09 删除旧 copy-sync 文档和脚本。
 
 退出条件：
 
@@ -1066,6 +1061,12 @@ monitor 不再反向拥有构建、存储和全部运行时策略。
 - Fork 用户无需拥有子模块 Fork 即可部署；
 - 根子模块和 Aggregator 嵌套子模块 URL 均为公开可读；
 - 使用无额外 Git 凭据的全新 Fork 完成 recursive clone。
+
+完成证据：根提交 7479a29 固定三个 Fork；公开 fresh clone 在
+7479a29 上递归检出四个 gitlink（含 Aggregator manager），根 47 项测试、
+Aggregator 12 项测试、MiSub 118 项测试与构建、ECH Go 全包测试均通过。
+同一 fresh clone 的 service/base 与 ECH Docker 镜像构建通过；隔离
+service 管理 API smoke 与 ECH help smoke 均通过且未替换现有运行容器。
 
 ### Phase 2：拓扑配置和生命周期核心
 

@@ -23,8 +23,18 @@
 
 ## Migration Ordering
 
-1. bootstrap target repo
-2. import source modules
-3. import deploy assets
-4. add repeatable sync tooling
-5. verify structure and exclusions
+Historical import ordering was bootstrap, source import, deployment import, and
+structure verification. Current upstream update ordering is:
+
+1. sync and validate the maintained upstream fork
+2. open and merge the fork pull request
+3. update one root submodule pointer
+4. run recursive cross-module validation
+5. merge and publish from the root repository
+
+## Checkout Dependency
+
+All three `upstreams/*` source paths require submodule initialization.
+Aggregator also requires its nested `manager` submodule. CI and local operators
+must use `git submodule update --init --recursive`; GitHub Actions checkout steps
+must set `submodules: recursive`.

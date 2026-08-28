@@ -1,14 +1,14 @@
 # Module Inventory
 
-## Copy Targets
+## Source Ownership
 
-| Role | Source Snapshot | Target | Notes |
+| Role | Origin | Target | Current ownership |
 | --- | --- | --- | --- |
-| Main runtime | legacy `repos/EasyProxy` | `service/base` | canonical EasyProxy runtime |
-| Shared manifest center | legacy `repos/MiSub` | `upstreams/misub` | upstream-tracked source registry and manifest center |
-| Upstream fallback producer | legacy `repos/aggregator` | `upstreams/aggregator` | upstream-tracked boundary |
-| Upstream local ECH helper | legacy `repos/ech-workers` | `upstreams/ech-workers` | upstream-tracked boundary |
-| Self-owned Worker | legacy `repos/ech-workers-cloudflare` | `workers/ech-workers-cloudflare` | Cloudflare-side runtime |
+| Main runtime | first-party | `service/base` | tracked in the root repository |
+| Shared manifest center | `imzyb/MiSub` | `upstreams/misub` | public submodule pinned to `aiaimimi0920/MiSub` |
+| Upstream fallback producer | `wzdnzd/aggregator` | `upstreams/aggregator` | public submodule pinned to `aiaimimi0920/aggregator` |
+| Upstream local ECH helper | `hhsw2015/ech-workers` | `upstreams/ech-workers` | public submodule pinned to `aiaimimi0920/ech-workers` |
+| Self-owned Worker | first-party | `workers/ech-workers-cloudflare` | tracked in the root repository |
 
 ## Deployment Targets
 
@@ -27,6 +27,7 @@ The following are not part of the tracked monorepo migration:
 - the shared `AIRead/密钥/*` archive outside this repository
 - the shared `AIRead/部署/*` archive outside this repository
 - local runtime config and state
-- local `.git` metadata from the source repositories
+- private Git remotes, credentials, and maintainer worktrees
 
-These remain external operator assets.
+These remain external operator assets. Public submodule metadata and pinned
+commits are intentionally tracked by the root repository.

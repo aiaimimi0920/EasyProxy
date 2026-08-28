@@ -27,7 +27,7 @@ if ($Mode -eq "pages") {
 
     if (-not $NoInstall) {
         Write-Host "Installing MiSub dependencies..." -ForegroundColor Cyan
-        Invoke-EasyProxyExternalCommand -FilePath "npm" -Arguments @("install") -WorkingDirectory $misubRoot -FailureMessage "MiSub npm install failed"
+        Invoke-EasyProxyExternalCommand -FilePath "npm" -Arguments @("ci") -WorkingDirectory $misubRoot -FailureMessage "MiSub npm ci failed"
     }
 
     if (-not $NoBuild) {

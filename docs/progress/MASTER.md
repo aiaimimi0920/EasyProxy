@@ -2,8 +2,8 @@
 
 ## Scope
 
-Copy-only migration from the legacy source workspace into the new `EasyProxy`
-monorepo.
+Historical copy-only migration from the legacy workspace, followed by current
+fork-and-submodule ownership for the three upstream-derived modules.
 
 ## Status
 
@@ -18,6 +18,7 @@ monorepo.
 | Root operator scripts | completed | root-level deploy/build entrypoints added for EasyProxy, aggregator, MiSub, Cloudflare worker, EasyProxy image, and ech-workers image |
 | Unified root config | completed | root config example, renderers, and script integration validated end-to-end for generated service config, MiSub .env, and worker .dev.vars |
 | Follow-up cleanup | completed | root CI is release-grade and tracked automation no longer probes legacy private-archive paths |
+| Fork/submodule ownership | completed | MiSub, Aggregator, and ech-workers are pinned public submodules; recursive fresh-clone validation passed |
 
 ## Phase Files
 

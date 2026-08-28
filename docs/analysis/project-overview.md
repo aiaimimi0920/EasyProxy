@@ -37,7 +37,8 @@ The migration must be copy-only:
 `EasyEmail` provides the reference shape:
 
 - one public monorepo
-- no root submodules
+- clear ownership boundaries (EasyProxy now uses public fork submodules for its
+  three upstream-derived source modules)
 - clear top-level areas such as `service/`, `upstreams/`, `deploy/`, and
   `docs/`
 - explicit upstream sync guidance instead of hidden workspace conventions

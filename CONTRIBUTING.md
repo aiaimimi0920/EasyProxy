@@ -1,20 +1,23 @@
 # Contributing
 
-All external contributions go to this repository.
+The root repository owns product integration, deployment, documentation, and
+release validation. The three upstream-derived modules are public submodules.
+Changes to their source land in the corresponding maintained fork first; a
+second root pull request updates the verified pointer.
 
-Do not look for separate repositories for `EasyProxy`, `MiSub`, `aggregator`,
-or `ech-workers`. The public contribution path is always this monorepo.
+Clone with `--recurse-submodules`, or run
+`git submodule update --init --recursive` in an existing checkout.
 
 ## Where To Change Code
 
 - `service/base`
   - main EasyProxy runtime
 - `upstreams/misub`
-  - upstream-tracked shared source registry and manifest center
+  - submodule from `aiaimimi0920/MiSub`
 - `upstreams/aggregator`
-  - upstream-tracked fallback artifact producer
+  - submodule from `aiaimimi0920/aggregator`
 - `upstreams/ech-workers`
-  - upstream-tracked local ECH helper runtime
+  - submodule from `aiaimimi0920/ech-workers`
 - `workers/ech-workers-cloudflare`
   - self-owned Cloudflare-side ECH Worker
 - `deploy`
@@ -28,14 +31,12 @@ or `ech-workers`. The public contribution path is always this monorepo.
 2. Update documentation when behavior, layout, or deployment flow changes.
 3. Never commit secrets, runtime state, generated local config, or private
    deployment files.
-4. If you change `upstreams/aggregator` or `upstreams/ech-workers`, explain
-   whether the change is:
-   - an upstream sync import
-   - a local patch carried on top of upstream
-   - a documentation-only adjustment
-5. If you change `upstreams/misub`, call out whether the change is an
-   upstream-derived sync/import or a local patch carried on top of the
-   maintained fork.
+4. Never commit source changes from a detached submodule checkout directly in
+   the root pull request.
+5. For a submodule update, link the fork pull request, official upstream commit
+   or comparison, fork validation, root validation, and rollback commit.
+6. Update only one upstream pointer per pull request unless a tested
+   cross-module contract requires an atomic root change.
 
 ## Validation
 
@@ -60,6 +61,8 @@ For `upstreams/misub`:
 
 ```powershell
 Set-Location upstreams/misub
+npm ci
+npm run test:run
 npm run build
 ```
 
@@ -67,6 +70,10 @@ For `upstreams/aggregator` and `upstreams/ech-workers`:
 
 - follow the upstream-native validation flow documented in their own READMEs
 - keep local patches narrow and easy to identify
+- run `go test ./...` for `upstreams/ech-workers`
+
+For the complete fork-to-root procedure, use `docs/upstream-sync.md` and the
+upstream-sync pull request template.
 
 For deployment changes:
 
