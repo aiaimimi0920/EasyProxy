@@ -52,6 +52,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -114,6 +116,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -316,6 +320,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -402,6 +408,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -487,6 +495,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Set up Python
         uses: actions/setup-python@v6
