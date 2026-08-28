@@ -146,6 +146,18 @@ pwsh .\deploy-host.ps1 `
   -ComposeProjectName easy-proxy-candidate
 ```
 
+Published tags also contain native archives for Linux amd64/arm64 and Windows
+amd64, matching `easyproxyctl` packages, `SHA256SUMS`, and
+`release-manifest.json`. Installation and rollback commands are documented in
+[`docs/native-install-update.md`](docs/native-install-update.md). Windows arm64
+is explicitly unsupported; Windows native mode does not provide transparent
+gateway ingress.
+
+For a Linux NAS with Docker Compose, use the pinned-image deployment and
+preflight checks in [`deploy/nas`](deploy/nas/README.md). The NAS path preserves
+`runtime/config.yaml` and `runtime/data` as host bind mounts and rejects
+`latest`.
+
 ## Cloud And Publish Entry Points
 
 The PowerShell dispatcher supports:
@@ -177,7 +189,8 @@ Examples:
 ```
 
 GitHub Actions currently exposes validation, Aggregator deployment, Cloudflare
-deployment, GHCR publication, and GitHub Release publication. The PR validation
+deployment, multi-architecture GHCR publication, and native GitHub Release
+publication. The PR validation
 entry delegates to `.github/workflows/reusable-validate.yml`; it is read-only
 and receives no production secrets.
 

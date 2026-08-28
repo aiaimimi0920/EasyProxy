@@ -1,12 +1,12 @@
 #!/bin/sh
 set -eu
 
-EASY_PROXY_STATE_DIR="${EASY_PROXY_STATE_DIR:-/var/lib/easy-proxy}"
+EASY_PROXY_STATE_DIR="${EASY_PROXY_STATE_DIR:-/var/lib/easyproxy}"
 EASY_PROXY_RUNTIME_DIR="${EASY_PROXY_RUNTIME_DIR:-${EASY_PROXY_STATE_DIR}/runtime}"
 EASY_PROXY_DATA_DIR="${EASY_PROXY_DATA_DIR:-${EASY_PROXY_STATE_DIR}/data}"
 EASY_PROXY_CONNECTORS_DIR="${EASY_PROXY_CONNECTORS_DIR:-${EASY_PROXY_STATE_DIR}/connectors}"
-EASY_PROXY_CONFIG_PATH="${EASY_PROXY_CONFIG_PATH:-/etc/easy-proxy/config.yaml}"
-EASY_PROXY_BOOTSTRAP_PATH="${EASY_PROXY_BOOTSTRAP_PATH:-/etc/easy-proxy/bootstrap/r2-bootstrap.json}"
+EASY_PROXY_CONFIG_PATH="${EASY_PROXY_CONFIG_PATH:-/etc/easyproxy/config.yaml}"
+EASY_PROXY_BOOTSTRAP_PATH="${EASY_PROXY_BOOTSTRAP_PATH:-/etc/easyproxy/bootstrap/r2-bootstrap.json}"
 EASY_PROXY_IMPORT_CODE="${EASY_PROXY_IMPORT_CODE:-}"
 EASY_PROXY_IMPORT_STATE_PATH="${EASY_PROXY_IMPORT_STATE_PATH:-${EASY_PROXY_STATE_DIR}/import-sync-state.json}"
 EASY_PROXY_IMPORT_SYNC_FLAG_PATH="${EASY_PROXY_IMPORT_SYNC_FLAG_PATH:-${EASY_PROXY_STATE_DIR}/import-sync.restart}"
@@ -24,7 +24,6 @@ EASY_PROXY_DNS_PROXY_UPSTREAM_2="${EASY_PROXY_DNS_PROXY_UPSTREAM_2:-https://dns.
 EASY_PROXY_DNS_PROXY_UPSTREAM_2_HOST="${EASY_PROXY_DNS_PROXY_UPSTREAM_2_HOST:-dns.quad9.net}"
 EASY_PROXY_DNS_PROXY_UPSTREAM_2_BOOTSTRAP_IP="${EASY_PROXY_DNS_PROXY_UPSTREAM_2_BOOTSTRAP_IP:-9.9.9.9}"
 EASY_PROXY_DNS_PROXY_STARTUP_SECONDS="${EASY_PROXY_DNS_PROXY_STARTUP_SECONDS:-2}"
-EASY_PROXY_RESET_STORE_ON_BOOT="${EASY_PROXY_RESET_STORE_ON_BOOT:-false}"
 
 dns_proxy_pid=""
 app_pid=""
@@ -72,12 +71,6 @@ bootstrap_runtime_config_if_needed() {
             --bootstrap-path "${EASY_PROXY_BOOTSTRAP_PATH}" \
             --config-path "${EASY_PROXY_CONFIG_PATH}" \
             --state-path "${EASY_PROXY_IMPORT_STATE_PATH}"
-    fi
-}
-
-reset_store_if_requested() {
-    if is_truthy "${EASY_PROXY_RESET_STORE_ON_BOOT}"; then
-        rm -f "${EASY_PROXY_DATA_DIR}/data.db" "${EASY_PROXY_DATA_DIR}/data.db-shm" "${EASY_PROXY_DATA_DIR}/data.db-wal"
     fi
 }
 
@@ -231,7 +224,6 @@ start_sync_loop() {
 }
 
 ensure_layout
-reset_store_if_requested
 generate_bootstrap_from_import_code
 bootstrap_runtime_config_if_needed
 ensure_config_exists

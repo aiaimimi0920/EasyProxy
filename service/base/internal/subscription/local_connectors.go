@@ -504,7 +504,7 @@ func resolvePreferredIPBinary(configuredPath string) (string, error) {
 func resolvePreferredIPFilePath(configPath string, configuredPath string) (string, error) {
 	path := strings.TrimSpace(configuredPath)
 	if path == "" {
-		path = "/usr/local/share/cfst/ip.txt"
+		path = "/usr/share/easyproxy/cfst/ip.txt"
 	}
 	if !filepath.IsAbs(path) && strings.TrimSpace(configPath) != "" {
 		path = filepath.Join(filepath.Dir(configPath), path)

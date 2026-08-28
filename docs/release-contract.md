@@ -14,7 +14,11 @@ the public contract remains stable.
 - Manual publish workflows accept a standard `release_tag` override. Legacy `version` inputs remain supported where they already existed.
 - Publish metadata writes both `release_tag` and `version` outputs when the workflow has a release metadata step.
 - Runtime configuration is persistent local state and is not bundled into an
-  image-publication workflow or artifact.
+  image-publication workflow. Native releases include only an example config;
+  installers preserve the operator's active config by default.
+- GitHub Releases publish EasyProxy and `easyproxyctl` for Linux amd64, Linux
+  arm64, and Windows amd64, plus `SHA256SUMS`, `release-manifest.json`, and a
+  GitHub build-provenance attestation. Windows arm64 is explicitly unsupported.
 - Local deployment starts from `deploy-host.ps1` and supports an empty host
   directory through recursive repository bootstrap plus GHCR images. Import
   codes remain an explicit advanced runtime-snapshot path, not a release
@@ -26,10 +30,11 @@ the public contract remains stable.
 | Component | Workflow | Tag inputs | Required artifacts | Required capabilities |
 | --- | --- | --- | --- | --- |
 | `service-and-workers` | `.github/workflows/publish-ghcr-images.yml` | `release_tag` | none | GHCR |
+| `native-release` | `.github/workflows/publish-github-release.yml` | `release_tag` | six native archives, `SHA256SUMS`, `release-manifest.json` | GitHub Release, provenance attestation |
 
 ## Project-specific exceptions
 
-- Multi-image publishing, GitHub Release, Cloudflare deploy, and aggregator deploy stay project-specific.
+- Multi-image publishing, Cloudflare deploy, and aggregator deploy stay project-specific.
 - Runtime configuration is persistent local state and is not bundled into GHCR publication.
 
 ## Verification

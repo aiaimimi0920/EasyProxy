@@ -17,6 +17,42 @@
       "requiresR2": false,
       "path": ".github/workflows/publish-ghcr-images.yml",
       "requiresGhcr": true
+    },
+    {
+      "component": "native-release",
+      "requiresImportCode": false,
+      "releaseTagOutputs": [
+        "release_tag",
+        "version"
+      ],
+      "artifacts": [
+        "github-release-native-assets"
+      ],
+      "releaseTagInputs": [
+        "release_tag"
+      ],
+      "requiresR2": false,
+      "path": ".github/workflows/publish-github-release.yml",
+      "requiresGhcr": false,
+      "nativeTargets": [
+        "linux-amd64",
+        "linux-arm64",
+        "windows-amd64"
+      ],
+      "unsupportedTargets": [
+        "windows-arm64"
+      ],
+      "releaseFiles": [
+        "easyproxy-linux-amd64.tar.gz",
+        "easyproxy-linux-arm64.tar.gz",
+        "easyproxy-windows-amd64.zip",
+        "easyproxyctl-linux-amd64.tar.gz",
+        "easyproxyctl-linux-arm64.tar.gz",
+        "easyproxyctl-windows-amd64.zip",
+        "SHA256SUMS",
+        "release-manifest.json"
+      ],
+      "requiresAttestation": true
     }
   ],
   "localDeploy": {
@@ -25,7 +61,7 @@
     "forbidDevSourceBindMounts": true
   },
   "exceptions": [
-    "Multi-image publishing, GitHub Release, Cloudflare deploy, and aggregator deploy stay project-specific.",
+    "Multi-image publishing, Cloudflare deploy, and aggregator deploy stay project-specific.",
     "Runtime configuration is persistent local state and is not bundled into GHCR publication."
   ]
 }

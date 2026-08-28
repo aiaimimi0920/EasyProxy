@@ -47,14 +47,15 @@ def test_compose_uses_host_network_and_only_gateway_capabilities():
     assert "ports:" not in text
     assert "context:" not in text
     assert "/opt/easyproxy-gateway/config/config.yaml" in text
-    assert "/opt/easyproxy-gateway/data:/etc/easy-proxy/data" in text
+    assert "EASY_PROXY_IMAGE:?Set EASY_PROXY_IMAGE" in text
+    assert "/opt/easyproxy-gateway/data:/var/lib/easyproxy" in text
 
 
 def test_service_entrypoint_does_not_chown_read_only_config_mount():
     text = (ROOT / "deploy" / "service" / "base" / "docker-entrypoint.sh").read_text(encoding="utf-8")
 
     assert 'chown -R easy:easy "${EASY_PROXY_STATE_DIR}"' in text
-    assert 'chown -R easy:easy "${EASY_PROXY_STATE_DIR}" /etc/easy-proxy' not in text
+    assert 'chown -R easy:easy "${EASY_PROXY_STATE_DIR}" /etc/easyproxy' not in text
 
 
 def test_service_entrypoint_honors_gateway_root_opt_in():

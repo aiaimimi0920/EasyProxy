@@ -57,6 +57,21 @@ def validate_workflow(workflow: dict[str, Any]) -> None:
     for artifact_name in workflow.get("artifacts", []):
         require_regex(path, rf"^\s+name:\s*{re.escape(artifact_name)}\s*$", f"artifact {artifact_name}")
 
+    for target in workflow.get("nativeTargets", []):
+        require_regex(path, rf"^\s+- target:\s*{re.escape(target)}\s*$", f"native target {target}")
+    for target in workflow.get("unsupportedTargets", []):
+        require_regex(ROOT / "scripts" / "build-native-release-manifest.py", rf'"{re.escape(target)}"', f"unsupported target {target}")
+    for release_file in workflow.get("releaseFiles", []):
+        require_regex(ROOT / "scripts" / "build-native-release-manifest.py", rf'"{re.escape(release_file)}"', f"release file {release_file}")
+    if workflow.get("requiresAttestation"):
+        require_text(path, "actions/attest-build-provenance")
+        require_text(path, "gh release upload")
+        require_text(path, "id-token: write")
+        require_text(path, "attestations: write")
+    if workflow.get("nativeTargets"):
+        require_text(path, "scripts/build-native-release-manifest.py")
+        require_text(path, 'gh release upload "${tag}" dist/* --clobber')
+
     if workflow.get("requiresGhcr"):
         if "docker/build-push-action" not in text and "docker build" not in text and "ghcr.io" not in text:
             raise AssertionError(f"{relative} must contain a GHCR/docker image publication path")

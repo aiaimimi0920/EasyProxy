@@ -25,14 +25,14 @@ CURL_IMAGE = os.environ.get("EASYPROXY_AUDIT_CURL_IMAGE", "curlimages/curl:8.12.
 DEFAULT_CONNECTOR_RUNTIME = {
     "enabled": True,
     "binary_path": "/usr/local/bin/ech-workers",
-    "working_directory": "/var/lib/easy-proxy/connectors",
+    "working_directory": "/var/lib/easyproxy/connectors",
     "listen_host": "127.0.0.1",
     "listen_start_port": 30000,
     "startup_timeout": "30s",
     "preferred_ip": {
         "binary_path": "/usr/local/bin/cfst",
-        "ip_file_path": "/usr/local/share/cfst/ip.txt",
-        "working_directory": "/var/lib/easy-proxy/connectors/preferred-ip",
+        "ip_file_path": "/usr/share/easyproxy/cfst/ip.txt",
+        "working_directory": "/var/lib/easyproxy/connectors/preferred-ip",
         "timeout": "5m0s",
         "fanout_count": 5,
     },
@@ -222,7 +222,7 @@ def build_config(policy: dict[str, Any], *, manifest_url: str, manifest_token: s
         "mode": "hybrid",
         "log_level": "info",
         "skip_cert_verify": False,
-        "database_path": "/var/lib/easy-proxy/data/data.db",
+        "database_path": "/var/lib/easyproxy/data/data.db",
         "listener": {
             "address": "0.0.0.0",
             "port": 22323,
@@ -700,9 +700,9 @@ def main() -> int:
             "-p",
             f"{pool_port}:22323",
             "-v",
-            f"{config_path.resolve()}:/etc/easy-proxy/config.yaml",
+            f"{config_path.resolve()}:/etc/easyproxy/config.yaml",
             "-v",
-            f"{data_dir.resolve()}:/var/lib/easy-proxy",
+            f"{data_dir.resolve()}:/var/lib/easyproxy",
         ]
         if args.docker_network_name.strip():
             docker_args.extend(["--network", args.docker_network_name.strip()])

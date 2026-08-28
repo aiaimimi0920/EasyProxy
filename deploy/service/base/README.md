@@ -77,7 +77,7 @@ contract.
   - monorepo-level container build that packages `EasyProxy`, `ech-workers`,
     `CloudflareSpeedTest`, and `cloudflared`
 - `docker-entrypoint.sh`
-  - runtime entrypoint that prepares `/var/lib/easy-proxy`, reads
+  - runtime entrypoint that prepares `/var/lib/easyproxy`, reads
     `EASY_PROXY_CONFIG_PATH`, can bootstrap the runtime config from private R2,
     and can optionally start local `cloudflared proxy-dns`
 - `bootstrap-service-config.py`
@@ -271,12 +271,12 @@ The current container path contract is:
 
 - runtime config path:
   - resolved from `EASY_PROXY_CONFIG_PATH`
-  - defaults to `/etc/easy-proxy/config.yaml`
+  - defaults to `/etc/easyproxy/config.yaml`
   - GHCR stateful deployments may instead bind
-    `/var/lib/easy-proxy/config/config.yaml`
-- writable runtime home: `/var/lib/easy-proxy`
-- SQLite DB: `/var/lib/easy-proxy/data/data.db`
-- connector work dir: `/var/lib/easy-proxy/connectors`
+    `/var/lib/easyproxy/config/config.yaml`
+- writable runtime home: `/var/lib/easyproxy`
+- SQLite DB: `/var/lib/easyproxy/data/data.db`
+- connector work dir: `/var/lib/easyproxy/connectors`
 - bundled connector binary: `/usr/local/bin/ech-workers`
 - bundled preferred-IP generator: `/usr/local/bin/cfst`
 - bundled cloudflared DNS proxy helper: `/usr/local/bin/cloudflared`
@@ -396,6 +396,22 @@ powershell -ExecutionPolicy Bypass -File .\deploy\service\base\scripts\deploy-gh
   -Image ghcr.io/<owner>/easy-proxy-monorepo-service:<release-tag>
 ```
 
+An existing runtime config is preserved. Use `-ReplaceConfig` only for an
+intentional replacement; the previous config is retained. Before a container
+update the helper stops the service and snapshots config, `.env`, and the full
+SQLite/state directory under `backups/`. A failed deployment restores that
+snapshot automatically. Manual rollback is explicit:
+
+```powershell
+powershell -ExecutionPolicy Bypass `
+  -File .\deploy\service\base\scripts\rollback-ghcr-runtime.ps1 `
+  -RuntimeRoot .\deploy\service\base `
+  -BackupPath .\deploy\service\base\backups\runtime-...
+```
+
+Container paths are fixed at `/etc/easyproxy`, `/var/lib/easyproxy`, and
+`/usr/share/easyproxy`. Normal startup has no data-store reset switch.
+
 The root wrapper is the canonical operator path for live `service/base`
 rollout after GitHub Actions has finished publishing the tagged GHCR image and
 any private R2 config artifacts. GitHub Actions in this repository do not
@@ -434,7 +450,7 @@ Operational consequence:
 The runtime image now supports bootstrap-driven config loading:
 
 - bootstrap path:
-  - `/etc/easy-proxy/bootstrap/r2-bootstrap.json`
+  - `/etc/easyproxy/bootstrap/r2-bootstrap.json`
 - import-code env:
   - `EASY_PROXY_IMPORT_CODE`
 
@@ -596,7 +612,7 @@ Runtime packaging:
 - the Docker image now contains:
   - `/usr/local/bin/ech-workers`
   - `/usr/local/bin/cfst`
-  - `/usr/local/share/cfst/ip.txt`
+  - `/usr/share/easyproxy/cfst/ip.txt`
 
 Local generator runtime config lives under:
 

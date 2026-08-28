@@ -3,11 +3,11 @@ name: Publish GitHub Release
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
-on:
+'on':
   push:
     tags:
-      - "release-*"
-      - "v*"
+      - 'release-*'
+      - 'v*'
   workflow_dispatch:
     inputs:
       release_tag:
@@ -22,22 +22,18 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
-  publish-release:
+  metadata:
     runs-on: ubuntu-latest
-
+    outputs:
+      release_tag: ${{ steps.release_meta.outputs.release_tag }}
+      version: ${{ steps.release_meta.outputs.version }}
+      owner_lc: ${{ steps.release_meta.outputs.owner_lc }}
+      draft: ${{ steps.release_meta.outputs.draft }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-        with:
-          submodules: recursive
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-
       - name: Resolve release metadata
         id: release_meta
         shell: bash
@@ -51,15 +47,154 @@ jobs:
             tag="${{ inputs.release_tag }}"
             draft="${{ inputs.draft }}"
           fi
+          [[ "${tag}" =~ ^(release-|v) ]] || { echo "release tag must start with release- or v" >&2; exit 1; }
+          echo "release_tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${tag}" >> "$GITHUB_OUTPUT"
           echo "owner_lc=${owner_lc}" >> "$GITHUB_OUTPUT"
-          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
           echo "draft=${draft}" >> "$GITHUB_OUTPUT"
+
+  build-native:
+    name: Build ${{ matrix.target }}
+    needs: metadata
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-amd64
+            runner: ubuntu-latest
+            platform: linux
+            goos: linux
+            goarch: amd64
+          - target: linux-arm64
+            runner: ubuntu-latest
+            platform: linux
+            goos: linux
+            goarch: arm64
+          - target: windows-amd64
+            runner: windows-latest
+            platform: windows
+            goos: windows
+            goarch: amd64
+    runs-on: ${{ matrix.runner }}
+    env:
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+      CGO_ENABLED: '0'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.24.10'
+          cache: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Build native binaries
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $build = Join-Path $env:RUNNER_TEMP 'easyproxy-native-build'
+          New-Item -ItemType Directory -Force -Path $build | Out-Null
+          $extension = if ('${{ matrix.platform }}' -eq 'windows') { '.exe' } else { '' }
+          Push-Location service/base
+          go build -tags 'with_utls with_quic with_grpc with_wireguard with_gvisor' -o (Join-Path $build "easy-proxy$extension") ./cmd/easy_proxies
+          Pop-Location
+          Push-Location tools/easyproxyctl
+          go build -o (Join-Path $build "easyproxyctl$extension") ./cmd/easyproxyctl
+          Pop-Location
+          Push-Location upstreams/ech-workers
+          go build -o (Join-Path $build "ech-workers$extension") .
+          Pop-Location
+          "EASYPROXY_BUILD_ROOT=$build" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Smoke native binary on matching runner
+        if: matrix.target != 'linux-arm64'
+        shell: pwsh
+        run: |
+          $extension = if ('${{ matrix.platform }}' -eq 'windows') { '.exe' } else { '' }
+          & (Join-Path $env:EASYPROXY_BUILD_ROOT "easy-proxy$extension") --help
+          & (Join-Path $env:EASYPROXY_BUILD_ROOT "easyproxyctl$extension") version
+
+      - name: Package native archives
+        shell: pwsh
+        run: |
+          $extension = if ('${{ matrix.platform }}' -eq 'windows') { '.exe' } else { '' }
+          python scripts/package-native-release.py `
+            --platform '${{ matrix.platform }}' `
+            --arch '${{ matrix.goarch }}' `
+            --version '${{ needs.metadata.outputs.version }}' `
+            --easy-proxy (Join-Path $env:EASYPROXY_BUILD_ROOT "easy-proxy$extension") `
+            --easyproxyctl (Join-Path $env:EASYPROXY_BUILD_ROOT "easyproxyctl$extension") `
+            --ech-workers (Join-Path $env:EASYPROXY_BUILD_ROOT "ech-workers$extension") `
+            --output release-assets
+
+      - name: Upload native archives
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.target }}
+          path: release-assets/*
+          if-no-files-found: error
+
+  publish-release:
+    runs-on: ubuntu-latest
+    needs: [metadata, build-native]
+    concurrency:
+      group: github-release-${{ needs.metadata.outputs.release_tag }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Download native archives
+        uses: actions/download-artifact@v5
+        with:
+          pattern: native-*
+          path: dist
+          merge-multiple: true
+
+      - name: Assemble and verify release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -xOf dist/easyproxy-linux-amd64.tar.gz config.example.yaml > dist/config.example.yaml
+          cp deploy/native/linux/easyproxy.service dist/easyproxy.service
+          cp deploy/native/linux/install.sh dist/install.sh
+          cp deploy/native/windows/install-service.ps1 dist/install-service.ps1
+          cp docs/native-install-update.md dist/native-install-update.md
+          python scripts/build-native-release-manifest.py \
+            --directory dist \
+            --version '${{ needs.metadata.outputs.version }}' \
+            --commit "${GITHUB_SHA}"
+          python scripts/build-native-release-manifest.py \
+            --directory dist --verify \
+            --version '${{ needs.metadata.outputs.version }}' \
+            --commit "${GITHUB_SHA}"
+
+      - name: Attest native release assets
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: dist/*
 
       - name: Render release notes
         run: |
           python scripts/render-github-release.py \
-            --tag "${{ steps.release_meta.outputs.tag }}" \
-            --owner "${{ steps.release_meta.outputs.owner_lc }}" \
+            --tag '${{ needs.metadata.outputs.release_tag }}' \
+            --owner '${{ needs.metadata.outputs.owner_lc }}' \
             --output github-release-notes.md
 
       - name: Create or update release
@@ -68,30 +203,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tag="${{ steps.release_meta.outputs.tag }}"
-          draft="${{ steps.release_meta.outputs.draft }}"
-
+          tag='${{ needs.metadata.outputs.release_tag }}'
+          draft='${{ needs.metadata.outputs.draft }}'
           if gh release view "${tag}" >/dev/null 2>&1; then
-            args=(gh release edit "${tag}" --title "${tag}" --notes-file github-release-notes.md)
-            if [[ "${draft}" == "true" ]]; then
-              args+=(--draft)
-            fi
-            "${args[@]}"
+            gh release edit "${tag}" --title "${tag}" --notes-file github-release-notes.md --draft="${draft}"
           else
             args=(gh release create "${tag}" --target "${GITHUB_SHA}" --title "${tag}" --notes-file github-release-notes.md)
-            if [[ "${draft}" == "true" ]]; then
-              args+=(--draft)
-            fi
+            if [[ "${draft}" == 'true' ]]; then args+=(--draft); fi
             "${args[@]}"
           fi
+          gh release upload "${tag}" dist/* --clobber
 
-      - name: Upload release notes artifact
+      - name: Upload complete release asset set
         uses: actions/upload-artifact@v4
         with:
-          name: github-release-notes
-          path: github-release-notes.md
+          name: github-release-native-assets
+          path: |
+            dist/*
+            github-release-notes.md
+          if-no-files-found: error
 
       - name: Job summary
         shell: bash
-        run: |
-          cat github-release-notes.md >> "$GITHUB_STEP_SUMMARY"
+        run: cat github-release-notes.md >> "$GITHUB_STEP_SUMMARY"

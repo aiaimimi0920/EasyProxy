@@ -14,7 +14,8 @@ param(
     [string]$ManagementPortBinding = '',
     [string]$MultiPortBinding = '',
     [string]$NetworkAlias = '',
-    [string]$ComposeProjectName = ''
+    [string]$ComposeProjectName = '',
+    [switch]$ReplaceConfig
 )
 
 Set-StrictMode -Version Latest
@@ -117,6 +118,9 @@ if ($useGhcrDeploy) {
     if (-not [string]::IsNullOrWhiteSpace($ComposeProjectName)) { $ghcrArgs += @('-ComposeProjectName', $ComposeProjectName) }
     if ($SkipPull) {
         $ghcrArgs += '-SkipPull'
+    }
+    if ($ReplaceConfig) {
+        $ghcrArgs += '-ReplaceConfig'
     }
 
     Write-Host "Deploying EasyProxy from GHCR image: $Image" -ForegroundColor Cyan

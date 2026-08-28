@@ -37,6 +37,7 @@ npm run build
 Set-Location ../../..
 python -m unittest discover -s "tests" -p "test_*.py" -v
 python scripts/validate-release-contract.py
+python scripts/build-native-release-manifest.py --directory <assembled-release-dir> --verify
 git diff --check
 ```
 
@@ -71,9 +72,17 @@ CI workflows:
 3. Confirm the target tag format is correct:
    - `release-*`
    - `v*`
-4. Confirm required GitHub repository secrets are present for any Cloudflare deploy you plan to run. See [docs/github-secrets.md](/C:/Users/Public/nas_home/AI/GameEditor/EasyProxy/docs/github-secrets.md).
+4. Confirm required GitHub repository secrets are present for any Cloudflare deploy you plan to run. See [docs/github-secrets.md](github-secrets.md).
 5. Confirm deployment manifests contain no resolved secret values and pass checksum verification.
 6. If the Local Server Web Console changed, confirm `/`, hashed assets, `#devices`, canonical login, Profile CRUD/CAS, and desktop/mobile layouts in a real browser against the final image.
+7. Confirm the GitHub Release contains all six EasyProxy/`easyproxyctl` native
+   archives, `config.example.yaml`, both service installers, `SHA256SUMS`, and
+   `release-manifest.json`.
+8. Verify `SHA256SUMS`, the GitHub build-provenance attestation, and an actual
+   startup on Linux amd64, Linux arm64, and Windows amd64. Record Windows arm64
+   as unsupported rather than silently omitting it.
+9. Exercise update failure and rollback against disposable config and SQLite
+   sentinels; verify both byte-for-byte after restoration.
 
 ## Upstream-Carried Modules
 
@@ -96,6 +105,8 @@ If release behavior changed, update the corresponding docs:
 - `docs/service-base-config-distribution.md`
 - `docs/local-server.md`
 - `docs/release-notes-template.md`
+- `docs/native-install-update.md`
+- `deploy/nas/README.md`
 
 ## GitHub Actions Compatibility
 

@@ -54,7 +54,7 @@ $configPath = Join-Path $configDir "config.yaml"
 $composePath = Join-Path $artifactDir "docker-compose.yaml"
 $evidencePath = Join-Path $artifactDir "evidence.json"
 $authHeaderValue = "smoke-secret"
-$containerConfigPath = "/var/lib/easy-proxy/config/config.yaml"
+$containerConfigPath = "/var/lib/easyproxy/config/config.yaml"
 
 New-Item -ItemType Directory -Force -Path $configDir | Out-Null
 
@@ -62,7 +62,7 @@ $configYaml = @"
 mode: hybrid
 log_level: info
 skip_cert_verify: true
-database_path: /var/lib/easy-proxy/data/data.db
+database_path: /var/lib/easyproxy/data/data.db
 
 listener:
   address: 0.0.0.0
@@ -108,14 +108,14 @@ source_sync:
   connector_runtime:
     enabled: true
     binary_path: "/usr/local/bin/ech-workers"
-    working_directory: "/var/lib/easy-proxy/connectors"
+    working_directory: "/var/lib/easyproxy/connectors"
     listen_host: "127.0.0.1"
     listen_start_port: 30000
     startup_timeout: 10s
     preferred_ip:
       binary_path: "/usr/local/bin/cfst"
-      ip_file_path: "/usr/local/share/cfst/ip.txt"
-      working_directory: "/var/lib/easy-proxy/connectors/preferred-ip"
+      ip_file_path: "/usr/share/easyproxy/cfst/ip.txt"
+      working_directory: "/var/lib/easyproxy/connectors/preferred-ip"
       timeout: 5m0s
 
 connectors: []
@@ -154,7 +154,7 @@ ${composeBuildBlock}
       - "${managementPort}:${managementPort}"
       - "${proxyPort}:${proxyPort}"
     volumes:
-      - ./state:/var/lib/easy-proxy
+      - ./state:/var/lib/easyproxy
 "@
 
 Set-Content -Path $configPath -Value $configYaml -Encoding UTF8
@@ -219,7 +219,7 @@ try {
     }
     $nodesConfigAfterCreate = Invoke-JsonApi -Method GET -Uri "$baseUrl/api/nodes/config" -Headers $headers
 
-    & docker compose @composeArgs exec -T easy-proxy-monorepo-service sh -lc "test -f ${containerConfigPath} && test -d /var/lib/easy-proxy && test -x /usr/local/bin/easy-proxy && test -f /var/lib/easy-proxy/data/data.db"
+    & docker compose @composeArgs exec -T easy-proxy-monorepo-service sh -lc "test -f ${containerConfigPath} && test -d /var/lib/easyproxy && test -x /usr/local/bin/easy-proxy && test -f /var/lib/easyproxy/data/data.db"
     if ($LASTEXITCODE -ne 0) {
         throw "container contract verification failed"
     }

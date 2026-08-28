@@ -462,7 +462,7 @@ $configYaml = @"
 mode: pool
 log_level: info
 skip_cert_verify: true
-database_path: /var/lib/easy-proxy/data/data.db
+database_path: /var/lib/easyproxy/data/data.db
 
 listener:
   address: 0.0.0.0
@@ -553,8 +553,8 @@ try {
     $null = Invoke-Docker -DockerArgs @("volume", "create", "--label", $label, $volumeName)
 
     $fixtureMount = "type=bind,source=$fixturePath,target=/fixture.py,readonly"
-    $configMount = "type=bind,source=$configDir,target=/var/lib/easy-proxy/config"
-    $dataMount = "type=volume,source=$volumeName,target=/var/lib/easy-proxy/data"
+    $configMount = "type=bind,source=$configDir,target=/var/lib/easyproxy/config"
+    $dataMount = "type=volume,source=$volumeName,target=/var/lib/easyproxy/data"
 
     $null = Invoke-Docker -DockerArgs @(
         "run", "-d", "--name", $originName, "--label", $label,
@@ -573,7 +573,7 @@ try {
         "--network", $networkName, "--network-alias", "easyproxy",
         "-p", "${managementPort}:29888", "-p", "${proxyPort}:22323",
         "--mount", $configMount, "--mount", $dataMount,
-        "-e", "EASY_PROXY_CONFIG_PATH=/var/lib/easy-proxy/config/config.yaml",
+        "-e", "EASY_PROXY_CONFIG_PATH=/var/lib/easyproxy/config/config.yaml",
         $Image
     )
     $null = Invoke-Docker -DockerArgs @(

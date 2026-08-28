@@ -26,7 +26,7 @@ env:
       platforms:
         description: Target build platforms
         required: false
-        default: linux/amd64
+        default: linux/amd64,linux/arm64
         type: choice
         options:
           - linux/amd64
@@ -170,7 +170,7 @@ jobs:
           if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
             target="both"
             release_tag="${GITHUB_REF_NAME}"
-            platforms="linux/amd64"
+            platforms="linux/amd64,linux/arm64"
           else
             target="${{ inputs.target }}"
             release_tag="${{ inputs.release_tag }}"
@@ -179,6 +179,8 @@ jobs:
               release_tag="release-${GITHUB_RUN_NUMBER}-${GITHUB_SHA::7}"
             fi
           fi
+
+          [[ "${release_tag}" =~ ^(release-|v) ]] || { echo "release tag must start with release- or v" >&2; exit 1; }
 
           echo "owner_lc=${owner_lc}" >> "$GITHUB_OUTPUT"
           echo "target=${target}" >> "$GITHUB_OUTPUT"
@@ -212,6 +214,7 @@ jobs:
 
       - name: Build and push EasyProxy service image
         if: steps.prep.outputs.target == 'both' || steps.prep.outputs.target == 'easyproxy'
+        id: build_service
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -220,6 +223,8 @@ jobs:
           push: true
           tags: ${{ steps.meta_service.outputs.tags }}
           labels: ${{ steps.meta_service.outputs.labels }}
+          sbom: true
+          provenance: mode=max
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -248,6 +253,7 @@ jobs:
 
       - name: Build and push ech-workers image
         if: steps.prep.outputs.target == 'both' || steps.prep.outputs.target == 'ech-workers'
+        id: build_worker
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -256,6 +262,8 @@ jobs:
           push: true
           tags: ${{ steps.meta_worker.outputs.tags }}
           labels: ${{ steps.meta_worker.outputs.labels }}
+          sbom: true
+          provenance: mode=max
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -284,9 +292,11 @@ jobs:
             echo "- platforms: \`${{ steps.prep.outputs.platforms }}\`"
             if [[ "${{ steps.prep.outputs.target }}" == "both" || "${{ steps.prep.outputs.target }}" == "easyproxy" ]]; then
               echo "- service image: \`ghcr.io/${{ steps.prep.outputs.owner_lc }}/easy-proxy-monorepo-service:${{ steps.prep.outputs.release_tag }}\`"
+              echo "- service digest: \`${{ steps.build_service.outputs.digest }}\`"
             fi
             if [[ "${{ steps.prep.outputs.target }}" == "both" || "${{ steps.prep.outputs.target }}" == "ech-workers" ]]; then
               echo "- worker image: \`ghcr.io/${{ steps.prep.outputs.owner_lc }}/ech-workers-monorepo:${{ steps.prep.outputs.release_tag }}\`"
+              echo "- worker digest: \`${{ steps.build_worker.outputs.digest }}\`"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 

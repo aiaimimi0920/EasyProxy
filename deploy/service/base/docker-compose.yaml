@@ -13,8 +13,8 @@ services:
       - "${EASY_PROXY_SERVICE_MANAGEMENT_PORT_BINDING:-29888:29888}"
       - "${EASY_PROXY_SERVICE_MULTI_PORT_BINDING:-25000-25500:25000-25500}"
     volumes:
-      - ./config.yaml:/etc/easy-proxy/config.yaml
-      - ./data:/var/lib/easy-proxy
+      - ./config.yaml:/etc/easyproxy/config.yaml:ro
+      - ./data:/var/lib/easyproxy
     dns:
       - 1.1.1.1
       - 8.8.8.8
@@ -25,14 +25,14 @@ services:
           - ${EASY_PROXY_SERVICE_NETWORK_ALIAS:-easy-proxy}
 
     # Optional file-based node source:
-    # - ./nodes.txt:/etc/easy-proxy/nodes.txt
+    # - ./nodes.txt:/etc/easyproxy/nodes.txt
 
     # Notes:
     # - 22323: canonical Local Server mixed entry (legacy pool when disabled)
     # - 29888: shared Web Console and management API
     # - 25000-25500: legacy-only multi-port range; incompatible with Local Server
     # - image also contains /usr/local/bin/ech-workers for connector runtime
-    # - image also contains /usr/local/bin/cfst + /usr/local/share/cfst/ip.txt
+    # - image also contains /usr/local/bin/cfst + /usr/share/easyproxy/cfst/ip.txt
     #   for local preferred Cloudflare entry-IP generation
 
 networks:

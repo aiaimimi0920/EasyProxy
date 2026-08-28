@@ -1,0 +1,22 @@
+[Unit]
+Description=EasyProxy LAN proxy service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=easyproxy
+Group=easyproxy
+WorkingDirectory=/var/lib/easyproxy
+ExecStart=/opt/easyproxy/current/bin/easy-proxy --config /etc/easyproxy/config.yaml
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/easyproxy
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target

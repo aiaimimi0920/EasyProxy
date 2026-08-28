@@ -54,8 +54,8 @@ protected by the existing management authentication.
         environment:
           EASY_PROXY_RUN_AS_ROOT: "1"
         volumes:
-          - ./config.yaml:/etc/easy-proxy/config.yaml
-          - ./data:/etc/easy-proxy/data
+          - ./config.yaml:/etc/easyproxy/config.yaml
+          - ./data:/etc/easyproxy/data
 
 Tailscale and 星空组网 may run as DSM services, host processes, or separate
 host-network containers. They are transport adapters only. Configure their

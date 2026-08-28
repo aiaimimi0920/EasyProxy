@@ -28,7 +28,24 @@ This release packages the current single-repository EasyProxy operator surface:
 - native `MiSub` Pages deployment
 - native `ech-workers-cloudflare` deployment
 - GHCR images for `service/base` and local `ech-workers`
+- native EasyProxy and `easyproxyctl` packages for Linux amd64/arm64 and Windows amd64
 - private `service/base` config distribution through Cloudflare R2
+
+## Native Packages
+
+- `easyproxy-linux-amd64.tar.gz`
+- `easyproxy-linux-arm64.tar.gz`
+- `easyproxy-windows-amd64.zip`
+- matching `easyproxyctl-*` archives
+- `config.example.yaml`, `easyproxy.service`, and both Linux/Windows installers
+- `native-install-update.md`
+- `SHA256SUMS` and `release-manifest.json`
+
+Windows arm64 is not supported. Verify the SHA256 checksum and GitHub build
+provenance attestation before installation. Existing config and SQLite state
+are preserved unless explicit config replacement or data rollback is requested.
+The attestation is published through GitHub's artifact-attestations service;
+verify it from the release repository rather than expecting a detached signature file.
 
 ## Published Images
 
@@ -57,7 +74,7 @@ This release packages the current single-repository EasyProxy operator surface:
 The `service/base` image can bootstrap from:
 
 - `EASY_PROXY_IMPORT_CODE`
-- `/etc/easy-proxy/bootstrap/r2-bootstrap.json`
+- `/etc/easyproxy/bootstrap/r2-bootstrap.json`
 
 See:
 

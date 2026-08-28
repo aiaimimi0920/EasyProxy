@@ -696,7 +696,7 @@ func (c *Config) applyDefaults() error {
 		c.SourceSync.ConnectorRuntime.PreferredIP.WorkingDirectory = filepath.Join(baseDir, "data", "connectors", "preferred-ip")
 	}
 	if strings.TrimSpace(c.SourceSync.ConnectorRuntime.PreferredIP.IPFilePath) == "" {
-		c.SourceSync.ConnectorRuntime.PreferredIP.IPFilePath = "/usr/local/share/cfst/ip.txt"
+		c.SourceSync.ConnectorRuntime.PreferredIP.IPFilePath = "/usr/share/easyproxy/cfst/ip.txt"
 	}
 
 	if c.DNS.Enabled == nil {

@@ -22,8 +22,16 @@ import (
 	"easy_proxies/internal/subscription"
 )
 
-// Run builds the runtime components from config and blocks until shutdown.
+// Run installs interactive process signal handling and runs the service.
 func Run(ctx context.Context, cfg *config.Config) error {
+	runCtx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	return RunWithContext(runCtx, cfg)
+}
+
+// RunWithContext runs the service until its caller cancels the context.
+// Platform service managers use this entry point so they own shutdown signals.
+func RunWithContext(ctx context.Context, cfg *config.Config) error {
 	// ── 1. Open SQLite store ──
 	dbPath := cfg.DatabasePath
 	if dbPath == "" {
@@ -168,17 +176,9 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	defer statsCancel()
 	go periodicStatsFlush(statsCtx, boxMgr, dataStore)
 
-	// ── 8. Wait for shutdown signal ──
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	defer signal.Stop(sigCh)
-
-	select {
-	case <-ctx.Done():
-		fmt.Println("Context cancelled, initiating graceful shutdown...")
-	case sig := <-sigCh:
-		fmt.Printf("Received %s, initiating graceful shutdown...\n", sig)
-	}
+	// ── 8. Wait for the caller to request shutdown ──
+	<-ctx.Done()
+	fmt.Println("Context cancelled, initiating graceful shutdown...")
 
 	// ── 9. Graceful shutdown ──
 	// Note: boxMgr.Close() and subMgr.Stop() are handled by their defers above.

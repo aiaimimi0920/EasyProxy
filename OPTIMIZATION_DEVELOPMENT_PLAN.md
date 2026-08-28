@@ -1,6 +1,6 @@
 # EasyProxy 全面优化开发计划
 
-> 状态：执行中；Phase 0 和 Phase 1 已完成，Phase 2 待开始。
+> 状态：执行中；Phase 0 至 Phase 5 已完成；Phase 6 代码与发布契约已完成，真实跨平台/NAS 发布验收保留到 Phase 8；下一步执行 Phase 7。
 >
 > 优化前基线标签：优化前的稳定版本
 >
@@ -1186,18 +1186,29 @@ P5-08 的“旧工作流删除”指根仓库不再保留或调用第二套旧�
 - EasyProxy 在 MiSub 故障时可使用 fallback；
 - 用户 Fork 可独立调度和发布。
 
-### Phase 6：本地跨平台发行
+### Phase 6：本地跨平台发行（实现完成，真实环境验收待 Phase 8）
 
-- P6-01 合并 Docker 定义；
-- P6-02 统一持久目录；
-- P6-03 发布多架构镜像；
-- P6-04 发布 Windows 和 Linux 原生包；
-- P6-05 实现 Linux service 安装；
-- P6-06 实现 Windows service 安装；
-- P6-07 实现 NAS Compose；
-- P6-08 实现 backup/update/verify/rollback；
-- P6-09 更新 release-contract；
-- P6-10 建立 Release manifest 和 checksum。
+- [x] P6-01 合并 Docker 定义；
+- [x] P6-02 统一持久目录；
+- [x] P6-03 发布多架构镜像；
+- [x] P6-04 发布 Windows 和 Linux 原生包；
+- [x] P6-05 实现 Linux service 安装；
+- [x] P6-06 实现 Windows service 安装；
+- [x] P6-07 实现 NAS Compose；
+- [x] P6-08 实现 backup/update/verify/rollback；
+- [x] P6-09 更新 release-contract；
+- [x] P6-10 建立 Release manifest 和 checksum。
+
+实现证据：唯一 Dockerfile 使用 amd64/arm64，统一 `/etc/easyproxy`、
+`/var/lib/easyproxy` 和 `/usr/share/easyproxy`；GHCR 启用 SBOM/provenance；
+GitHub Release 工作流构建六个原生归档并生成 SHA256/manifest/attestation；
+Windows 二进制实现 SCM Handler；Docker/Linux/Windows 生命周期均默认保留
+配置并在更新前备份 SQLite。确定性打包、manifest 篡改、PowerShell/sh 语法、
+Windows amd64 与 Linux arm64 交叉构建已在本地通过。
+
+边界：上述为实现和静态/交叉构建证据，不等同于已在真实 Linux arm64、
+Windows Service 和目标 NAS 上完成安装验收，也不等同于已发布真实 GitHub
+Release；这些真实环境出口条件由 Phase 8 执行并留存证据。
 
 退出条件：
 
