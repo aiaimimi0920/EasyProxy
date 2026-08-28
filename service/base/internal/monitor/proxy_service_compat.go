@@ -1372,6 +1372,7 @@ func proxyCompatServiceFeedbackKey(scopeKind string, scopeValue string) string {
 
 func proxyCompatScopedUsageDecision(scopeKind string, decision proxyCompatUsageFeedbackDecision) proxyCompatUsageFeedbackDecision {
 	scoped := decision
+	routeFailure := strings.HasPrefix(strings.TrimSpace(decision.ErrorClass), "route:")
 	switch strings.TrimSpace(scopeKind) {
 	case proxyCompatFeedbackScopeNode:
 		return scoped
@@ -1389,6 +1390,10 @@ func proxyCompatScopedUsageDecision(scopeKind string, decision proxyCompatUsageF
 		scoped.CooldownEscalated = 0
 	default:
 		scoped.Penalty = min(20, max(4, decision.Penalty/4))
+		scoped.CooldownBase = 0
+		scoped.CooldownEscalated = 0
+	}
+	if routeFailure {
 		scoped.CooldownBase = 0
 		scoped.CooldownEscalated = 0
 	}
@@ -2199,9 +2204,8 @@ func (s *Server) applyProxyCompatUsageFeedback(selectedNodeTag, hostID string, r
 		if proxyCompatShouldServiceCooldownLoginBlockedRouteFailure(serviceKey, record.Stage, errMessage, routeConfidence) {
 			nodeEntry.recordObservationFailure(errors.New(errMessage), destination)
 			nodeEntry.applyUsageReportFailure(0, false)
-			snapshot := nodeEntry.snapshot()
 			serviceDecision := proxyCompatLoginBlockedServiceRouteFailureDecision(errMessage, routeConfidence)
-			s.compatState().recordServiceFailureForSnapshot(serviceKey, snapshot, errMessage, serviceDecision)
+			s.compatState().recordServiceFailure(serviceKey, trimmedTag, errMessage, serviceDecision)
 			return
 		}
 
