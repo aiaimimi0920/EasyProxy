@@ -1221,14 +1221,30 @@ Release；这些真实环境出口条件由 Phase 8 执行并留存证据。
 
 ### Phase 7：第一方复杂度清理
 
-- P7-01 执行 R1 管理 API；
-- P7-02 执行 R2 配置；
-- P7-03 执行 R3 编排；
-- P7-04 执行 R4 来源和存储；
-- P7-05 执行 R5 前端；
-- P7-06 执行 R6 测试和脚本；
-- P7-07 加入有效行数 CI；
-- P7-08 删除所有已替代兼容层。
+状态：已完成（2026-08-29）。
+
+- [x] P7-01 执行 R1 管理 API；
+- [x] P7-02 执行 R2 配置；
+- [x] P7-03 执行 R3 编排；
+- [x] P7-04 执行 R4 来源和存储；
+- [x] P7-05 执行 R5 前端；
+- [x] P7-06 执行 R6 测试和脚本；
+- [x] P7-07 加入有效行数 CI；
+- [x] P7-08 删除所有已替代兼容层。
+
+完成证据：R1-R6 分别由 `37d9c96`、`8930d9d`、`387f173`、
+`2fc1b50`、`dff665f` 和 `d1402ab` 落地。初始 ratchet 中 22 个硬超限
+例外已经降为 0；`scripts/check-effective-lines.py` 当前检查 427 个第一方文件，
+只报告 6 个 500-700 行软警告。巨型 Go 测试按行为主题拆分，Python 审计入口和
+PowerShell Local Server E2E 保持原入口并拆出职责模块；无调用方的旧文件存储迁移
+实现已删除。`proxy_service_compat*.go` 名称保留，但其实现的是公开文档和第一方
+审计仍在使用的当前 lease API，不属于已替代兼容层。
+
+阶段验证：根 92 项测试、Aggregator 12 项测试、MiSub 126 项测试和构建、ECH
+Worker Go 全包、EasyProxy Go 544 项测试（15 包）、`go vet`、带正式 tags 的 Go
+构建、前端 52 项测试（17 文件）、ESLint、TypeScript/Vite 构建、actionlint、
+release contract、Go 格式和有效行数门禁均通过。当前源码镜像还通过隔离的
+Local Server 14 项 E2E，并验证 legacy 容器身份和状态未变化。
 
 退出条件：
 

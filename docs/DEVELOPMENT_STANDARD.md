@@ -383,13 +383,14 @@ import code 创建 bootstrap；启用远端后台同步时，应明确远端是�
 2. 新增行为的聚焦测试和回归测试；
 3. 直接依赖模块的编译、类型检查或静态检查；
 4. 仓库官方 formatter 或其检查模式；
-5. 仓库已有的行数 checker（若以后引入）；
+5. `python scripts/check-effective-lines.py`；
 6. `git diff --check`；
 7. scoped `git status`、`git diff` 和未跟踪产物复核。
 
-仓库当前没有完整的有效行数机器门禁。人工规则仍然生效；未来 checker 必须采用
-baseline/ratchet，只阻止新增违规和旧债恶化，不能无迁移计划地让全部历史旧债
-一次性阻塞 CI。
+仓库已由 `scripts/check-effective-lines.py` 和 `effective-lines-baseline.json` 实施
+baseline/ratchet 门禁，并在 `.github/workflows/reusable-validate.yml` 中执行。门禁
+阻止新增硬超限、旧债增长和已经下降但未移除的过期例外；软超限仍需在评审中说明。
+当前 legacy baseline 为空，后续不得用新增例外替代职责拆分。
 
 ### 12.2 根脚本与发布合同
 
