@@ -65,6 +65,15 @@ class ValidateWorkflowContractTests(unittest.TestCase):
         self.assertIn('easyproxyctl" cloud verify', self.cloudflare_workflow)
         self.assertNotIn("continuing in case the project already exists", self.cloudflare_workflow)
 
+    def test_lifecycle_workflows_build_easyproxyctl_entrypoint(self):
+        for workflow in (
+            self.cloudflare_workflow,
+            self.backup_workflow,
+            self.restore_workflow,
+        ):
+            self.assertIn("go build -o", workflow)
+            self.assertIn("./cmd/easyproxyctl", workflow)
+
     def test_restore_defaults_to_drill_and_keeps_durable_cleanup_identity(self):
         self.assertIn("default: drill", self.restore_workflow)
         self.assertIn("DRILL_TARGET_NAME", self.restore_workflow)

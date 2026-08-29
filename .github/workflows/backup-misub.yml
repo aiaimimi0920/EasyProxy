@@ -46,7 +46,7 @@ jobs:
           set -euo pipefail
           python -m pip install PyYAML
           npm ci --prefix upstreams/misub
-          (cd tools/easyproxyctl && go build -o "${RUNNER_TEMP}/easyproxyctl" .)
+          (cd tools/easyproxyctl && go build -o "${RUNNER_TEMP}/easyproxyctl" ./cmd/easyproxyctl)
 
       - name: Resolve exact resources and create encrypted backup
         id: backup

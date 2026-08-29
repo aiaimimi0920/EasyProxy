@@ -185,7 +185,7 @@ jobs:
       - name: Build easyproxyctl
         shell: bash
         working-directory: tools/easyproxyctl
-        run: go build -o "${RUNNER_TEMP}/easyproxyctl" .
+        run: go build -o "${RUNNER_TEMP}/easyproxyctl" ./cmd/easyproxyctl
 
       - name: Install MiSub dependencies
         working-directory: upstreams/misub
