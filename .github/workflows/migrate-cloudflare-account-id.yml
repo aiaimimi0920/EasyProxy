@@ -1,0 +1,62 @@
+name: Migrate Cloudflare Account ID
+
+'on':
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Copy legacy secret to repository variable
+        shell: bash
+        env:
+          LEGACY_ACCOUNT_ID: ${{ secrets[format('{0}_{1}', 'CLOUDFLARE_ACCOUNT', 'ID')] }}
+          OPERATOR_TOKEN: ${{ secrets.EASYPROXY_AGGREGATOR_GH_TOKEN }}
+        run: |
+          set -euo pipefail
+          [[ -n "${LEGACY_ACCOUNT_ID:-}" ]] || { echo "::error::Legacy account ID secret is missing"; exit 1; }
+          [[ -n "${OPERATOR_TOKEN:-}" ]] || { echo "::error::Operator token is missing"; exit 1; }
+          python - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          account_id = os.environ["LEGACY_ACCOUNT_ID"]
+          token = os.environ["OPERATOR_TOKEN"]
+          headers = {
+              "Accept": "application/vnd.github+json",
+              "Authorization": f"Bearer {token}",
+              "User-Agent": "easyproxy-account-id-migration",
+              "X-GitHub-Api-Version": "2022-11-28",
+          }
+
+          def request(method, path, payload):
+              body = json.dumps(payload).encode("utf-8")
+              operation = urllib.request.Request(
+                  f"https://api.github.com/repos/{repository}/{path}",
+                  data=body,
+                  headers=headers,
+                  method=method,
+              )
+              try:
+                  with urllib.request.urlopen(operation, timeout=30) as response:
+                      return response.status
+              except urllib.error.HTTPError as error:
+                  if error.code == 404:
+                      return 404
+                  raise
+
+          name = "CLOUDFLARE_ACCOUNT_ID"
+          payload = {"name": name, "value": account_id}
+          status = request("PATCH", f"actions/variables/{name}", payload)
+          if status == 404:
+              status = request("POST", "actions/variables", payload)
+          if status not in (201, 204):
+              raise SystemExit(f"Unexpected variable update status: {status}")
+          print("Cloudflare account ID repository variable is ready")
+          PY
