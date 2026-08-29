@@ -1,0 +1,392 @@
+package monitor
+
+import (
+	"errors"
+	"testing"
+	"time"
+)
+
+func TestUpdateProbeTargetPreservesHTTPSDefaultPort(t *testing.T) {
+	manager, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	if err := manager.UpdateProbeTarget("https://example.com/generate_204"); err != nil {
+		t.Fatalf("UpdateProbeTarget() error = %v", err)
+	}
+
+	destination, ok := manager.DestinationForProbe()
+	if !ok {
+		t.Fatal("expected probe destination to be ready")
+	}
+	if destination.Fqdn != "example.com" {
+		t.Fatalf("unexpected probe host: %s", destination.Fqdn)
+	}
+	if destination.Port != 443 {
+		t.Fatalf("unexpected probe port: %d", destination.Port)
+	}
+}
+
+func TestUpdateProbeTargetPreservesTCPDefaultPort(t *testing.T) {
+	manager, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	if err := manager.UpdateProbeTarget("tcp://example.com"); err != nil {
+		t.Fatalf("UpdateProbeTarget() error = %v", err)
+	}
+
+	destination, ok := manager.DestinationForProbe()
+	if !ok {
+		t.Fatal("expected probe destination to be ready")
+	}
+	if destination.Fqdn != "example.com" {
+		t.Fatalf("unexpected probe host: %s", destination.Fqdn)
+	}
+	if destination.Port != 443 {
+		t.Fatalf("unexpected tcp probe port: %d", destination.Port)
+	}
+}
+
+func TestUpdateProbeTargetsPreservesMultipleFullURLs(t *testing.T) {
+	manager, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	targets := []string{
+		"https://platform.openai.com/login",
+		"https://auth.openai.com/",
+	}
+	if err := manager.UpdateProbeTargets(targets, ""); err != nil {
+		t.Fatalf("UpdateProbeTargets() error = %v", err)
+	}
+
+	specs, ok := manager.ProbeTargets()
+	if !ok {
+		t.Fatal("expected probe targets to be ready")
+	}
+	if len(specs) != 2 {
+		t.Fatalf("unexpected probe target count: %d", len(specs))
+	}
+	if specs[0].Host != "platform.openai.com" || specs[0].Path != "/login" {
+		t.Fatalf("unexpected first probe target: %+v", specs[0])
+	}
+	if specs[1].Host != "auth.openai.com" || specs[1].Path != "/" {
+		t.Fatalf("unexpected second probe target: %+v", specs[1])
+	}
+}
+
+func TestSourceSelectionStatesExcludeStructurallyBadSource(t *testing.T) {
+	manager, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	badA := manager.Register(NodeInfo{
+		Tag:        "bad-a",
+		Name:       "Bad A",
+		SourceRef:  "local:subscription-2",
+		SourceName: "subscription-2",
+	})
+	badA.MarkInitialCheckDone(false)
+	badA.RecordFailure(errors.New("tls handshake: EOF"), "www.google.com:443")
+
+	badB := manager.Register(NodeInfo{
+		Tag:        "bad-b",
+		Name:       "Bad B",
+		SourceRef:  "local:subscription-2",
+		SourceName: "subscription-2",
+	})
+	badB.MarkInitialCheckDone(false)
+	badB.RecordFailure(errors.New("authentication failed, status code: 200"), "www.google.com:443")
+
+	good := manager.Register(NodeInfo{
+		Tag:        "good-a",
+		Name:       "Good A",
+		SourceRef:  "local:subscription-1",
+		SourceName: "subscription-1",
+	})
+	good.MarkInitialCheckDone(true)
+
+	states := manager.SourceSelectionStates()
+	badState, ok := states["local:subscription-2"]
+	if !ok {
+		t.Fatal("expected source state for subscription-2")
+	}
+	if !badState.Excluded {
+		t.Fatalf("expected structurally bad source to be excluded, got %+v", badState)
+	}
+	if badState.Penalty < 80 {
+		t.Fatalf("expected excluded source penalty to be high, got %+v", badState)
+	}
+
+	goodState, ok := states["local:subscription-1"]
+	if !ok {
+		t.Fatal("expected source state for subscription-1")
+	}
+	if goodState.Excluded || goodState.Penalty != 0 {
+		t.Fatalf("expected healthy source to remain unpenalized, got %+v", goodState)
+	}
+}
+
+func TestSecondarySelectionStatesIsolateBadClustersInsideHealthySource(t *testing.T) {
+	manager, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	good := manager.Register(NodeInfo{
+		Tag:            "good-a",
+		Name:           "Good A",
+		SourceRef:      "manifest:agg",
+		SourceName:     "Aggregator Stable",
+		ProtocolFamily: "vless",
+		NodeMode:       "tls/ws",
+		DomainFamily:   "good.example.com",
+	})
+	good.MarkInitialCheckDone(true)
+
+	badA := manager.Register(NodeInfo{
+		Tag:            "bad-a",
+		Name:           "Bad A",
+		SourceRef:      "manifest:agg",
+		SourceName:     "Aggregator Stable",
+		ProtocolFamily: "vless",
+		NodeMode:       "reality/tcp",
+		DomainFamily:   "badcluster.example.com",
+	})
+	badA.MarkInitialCheckDone(false)
+	badA.RecordFailure(errors.New("reality verification failed"), "www.google.com:443")
+
+	badB := manager.Register(NodeInfo{
+		Tag:            "bad-b",
+		Name:           "Bad B",
+		SourceRef:      "manifest:agg",
+		SourceName:     "Aggregator Stable",
+		ProtocolFamily: "vless",
+		NodeMode:       "reality/tcp",
+		DomainFamily:   "badcluster.example.com",
+	})
+	badB.MarkInitialCheckDone(false)
+	badB.RecordFailure(errors.New("reality verification failed"), "www.google.com:443")
+
+	states := manager.SecondarySelectionStates()
+
+	modeState, ok := states[SecondarySelectionStateKey("manifest:agg", SelectionDimensionNodeMode, "reality/tcp")]
+	if !ok {
+		t.Fatal("expected node_mode secondary state for reality/tcp")
+	}
+	if !modeState.Excluded {
+		t.Fatalf("expected reality/tcp cluster to be excluded, got %+v", modeState)
+	}
+
+	domainState, ok := states[SecondarySelectionStateKey("manifest:agg", SelectionDimensionDomainFamily, "badcluster.example.com")]
+	if !ok {
+		t.Fatal("expected domain_family secondary state for badcluster.example.com")
+	}
+	if !domainState.Excluded {
+		t.Fatalf("expected badcluster.example.com cluster to be excluded, got %+v", domainState)
+	}
+
+	protocolState, ok := states[SecondarySelectionStateKey("manifest:agg", SelectionDimensionProtocolFamily, "vless")]
+	if !ok {
+		t.Fatal("expected protocol_family secondary state for vless")
+	}
+	if protocolState.Excluded {
+		t.Fatalf("expected protocol_family to stay eligible when healthy peers exist, got %+v", protocolState)
+	}
+	if protocolState.Penalty == 0 {
+		t.Fatalf("expected protocol_family to receive a soft penalty, got %+v", protocolState)
+	}
+}
+
+func TestSourceSelectionStatesKeepTrafficProvenSourceEligible(t *testing.T) {
+	manager, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	proven := manager.Register(NodeInfo{
+		Tag:        "traffic-proven",
+		Name:       "Traffic Proven",
+		SourceRef:  "local:subscription-3",
+		SourceName: "subscription-3",
+	})
+	proven.MarkInitialCheckDone(false)
+	proven.RecordFailure(errors.New("tls handshake: EOF"), "www.google.com:443")
+	proven.RecordSuccess("api.openai.com:443")
+
+	bad := manager.Register(NodeInfo{
+		Tag:        "still-bad",
+		Name:       "Still Bad",
+		SourceRef:  "local:subscription-3",
+		SourceName: "subscription-3",
+	})
+	bad.MarkInitialCheckDone(false)
+	bad.RecordFailure(errors.New("tls handshake: EOF"), "www.google.com:443")
+
+	states := manager.SourceSelectionStates()
+	state, ok := states["local:subscription-3"]
+	if !ok {
+		t.Fatal("expected source state for subscription-3")
+	}
+	if state.HealthyNodes != 1 {
+		t.Fatalf("expected one healthy traffic-proven node, got %+v", state)
+	}
+	if state.Excluded {
+		t.Fatalf("expected source to stay eligible when real traffic proved a node usable, got %+v", state)
+	}
+}
+
+func TestSourceHealthStatesExposeAvailabilityBreakdown(t *testing.T) {
+	manager, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	healthy := manager.Register(NodeInfo{
+		Tag:        "zen-good",
+		Name:       "Zen Good",
+		SourceRef:  "manifest:conn_zenproxy_primary",
+		SourceName: "ZenProxy Primary",
+		SourceKind: "connector",
+	})
+	healthy.MarkInitialCheckDone(true)
+
+	trafficProven := manager.Register(NodeInfo{
+		Tag:        "zen-traffic",
+		Name:       "Zen Traffic",
+		SourceRef:  "manifest:conn_zenproxy_primary",
+		SourceName: "ZenProxy Primary",
+		SourceKind: "connector",
+	})
+	trafficProven.MarkInitialCheckDone(false)
+	trafficProven.RecordFailure(errors.New("tls handshake: EOF"), "www.google.com:443")
+	trafficProven.RecordSuccess("api.openai.com:443")
+
+	blacklisted := manager.Register(NodeInfo{
+		Tag:        "zen-blacklisted",
+		Name:       "Zen Blacklisted",
+		SourceRef:  "manifest:conn_zenproxy_primary",
+		SourceName: "ZenProxy Primary",
+		SourceKind: "connector",
+	})
+	blacklisted.MarkInitialCheckDone(true)
+	blacklisted.Blacklist(time.Now().Add(time.Minute))
+
+	manager.Register(NodeInfo{
+		Tag:        "zen-pending",
+		Name:       "Zen Pending",
+		SourceRef:  "manifest:conn_zenproxy_primary",
+		SourceName: "ZenProxy Primary",
+		SourceKind: "connector",
+	})
+
+	unhealthy := manager.Register(NodeInfo{
+		Tag:        "zen-bad",
+		Name:       "Zen Bad",
+		SourceRef:  "manifest:conn_zenproxy_primary",
+		SourceName: "ZenProxy Primary",
+		SourceKind: "connector",
+	})
+	unhealthy.MarkInitialCheckDone(false)
+	unhealthy.RecordFailure(errors.New("tls handshake: EOF"), "www.google.com:443")
+
+	states := manager.SourceHealthStates()
+	state, ok := states["manifest:conn_zenproxy_primary"]
+	if !ok {
+		t.Fatal("expected source health state for zenproxy connector")
+	}
+	if state.Name != "ZenProxy Primary" || state.Kind != "connector" {
+		t.Fatalf("unexpected source identity: %+v", state)
+	}
+	if state.TotalNodes != 5 {
+		t.Fatalf("expected 5 total nodes, got %+v", state)
+	}
+	if state.EffectiveAvailableNodes != 2 {
+		t.Fatalf("expected 2 effective nodes, got %+v", state)
+	}
+	if state.ProbeAvailableNodes != 1 {
+		t.Fatalf("expected 1 probe-available node, got %+v", state)
+	}
+	if state.TrafficProvenNodes != 1 {
+		t.Fatalf("expected 1 traffic-proven node, got %+v", state)
+	}
+	if state.BlacklistedNodes != 1 {
+		t.Fatalf("expected 1 blacklisted node, got %+v", state)
+	}
+	if state.PendingNodes != 1 {
+		t.Fatalf("expected 1 pending node, got %+v", state)
+	}
+	if state.UnavailableNodes != 1 {
+		t.Fatalf("expected 1 unavailable node, got %+v", state)
+	}
+	if state.StructuralFailures != 1 {
+		t.Fatalf("expected 1 structural failure, got %+v", state)
+	}
+	if state.SelectionExcluded {
+		t.Fatalf("expected source to stay eligible with healthy peers, got %+v", state)
+	}
+	if state.SelectionPenalty != 20 {
+		t.Fatalf("expected soft selection penalty, got %+v", state)
+	}
+	if state.SelectionReason != "tls_handshake_eof" {
+		t.Fatalf("unexpected selection reason: %+v", state)
+	}
+}
+
+func TestSelectProxyCompatCandidateSnapshotsTreatsTrafficProvenNodesAsEffective(t *testing.T) {
+	manager, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	proven := manager.Register(NodeInfo{
+		Tag:           "traffic-proven",
+		Name:          "Traffic Proven",
+		ListenAddress: "127.0.0.1",
+		Port:          31001,
+	})
+	proven.MarkInitialCheckDone(false)
+	proven.RecordFailure(errors.New("tls handshake: EOF"), "www.google.com:443")
+	proven.RecordSuccess("api.openai.com:443")
+
+	nodes, tier := selectProxyCompatCandidateSnapshots(manager.Snapshot())
+	if tier != "effective" {
+		t.Fatalf("expected traffic-proven node to stay in effective tier, got %q", tier)
+	}
+	if len(nodes) != 1 || nodes[0].Tag != "traffic-proven" {
+		t.Fatalf("expected traffic-proven node to be selected, got %+v", nodes)
+	}
+	if !nodes[0].EffectiveAvailable || !nodes[0].TrafficProvenUsable {
+		t.Fatalf("expected effective availability flags on snapshot, got %+v", nodes[0])
+	}
+}
+
+func TestTrafficProvenStatusExpiresAfterLaterFailure(t *testing.T) {
+	manager, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	handle := manager.Register(NodeInfo{
+		Tag:           "traffic-then-fail",
+		Name:          "Traffic Then Fail",
+		ListenAddress: "127.0.0.1",
+		Port:          31002,
+	})
+	handle.MarkInitialCheckDone(false)
+	handle.RecordSuccess("api.openai.com:443")
+	handle.RecordFailure(errors.New("unexpected HTTP response status: 403"), "api.ipify.org:443")
+
+	snap := handle.Snapshot()
+	if snap.TrafficProvenUsable {
+		t.Fatalf("expected later failure to clear traffic-proven usability, got %+v", snap)
+	}
+	if snap.EffectiveAvailable {
+		t.Fatalf("expected effective availability to be false after later failure, got %+v", snap)
+	}
+}

@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -267,6 +268,57 @@ class ScriptSmokeTests(unittest.TestCase):
             "scripts/lib/easyproxy-config.ps1",
         ]
         self.assertEqual([path for path in removed if (REPO_ROOT / path).exists()], [])
+
+    def test_source_audit_entrypoint_remains_importable_and_exposes_cli(self):
+        imported = subprocess.run(
+            [sys.executable, "-c", "import scripts.easyproxy_source_audit as audit; print(audit.main.__name__)"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        help_result = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "scripts/easyproxy_source_audit.py"), "--help"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        self.assertEqual(imported.returncode, 0, msg=imported.stderr)
+        self.assertEqual(imported.stdout.strip(), "main")
+        self.assertEqual(help_result.returncode, 0, msg=help_result.stderr)
+        self.assertIn("--minimum-available-nodes", help_result.stdout)
+        self.assertIn("--require-fallback-active", help_result.stdout)
+
+    def test_local_server_validation_modules_parse_and_load(self):
+        script_root = REPO_ROOT / "deploy/service/base/scripts"
+        paths = [
+            script_root / "validate-local-server-device-profiles.ps1",
+            script_root / "validate-local-server-device-profiles.helpers.ps1",
+            script_root / "validate-local-server-device-profiles.profiles.ps1",
+        ]
+        quoted_paths = ",".join(f"'{path}'" for path in paths)
+        command = (
+            "$ErrorActionPreference='Stop';"
+            f"$paths=@({quoted_paths});"
+            "foreach($path in $paths){"
+            "$tokens=$null;$errors=$null;"
+            "[System.Management.Automation.Language.Parser]::ParseFile($path,[ref]$tokens,[ref]$errors)|Out-Null;"
+            "if($errors.Count -gt 0){throw ($errors.Message -join '; ')}};"
+            f". '{paths[1]}';. '{paths[2]}';"
+            "$expected=@('Assert-LegacyContainerInvariant','Get-FreeTcpPort','Invoke-JsonApi',"
+            "'New-ForwardingProfile','Wait-ForAvailableNode','Wait-ForLocalServer');"
+            "foreach($name in $expected){"
+            "if(-not (Get-Command $name -CommandType Function -ErrorAction SilentlyContinue)){"
+            "throw \"missing function: $name\"}};"
+            "$failedRequest=Invoke-JsonApi -Method GET -Uri 'http://127.0.0.1:1' -AllowFailure;"
+            "if($failedRequest.StatusCode -ne 0){throw 'unexpected failed-request status'}"
+        )
+
+        result = self.run_powershell(["-Command", command])
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr or result.stdout)
 
 
 if __name__ == "__main__":

@@ -6,42 +6,74 @@ import argparse
 import json
 import os
 import random
-import shutil
-import socket
-import subprocess
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
 import requests
 import yaml
 
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
-POLICY_PATH = REPO_ROOT / "shared" / "proxy-availability" / "policy.json"
-CURL_IMAGE = os.environ.get("EASYPROXY_AUDIT_CURL_IMAGE", "curlimages/curl:8.12.1")
-DEFAULT_CONNECTOR_RUNTIME = {
-    "enabled": True,
-    "binary_path": "/usr/local/bin/ech-workers",
-    "working_directory": "/var/lib/easyproxy/connectors",
-    "listen_host": "127.0.0.1",
-    "listen_start_port": 30000,
-    "startup_timeout": "30s",
-    "preferred_ip": {
-        "binary_path": "/usr/local/bin/cfst",
-        "ip_file_path": "/usr/share/easyproxy/cfst/ip.txt",
-        "working_directory": "/var/lib/easyproxy/connectors/preferred-ip",
-        "timeout": "5m0s",
-        "fanout_count": 5,
-    },
-}
-
-
-def load_policy() -> dict[str, Any]:
-    return json.loads(POLICY_PATH.read_text(encoding="utf-8"))
-
+try:
+    from .easyproxy_source_audit_probe import (
+        checkout_proxy_lease,
+        collect_container_networks,
+        collect_direct_probe_candidates,
+        discover_directly_usable_nodes,
+        fetch_nodes_and_source_sync,
+        is_retryable_proxy_lease_error,
+        normalize_proxy_url_for_host,
+        probe_http_proxy,
+        release_proxy_lease,
+        report_proxy_lease,
+        stop_container,
+        wait_management_ready,
+        wait_scenario_state,
+    )
+    from .easyproxy_source_audit_support import (
+        REPO_ROOT,
+        build_config,
+        ensure_docker,
+        ensure_docker_network,
+        ensure_image,
+        get_free_port,
+        get_free_port_range_start,
+        load_connectors,
+        load_policy,
+        normalize_list,
+        run,
+        write_json_file,
+    )
+except ImportError:
+    from easyproxy_source_audit_probe import (
+        checkout_proxy_lease,
+        collect_container_networks,
+        collect_direct_probe_candidates,
+        discover_directly_usable_nodes,
+        fetch_nodes_and_source_sync,
+        is_retryable_proxy_lease_error,
+        normalize_proxy_url_for_host,
+        probe_http_proxy,
+        release_proxy_lease,
+        report_proxy_lease,
+        stop_container,
+        wait_management_ready,
+        wait_scenario_state,
+    )
+    from easyproxy_source_audit_support import (
+        REPO_ROOT,
+        build_config,
+        ensure_docker,
+        ensure_docker_network,
+        ensure_image,
+        get_free_port,
+        get_free_port_range_start,
+        load_connectors,
+        load_policy,
+        normalize_list,
+        run,
+        write_json_file,
+    )
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run a shared EasyProxy-backed availability audit for subscriptions, proxies, and manifest sources.")
@@ -66,576 +98,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--keep-artifacts", action="store_true")
     parser.add_argument("--skip-cleanup", action="store_true")
     return parser.parse_args()
-
-
-def ensure_docker() -> None:
-    shutil.which("docker") or die("docker is required for source audit")
-
-
-def die(message: str) -> None:
-    raise RuntimeError(message)
-
-
-def run(args: list[str], *, cwd: Path | None = None, capture: bool = True, check: bool = True) -> subprocess.CompletedProcess[str]:
-    completed = subprocess.run(
-        args,
-        cwd=str(cwd) if cwd else None,
-        text=True,
-        capture_output=capture,
-        check=False,
-    )
-    if check and completed.returncode != 0:
-        stderr = (completed.stderr or completed.stdout or "").strip()
-        raise RuntimeError(f"command failed ({' '.join(args)}): {stderr}")
-    return completed
-
-
-def docker_image_exists(image: str) -> bool:
-    result = subprocess.run(
-        ["docker", "image", "inspect", image],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    return result.returncode == 0
-
-
-def ensure_docker_network(name: str) -> None:
-    if not name.strip():
-        return
-    inspect = subprocess.run(["docker", "network", "inspect", name], text=True, capture_output=True, check=False)
-    if inspect.returncode == 0:
-        return
-    created = subprocess.run(["docker", "network", "create", name], text=True, capture_output=True, check=False)
-    if created.returncode != 0:
-        stderr = (created.stderr or created.stdout or "").strip()
-        raise RuntimeError(f"failed to create docker network {name}: {stderr}")
-
-
-def get_free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
-
-
-def is_port_range_available(start: int, size: int) -> bool:
-    listeners: list[socket.socket] = []
-    try:
-        for port in range(start, start + size):
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            try:
-                sock.bind(("127.0.0.1", port))
-                listeners.append(sock)
-            except OSError:
-                sock.close()
-                return False
-        return True
-    finally:
-        for sock in listeners:
-            sock.close()
-
-
-def get_free_port_range_start(preferred_start: int, size: int, step: int = 100, max_attempts: int = 200) -> int:
-    candidate = preferred_start
-    for _ in range(max_attempts):
-        if candidate + size - 1 > 65535:
-            break
-        if is_port_range_available(candidate, size):
-            return candidate
-        candidate += step
-    raise RuntimeError(f"unable to find a free TCP port range near {preferred_start} (size={size})")
-
-
-def read_json_file(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def write_json_file(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def normalize_list(values: list[str]) -> list[str]:
-    result: list[str] = []
-    seen: set[str] = set()
-    for value in values:
-        item = str(value or "").strip()
-        if not item or item in seen:
-            continue
-        seen.add(item)
-        result.append(item)
-    return result
-
-
-def load_connectors(connectors_json: str) -> list[dict[str, Any]]:
-    if not connectors_json.strip():
-        return []
-    payload = json.loads(connectors_json)
-    if not isinstance(payload, list):
-        raise RuntimeError("EASYPROXY_AUDIT_CONNECTORS_JSON must decode to a list")
-    return payload
-
-
-def ensure_image(image: str, build_if_missing: bool, audit_id: str) -> str:
-    effective_image = image.strip()
-    if not effective_image:
-        effective_image = f"easyproxy/source-audit:{audit_id}"
-        build_if_missing = True
-
-    if docker_image_exists(effective_image):
-        return effective_image
-
-    if not build_if_missing:
-        raise RuntimeError(f"docker image does not exist: {effective_image}")
-
-    run(
-        [
-            "docker",
-            "build",
-            "-f",
-            str(REPO_ROOT / "deploy" / "service" / "base" / "Dockerfile"),
-            "-t",
-            effective_image,
-            str(REPO_ROOT),
-        ],
-        capture=False,
-        check=True,
-    )
-    return effective_image
-
-
-def build_config(policy: dict[str, Any], *, manifest_url: str, manifest_token: str, subscriptions: list[str], proxy_uris: list[str], fallback_subscriptions: list[str], connectors: list[dict[str, Any]], multi_port_base: int) -> dict[str, Any]:
-    source_sync_enabled = bool(manifest_url.strip())
-    management_probe_targets = [
-        str(item).strip()
-        for item in (policy.get("management_probe_targets") or [])
-        if str(item).strip()
-    ]
-    if not management_probe_targets:
-        management_probe_targets = [
-            str(item.get("url") or "").strip()
-            for item in (policy.get("http_probe_targets") or [])
-            if str(item.get("url") or "").strip()
-        ]
-    config: dict[str, Any] = {
-        "mode": "hybrid",
-        "log_level": "info",
-        "skip_cert_verify": False,
-        "database_path": "/var/lib/easyproxy/data/data.db",
-        "listener": {
-            "address": "0.0.0.0",
-            "port": 22323,
-            "protocol": "http",
-            "username": "",
-            "password": "",
-        },
-        "pool": {
-            "mode": "auto",
-            "failure_threshold": 3,
-            "blacklist_duration": "24h0m0s",
-        },
-        "multi_port": {
-            "address": "0.0.0.0",
-            "base_port": multi_port_base,
-            "protocol": "http",
-            "username": "",
-            "password": "",
-        },
-        "management": {
-            "enabled": True,
-            "listen": "0.0.0.0:29888",
-            "probe_targets": management_probe_targets,
-            "password": "",
-        },
-        "subscription_refresh": {
-            "enabled": True,
-            "interval": "2h0m0s",
-            "timeout": "30s",
-            "health_check_timeout": "1m0s",
-            "drain_timeout": "30s",
-            "min_available_nodes": max(1, int(policy.get("minimum_available_nodes", 1))),
-        },
-        "source_sync": {
-            "enabled": source_sync_enabled,
-            "manifest_url": manifest_url.strip(),
-            "manifest_token": manifest_token.strip(),
-            "refresh_interval": "5m0s",
-            "request_timeout": "15s",
-            "default_direct_proxy_scheme": "http",
-            "fallback_subscriptions": fallback_subscriptions,
-            "connector_runtime": DEFAULT_CONNECTOR_RUNTIME,
-        },
-        "connectors": connectors,
-        "subscriptions": subscriptions,
-        "nodes": [
-            {
-                "name": f"seed-direct-{index + 1}",
-                "uri": uri,
-            }
-            for index, uri in enumerate(proxy_uris)
-        ],
-    }
-    return config
-
-
-def wait_management_ready(base_url: str, timeout_seconds: int) -> dict[str, Any]:
-    deadline = time.time() + timeout_seconds
-    while time.time() < deadline:
-        try:
-            response = requests.get(f"{base_url}/api/settings", timeout=10)
-            response.raise_for_status()
-            return response.json()
-        except Exception:
-            time.sleep(3)
-    raise RuntimeError(f"timed out waiting for management API at {base_url}")
-
-
-def wait_scenario_state(base_url: str, timeout_seconds: int, require_manifest_healthy: bool, require_fallback_active: bool, require_connector_instances: int) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    deadline = time.time() + timeout_seconds
-    while time.time() < deadline:
-        try:
-            nodes_response = requests.get(f"{base_url}/api/nodes", timeout=15)
-            nodes_response.raise_for_status()
-            nodes = nodes_response.json()
-            source_sync = None
-            try:
-                source_sync_response = requests.get(f"{base_url}/api/source-sync/status", timeout=10)
-                source_sync_response.raise_for_status()
-                source_sync = source_sync_response.json()
-            except Exception:
-                source_sync = None
-
-            total_nodes = int(nodes.get("total_nodes") or 0)
-            connector_instances = int((source_sync or {}).get("connector_instance_count") or 0)
-
-            if total_nodes <= 0:
-                time.sleep(5)
-                continue
-            if require_manifest_healthy and not bool((source_sync or {}).get("manifest_healthy")):
-                time.sleep(5)
-                continue
-            if require_fallback_active and not bool((source_sync or {}).get("fallback_active")):
-                time.sleep(5)
-                continue
-            if require_connector_instances > 0 and connector_instances < require_connector_instances:
-                time.sleep(5)
-                continue
-            return nodes, source_sync
-        except Exception:
-            time.sleep(5)
-    raise RuntimeError(f"timed out waiting for scenario readiness at {base_url}")
-
-
-def fetch_nodes_and_source_sync(base_url: str) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    nodes_response = requests.get(f"{base_url}/api/nodes", timeout=15)
-    nodes_response.raise_for_status()
-    nodes = nodes_response.json()
-    source_sync = None
-    try:
-        source_sync_response = requests.get(f"{base_url}/api/source-sync/status", timeout=10)
-        source_sync_response.raise_for_status()
-        source_sync = source_sync_response.json()
-    except Exception:
-        source_sync = None
-    return nodes, source_sync
-
-
-def probe_http_proxy(proxy_url: str, policy: dict[str, Any], *, network_container: str = "") -> dict[str, Any]:
-    attempts: list[dict[str, Any]] = []
-    timeout = str(int(policy.get("request_timeout_seconds", 25)))
-    accept_status_below_500 = bool(policy.get("accept_http_status_below_500", True))
-    for item in policy.get("http_probe_targets", []):
-        url = str(item.get("url") or "").strip()
-        expected = {int(code) for code in item.get("expected_status") or []}
-        if not url or not expected:
-            continue
-        try:
-            if network_container.strip():
-                command = [
-                    "docker",
-                    "run",
-                    "--rm",
-                    "--network",
-                    f"container:{network_container.strip()}",
-                    CURL_IMAGE,
-                    "-s",
-                    "-k",
-                    "-o",
-                    "/dev/null",
-                    "-w",
-                    "%{http_code}",
-                    "--max-time",
-                    timeout,
-                    "-x",
-                    proxy_url,
-                    url,
-                ]
-            else:
-                curl_name = shutil.which("curl.exe") or shutil.which("curl")
-                if not curl_name:
-                    raise RuntimeError("curl is required for proxy probing")
-                command = [
-                    curl_name,
-                    "-s",
-                    "-k",
-                    "-o",
-                    os.devnull,
-                    "-w",
-                    "%{http_code}",
-                    "--max-time",
-                    timeout,
-                    "-x",
-                    proxy_url,
-                    url,
-                ]
-            result = subprocess.run(
-                command,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            status_code = int((result.stdout or "0").strip() or "0")
-            status_ok = result.returncode == 0 and (
-                status_code in expected
-                or (
-                    accept_status_below_500
-                    and 200 <= status_code < 500
-                    and status_code != 407
-                )
-            )
-            attempts.append({
-                "target": url,
-                "status_code": status_code,
-                "exit_code": int(result.returncode),
-                "ok": status_ok,
-                "stderr": (result.stderr or "").strip()[:400],
-            })
-            if status_ok:
-                return {
-                    "ok": True,
-                    "attempts": attempts,
-                    "winning_target": url,
-                    "winning_status": status_code,
-                }
-        except Exception as exc:
-            attempts.append({
-                "target": url,
-                "status_code": 0,
-                "ok": False,
-                "error": str(exc),
-            })
-    return {
-        "ok": False,
-        "attempts": attempts,
-    }
-
-
-def compat_headers() -> dict[str, str]:
-    return {
-        "Content-Type": "application/json",
-    }
-
-
-def checkout_proxy_lease(base_url: str) -> dict[str, Any]:
-    response = requests.post(
-        f"{base_url}/proxy/leases/checkout",
-        headers=compat_headers(),
-        json={
-            "hostId": "easyproxy-source-audit",
-            "providerTypeKey": "easy-proxies",
-            "provisionMode": "reuse-only",
-            "bindingMode": "shared-instance",
-            "metadata": {
-                "serviceKey": "easyproxy-source-audit",
-                "stage": "availability-audit",
-                "purpose": "shared-source-audit",
-            },
-        },
-        timeout=20,
-    )
-    if response.status_code >= 400:
-        body = response.text.strip()
-        raise RuntimeError(
-            f"proxy lease checkout failed with {response.status_code}: {body or '<empty body>'}"
-        )
-    payload = response.json()
-    result = payload.get("result") or {}
-    lease = result.get("lease") or {}
-    if not lease or not str(lease.get("id") or "").strip():
-        raise RuntimeError("proxy lease checkout returned an empty lease payload")
-    return lease
-
-
-def is_retryable_proxy_lease_error(message: str) -> bool:
-    text = str(message or "").strip().lower()
-    if not text:
-        return False
-    return (
-        "initial_proxy_probe_pending" in text
-        or "timeout waiting for initial probe completion" in text
-    )
-
-
-def report_proxy_lease(base_url: str, lease_id: str, *, success: bool, latency_ms: int = 0, error_code: str = "") -> None:
-    response = requests.post(
-        f"{base_url}/proxy/leases/report",
-        headers=compat_headers(),
-        json={
-            "leaseId": lease_id,
-            "success": bool(success),
-            "latencyMs": max(0, int(latency_ms)),
-            "errorCode": str(error_code or "").strip(),
-            "serviceKey": "easyproxy-source-audit",
-            "stage": "availability-audit",
-            "routeConfidence": "strict",
-        },
-        timeout=20,
-    )
-    response.raise_for_status()
-
-
-def release_proxy_lease(base_url: str, lease_id: str) -> None:
-    response = requests.post(
-        f"{base_url}/proxy/leases/{lease_id}/release",
-        timeout=20,
-    )
-    response.raise_for_status()
-
-
-def collect_container_networks(container_name: str) -> list[str]:
-    result = run(["docker", "inspect", container_name, "--format", "{{json .NetworkSettings.Networks}}"])
-    payload = json.loads(result.stdout.strip() or "{}")
-    if not isinstance(payload, dict):
-        return []
-    return sorted(payload.keys())
-
-
-def normalize_proxy_url_for_host(value: str) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return ""
-    return text.replace("://0.0.0.0:", "://127.0.0.1:")
-
-
-def build_direct_proxy_url(node: dict[str, Any], default_scheme: str = "http") -> str:
-    port = int(node.get("port") or 0)
-    if port <= 0:
-        return ""
-    listen_address = str(node.get("listen_address") or "").strip()
-    host = "127.0.0.1"
-    if listen_address and listen_address not in ("0.0.0.0", "::", "[::]"):
-        host = listen_address
-    scheme = str(default_scheme or "http").strip() or "http"
-    return f"{scheme}://{host}:{port}"
-
-
-def candidate_priority(node: dict[str, Any]) -> tuple[int, int, int, int]:
-    effective = 1 if node.get("effective_available") is True else 0
-    available = 1 if node.get("available") is True else 0
-    score = int(node.get("availability_score") or 0)
-    latency = int(node.get("last_latency_ms") or -1)
-    if latency <= 0:
-        latency = 1_000_000
-    return (
-        -effective,
-        -available,
-        -score,
-        latency,
-    )
-
-
-def collect_direct_probe_candidates(nodes: list[dict[str, Any]], *, default_scheme: str = "http") -> list[dict[str, Any]]:
-    candidates: list[dict[str, Any]] = []
-    for node in nodes:
-        if bool(node.get("blacklisted")):
-            continue
-        proxy_url = build_direct_proxy_url(node, default_scheme=default_scheme)
-        if not proxy_url:
-            continue
-        candidate = dict(node)
-        candidate["direct_proxy_url"] = proxy_url
-        candidates.append(candidate)
-    candidates.sort(key=candidate_priority)
-    return candidates
-
-
-def discover_directly_usable_nodes(
-    candidates: list[dict[str, Any]],
-    policy: dict[str, Any],
-    *,
-    network_container: str,
-    max_workers: int = 12,
-) -> tuple[list[str], list[dict[str, Any]]]:
-    if not candidates:
-        return [], []
-
-    stable_uris: list[str] = []
-    stable_results: list[dict[str, Any]] = []
-    retries = max(1, int(policy.get("direct_probe_retries", 1)))
-    retry_delay = max(0, int(policy.get("direct_probe_retry_delay_seconds", 1)))
-
-    def probe_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
-        last_result: dict[str, Any] = {"ok": False, "attempts": [], "error": "probe not started"}
-        for attempt_index in range(retries):
-            last_result = probe_http_proxy(
-                str(candidate.get("direct_proxy_url") or ""),
-                policy,
-                network_container=network_container,
-            )
-            if last_result.get("ok"):
-                return last_result
-            if attempt_index < retries - 1 and retry_delay > 0:
-                time.sleep(retry_delay)
-        return last_result
-
-    worker_count = max(1, min(max_workers, len(candidates)))
-    with ThreadPoolExecutor(max_workers=worker_count) as executor:
-        future_to_candidate = {
-            executor.submit(probe_candidate, candidate): candidate
-            for candidate in candidates
-        }
-        for future in as_completed(future_to_candidate):
-            candidate = future_to_candidate[future]
-            probe_result: dict[str, Any]
-            try:
-                probe_result = future.result()
-            except Exception as exc:
-                probe_result = {"ok": False, "attempts": [], "error": str(exc)}
-
-            if not probe_result.get("ok"):
-                continue
-
-            uri = str(candidate.get("uri") or "").strip()
-            if not uri:
-                continue
-
-            stable_uris.append(uri)
-            stable_results.append(
-                {
-                    "tag": str(candidate.get("tag") or ""),
-                    "name": str(candidate.get("name") or ""),
-                    "port": int(candidate.get("port") or 0),
-                    "uri": uri,
-                    "direct_proxy_url": str(candidate.get("direct_proxy_url") or ""),
-                    "effective_available": bool(candidate.get("effective_available") is True),
-                    "availability_source": str(candidate.get("availability_source") or ""),
-                    "traffic_proven_usable": bool(candidate.get("traffic_proven_usable") is True),
-                    "availability_score": int(candidate.get("availability_score") or 0),
-                    "last_latency_ms": int(candidate.get("last_latency_ms") or 0),
-                    "last_error": str(candidate.get("last_error") or ""),
-                    "direct_probe": probe_result,
-                }
-            )
-
-    stable_uris = sorted(dict.fromkeys(stable_uris))
-    stable_results.sort(key=lambda item: (int(item.get("last_latency_ms") or 1_000_000), str(item.get("tag") or "")))
-    return stable_uris, stable_results
-
-
-def stop_container(container_name: str) -> None:
-    subprocess.run(["docker", "rm", "-f", container_name], capture_output=True, text=True, check=False)
-
 
 def main() -> int:
     args = parse_args()
@@ -942,7 +404,6 @@ def main() -> int:
         if not args.keep_artifacts:
             # The secret-bearing config is always removed; other diagnostics may remain.
             pass
-
 
 if __name__ == "__main__":
     try:

@@ -2,51 +2,5 @@
   "schema_version": 1,
   "soft_limit": 500,
   "hard_limit": 700,
-  "legacy_over_limit": {
-    "deploy/service/base/scripts/validate-local-server-device-profiles.ps1": {
-      "max_effective_lines": 780,
-      "reason": "Legacy Local Server end-to-end harness pending behavior-based R6 extraction.",
-      "plan_wave": "R6"
-    },
-    "scripts/easyproxy_source_audit.py": {
-      "max_effective_lines": 849,
-      "reason": "Legacy source audit command pending report and policy extraction in R6.",
-      "plan_wave": "R6"
-    },
-    "service/base/internal/app/routing_controller_test.go": {
-      "max_effective_lines": 1193,
-      "reason": "Legacy routing suite pending split by selection, failover, and lifecycle behavior.",
-      "plan_wave": "R6"
-    },
-    "service/base/internal/boxmgr/manager_test.go": {
-      "max_effective_lines": 2526,
-      "reason": "Legacy runtime suite pending split by lifecycle, persistence, and concurrency behavior.",
-      "plan_wave": "R6"
-    },
-    "service/base/internal/config/config_test.go": {
-      "max_effective_lines": 1489,
-      "reason": "Legacy configuration suite pending split by parsing, defaults, validation, and persistence.",
-      "plan_wave": "R6"
-    },
-    "service/base/internal/monitor/manager_test.go": {
-      "max_effective_lines": 1356,
-      "reason": "Legacy monitor suite pending split by scheduler, generation, and aggregation behavior.",
-      "plan_wave": "R6"
-    },
-    "service/base/internal/monitor/server_test.go": {
-      "max_effective_lines": 3666,
-      "reason": "Legacy management API suite pending split by auth, handlers, and lease behavior.",
-      "plan_wave": "R6"
-    },
-    "service/base/internal/outbound/pool/pool_test.go": {
-      "max_effective_lines": 867,
-      "reason": "Legacy pool suite pending split by selection, failure, and traffic behavior.",
-      "plan_wave": "R6"
-    },
-    "service/base/internal/subscription/connectors_test.go": {
-      "max_effective_lines": 1008,
-      "reason": "Legacy connector suite pending split by ECH, ZenProxy, and failure behavior.",
-      "plan_wave": "R6"
-    }
-  }
+  "legacy_over_limit": {}
 }
