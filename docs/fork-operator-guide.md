@@ -66,6 +66,11 @@ matrix is in [`github-secrets.md`](github-secrets.md). At minimum configure:
 - optional `EASYPROXY_MISUB_D1_DATABASE_BINDING`; when set it must be
   `MISUB_DB`
 
+`CLOUDFLARE_ACCOUNT_ID` is deliberately a non-secret Repository variable, not
+an Actions secret. When migrating an older repository, copy the exact existing
+value into the variable and remove the obsolete secret only after a successful
+preflight. Never substitute a different account ID during an update.
+
 Leave `EASYPROXY_AGGREGATOR_ENABLE_SCHEDULE` unset or `false` until the first
 manual publication succeeds.
 
@@ -80,6 +85,10 @@ manual publication succeeds.
 - `ECH_TOKEN`
 - Aggregator credentials beginning with `EASYPROXY_AGGREGATOR_`, as listed in
   [`github-secrets.md`](github-secrets.md)
+
+The workflows accept only `CLOUDFLARE_API_TOKEN`. Delete obsolete
+`CLOUDFLARE_AUTH_EMAIL` and `CLOUDFLARE_GLOBAL_API_KEY` secrets after verifying
+the least-privilege token; they are not fallback credentials.
 
 The root `MISUB_*` secret names are deployment inputs. The workflow writes
 their values to the MiSub Pages runtime names `ADMIN_PASSWORD`,

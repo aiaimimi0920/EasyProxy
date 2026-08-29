@@ -1261,11 +1261,20 @@ Variables/Secrets 合同、备份/恢复/轮换步骤、fork-neutral 原生安�
 更新/回滚步骤已经补齐；工作流统一要求最小权限 API Token，并拒绝 Global API
 Key。静态合同测试、原生发布测试和 release contract 已通过。
 
-当前不能把准备工作写成端到端通过：本机 GitHub API 凭据返回 401，且没有提供
-独立的新 Fork、专用空 Cloudflare 测试账户、Cloudflare 测试 Token/R2 凭据、
-可销毁 Windows Service 主机和 Linux arm64 主机。禁止借用生产账户或当前 NAS
-来伪造破坏性验收；获得这些资源后严格按
+当前不能把准备工作写成端到端通过：Git 凭据管理器中的唯一有效 GitHub 身份
+就是源仓库所有者，而且不属于任何 Organization，因此无法创建要求的独立 Fork；
+同时没有专用空 Cloudflare 测试账户、Cloudflare 测试 Token/R2 凭据、可销毁
+Windows Service 主机和 Linux arm64 主机。现有仓库仍把
+`CLOUDFLARE_ACCOUNT_ID` 存为旧 Secret，且未创建两个受保护 Environment；在运行
+新工作流前，操作者必须把同一值迁移为 Repository variable 并按公开手册补齐门禁。
+禁止借用生产账户或当前 NAS 来伪造破坏性验收；获得独立资源后严格按
 [`docs/fork-operator-guide.md`](docs/fork-operator-guide.md) 逐项执行并留存清单。
+
+对当前 NAS 做过只读审计，但不计作本阶段验收：Linux amd64 容器连续运行 6 天、
+restart count 为 0，管理登录、管理 API、LAN CONNECT 代理均成功；它仍是优化前的
+临时镜像而非本阶段 release。运行时共有 66 个节点、17 个可用节点，MiSub manifest
+从 2026-08-28 18:24 UTC 后未再成功，当前错误是 D1 模式缺少 `MISUB_DB` binding，
+因此 source sync 正使用 fallback。修复生产部署前不得声称 NAS 完全健康。
 
 - [ ] P8-01 使用全新 GitHub Fork；
 - [ ] P8-02 使用空 Cloudflare 测试账户；
