@@ -13,16 +13,6 @@
       "reason": "Legacy source audit command pending report and policy extraction in R6.",
       "plan_wave": "R6"
     },
-    "service/base/frontend/src/components/ManagePanel.tsx": {
-      "max_effective_lines": 1051,
-      "reason": "Legacy node management component pending state and presentation extraction.",
-      "plan_wave": "R5"
-    },
-    "service/base/frontend/src/components/SettingsPanel.tsx": {
-      "max_effective_lines": 1037,
-      "reason": "Legacy settings component pending domain card and state-hook extraction.",
-      "plan_wave": "R5"
-    },
     "service/base/internal/app/routing_controller_test.go": {
       "max_effective_lines": 1193,
       "reason": "Legacy routing suite pending split by selection, failover, and lifecycle behavior.",
