@@ -108,6 +108,13 @@ class ValidateWorkflowContractTests(unittest.TestCase):
         self.assertIn("verify-cloudflare-worker-identity.py", self.cloudflare_workflow)
         self.assertIn("Prove update is not an implicit token rotation", self.cloudflare_workflow)
 
+    def test_ech_job_installs_verification_dependencies_before_identity_check(self):
+        ech_job = self.cloudflare_workflow.split("  deploy-ech-workers-cloudflare:", 1)[1]
+        dependency_step = ech_job.index("Install ECH verification dependencies")
+        identity_step = ech_job.index("Resolve exact Worker identity")
+        self.assertLess(dependency_step, identity_step)
+        self.assertIn("python -m pip install requests websockets", ech_job[:identity_step])
+
     def test_ech_rotation_has_overlap_candidate_revocation_and_rollback(self):
         workflow = self.rotate_ech_workflow
         self.assertIn("environment: easyproxy-ech-rotation", workflow)

@@ -420,6 +420,12 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Install ECH verification dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install requests websockets
+
       - name: Assert Worker deployment secrets
         shell: bash
         env:
@@ -460,7 +466,6 @@ jobs:
           ECH_TOKEN: ${{ secrets.ECH_TOKEN }}
         run: |
           set -euo pipefail
-          python -m pip install requests websockets
           python scripts/verify-ech-worker-deploy.py --base-url "$ECH_WORKER_PUBLIC_URL"
 
       - name: Sync ech-workers-cloudflare secret
@@ -492,8 +497,6 @@ jobs:
           ECH_TOKEN: ${{ secrets.ECH_TOKEN }}
         run: |
           set -euo pipefail
-          python -m pip install --upgrade pip
-          python -m pip install requests websockets
           python scripts/verify-cloudflare-worker-identity.py \
             --account-id "${CLOUDFLARE_ACCOUNT_ID}" \
             --worker-name "${{ steps.worker_identity.outputs.worker_name }}" \
