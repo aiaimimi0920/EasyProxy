@@ -164,9 +164,9 @@ def main() -> int:
             "--env",
             "EASY_PROXY_RUN_AS_ROOT=1",
             "-v",
-            f"{config_path.resolve()}:/var/lib/easyproxy/config/config.yaml",
-            "-v",
             f"{data_dir.resolve()}:/var/lib/easyproxy",
+            "-v",
+            f"{config_path.resolve()}:/var/lib/easyproxy/config/config.yaml",
         ]
         if args.docker_network_name.strip():
             docker_args.extend(["--network", args.docker_network_name.strip()])

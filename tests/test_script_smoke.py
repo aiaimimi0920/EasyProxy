@@ -297,6 +297,13 @@ class ScriptSmokeTests(unittest.TestCase):
         self.assertIn("os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600", source)
         self.assertIn('"EASY_PROXY_RUN_AS_ROOT=1"', source)
 
+    def test_source_audit_mounts_parent_state_before_nested_config(self):
+        source = (REPO_ROOT / "scripts/easyproxy_source_audit.py").read_text(encoding="utf-8")
+        state_mount = 'f"{data_dir.resolve()}:/var/lib/easyproxy",'
+        config_mount = 'f"{config_path.resolve()}:/var/lib/easyproxy/config/config.yaml",'
+
+        self.assertLess(source.index(state_mount), source.index(config_mount))
+
     def test_local_server_validation_modules_parse_and_load(self):
         script_root = REPO_ROOT / "deploy/service/base/scripts"
         paths = [
