@@ -49,9 +49,19 @@ def fake_system_tools(directory: Path) -> None:
     )
 
 
-def run_installer(environment: dict[str, str], *arguments: str) -> subprocess.CompletedProcess[str]:
+def run_installer(
+    environment: dict[str, str], fake_bin: Path, *arguments: str
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["sh", str(INSTALLER), *arguments],
+        [
+            "sh",
+            "-c",
+            'PATH="$1:$PATH"; export PATH; shift; exec sh "$@"',
+            "easyproxy-installer-test",
+            shell_path(fake_bin),
+            shell_path(INSTALLER),
+            *arguments,
+        ],
         cwd=ROOT,
         env=environment,
         capture_output=True,
@@ -104,7 +114,9 @@ def test_linux_installer_migrates_preserves_and_rolls_back_config_authority():
                 "EASYPROXY_SYSTEMD_UNIT_PATH": shell_path(unit_path),
             }
         )
-        installed = run_installer(environment, "--version", "v-test", "--archive", shell_path(archive))
+        installed = run_installer(
+            environment, fake_bin, "--version", "v-test", "--archive", shell_path(archive)
+        )
         assert installed.returncode == 0, installed.stderr or installed.stdout
 
         runtime_config = state_root / "config/config.yaml"
@@ -118,7 +130,7 @@ def test_linux_installer_migrates_preserves_and_rolls_back_config_authority():
 
         runtime_config.write_text("sentinel: changed\n", encoding="utf-8")
         (state_root / "data/data.db").write_bytes(b"sqlite-changed")
-        rolled_back = run_installer(environment, "--rollback", shell_path(backups[0]))
+        rolled_back = run_installer(environment, fake_bin, "--rollback", shell_path(backups[0]))
         assert rolled_back.returncode == 0, rolled_back.stderr or rolled_back.stdout
         assert runtime_config.read_text(encoding="utf-8") == "sentinel: legacy\n"
         assert (state_root / "data/data.db").read_bytes() == b"sqlite-legacy"
