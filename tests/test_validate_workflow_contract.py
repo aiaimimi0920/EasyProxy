@@ -41,6 +41,9 @@ class ValidateWorkflowContractTests(unittest.TestCase):
             self.publish_ghcr_workflow,
         ):
             self.assertIn("python -m pip install -r requirements-ci.txt", workflow)
+            self.assertIn("python -m pytest -q tests", workflow)
+            self.assertNotIn('python -m unittest discover -s "tests"', workflow)
+        self.assertTrue(any(requirement.startswith("pytest") for requirement in self.root_test_requirements))
         self.assertIn("websockets", self.root_test_requirements)
 
     def test_root_ci_rejects_uncommitted_generated_assets(self):

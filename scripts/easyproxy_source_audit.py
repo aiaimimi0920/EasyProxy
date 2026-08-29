@@ -164,7 +164,7 @@ def main() -> int:
             "--env",
             "EASY_PROXY_RUN_AS_ROOT=1",
             "-v",
-            f"{config_path.resolve()}:/etc/easyproxy/config.yaml",
+            f"{config_path.resolve()}:/var/lib/easyproxy/config/config.yaml",
             "-v",
             f"{data_dir.resolve()}:/var/lib/easyproxy",
         ]

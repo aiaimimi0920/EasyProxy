@@ -65,7 +65,7 @@ jobs:
       - name: Run root script smoke tests
         shell: pwsh
         run: |
-          python -m unittest discover -s "tests" -p "test_*.py" -v
+          python -m pytest -q tests
 
       - name: Run aggregator regression tests
         shell: pwsh

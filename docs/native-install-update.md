@@ -18,7 +18,8 @@ Linux transparent gateway deployment remains the advanced Debian/Docker path.
 
 - Linux programs: `/opt/easyproxy/releases/<version>` with `current` and
   `previous` symlinks.
-- Linux config: `/etc/easyproxy/config.yaml`.
+- Linux writable config authority: `/var/lib/easyproxy/config/config.yaml`.
+- Linux bootstrap/migration copy: `/etc/easyproxy/config.yaml`.
 - Linux state: `/var/lib/easyproxy`.
 - Windows programs: `%ProgramFiles%\EasyProxy\releases\<version>`.
 - Windows config and state: `%ProgramData%\EasyProxy`.
@@ -26,6 +27,9 @@ Linux transparent gateway deployment remains the advanced Debian/Docker path.
 An update never replaces an existing config unless `--replace-config` on Linux
 or `-ReplaceConfig` on Windows is explicitly supplied. Both installers stop the
 service before copying config and SQLite state into a timestamped backup.
+On the first Linux update from an older installation, the installer copies the
+existing `/etc/easyproxy/config.yaml` into the writable state path before taking
+the backup; the original remains available as the bootstrap/rollback copy.
 
 ## Linux
 

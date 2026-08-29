@@ -66,7 +66,7 @@ RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debia
     && apt-get install -y --no-install-recommends ca-certificates gosu iproute2 nftables python3 python3-boto3 \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -r -u 10001 easy \
-    && mkdir -p /etc/easyproxy /etc/easyproxy/bootstrap /var/lib/easyproxy/data /var/lib/easyproxy/connectors /usr/share/easyproxy/cfst \
+    && mkdir -p /etc/easyproxy /etc/easyproxy/bootstrap /var/lib/easyproxy/config /var/lib/easyproxy/data /var/lib/easyproxy/connectors /usr/share/easyproxy/cfst \
     && chown -R easy:easy /etc/easyproxy /var/lib/easyproxy
 
 WORKDIR /app
@@ -84,4 +84,4 @@ COPY --chown=easy:easy deploy/service/base/config.template.yaml /etc/easyproxy/c
 
 EXPOSE 22323 29888 25000-25500
 ENTRYPOINT ["docker-entrypoint.sh"]
-CMD ["--config", "/etc/easyproxy/config.yaml"]
+CMD ["--config", "/var/lib/easyproxy/config/config.yaml"]

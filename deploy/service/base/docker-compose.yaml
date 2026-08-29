@@ -13,8 +13,8 @@ services:
       - "${EASY_PROXY_SERVICE_MANAGEMENT_PORT_BINDING:-29888:29888}"
       - "${EASY_PROXY_SERVICE_MULTI_PORT_BINDING:-25000-25500:25000-25500}"
     volumes:
-      - ./config.yaml:/etc/easyproxy/config.yaml:ro
       - ./data:/var/lib/easyproxy
+      - ./config.yaml:/var/lib/easyproxy/config/config.yaml
     dns:
       - 1.1.1.1
       - 8.8.8.8
@@ -34,6 +34,7 @@ services:
     # - image also contains /usr/local/bin/ech-workers for connector runtime
     # - image also contains /usr/local/bin/cfst + /usr/share/easyproxy/cfst/ip.txt
     #   for local preferred Cloudflare entry-IP generation
+    # - config.yaml is the writable configuration authority used by WebUI/API
 
 networks:
   easyproxy-service-network:

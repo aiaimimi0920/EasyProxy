@@ -102,7 +102,9 @@ local_server:
 
 management:
   enabled: true
-  listen: 0.0.0.0:29888
+  # Binding outside loopback requires a non-empty management password. When
+  # Local Server is enabled, its canonical auth pair supplies that password.
+  listen: 127.0.0.1:29888
   probe_targets:
     - "https://connectivitycheck.gstatic.com/generate_204"
     - "https://cp.cloudflare.com/generate_204"

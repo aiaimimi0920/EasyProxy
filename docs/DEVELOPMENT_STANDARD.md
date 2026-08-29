@@ -234,6 +234,12 @@ Markdown 等纯文档不执行源代码行数门禁，但应按主题拆分、�
 `deploy/service/base/config.yaml` 是本地运行时和 WebUI 持久化权威。拓扑更新与普通
 部署不得覆盖已经存在的运行时文件。
 
+官方 Docker 部署必须把该宿主机文件以可写方式映射到
+`/var/lib/easyproxy/config/config.yaml`。镜像内 `/etc/easyproxy/config.yaml` 只能作为
+首次启动或旧部署迁移的 bootstrap，不得作为 WebUI/API 的只读写入目标。Linux 原生
+服务同样以 `/var/lib/easyproxy/config/config.yaml` 为权威；Windows 继续使用
+`%ProgramData%\EasyProxy\config.yaml`。
+
 `upstreams/misub/.env`、`workers/ech-workers-cloudflare/.dev.vars`、bootstrap 和
 部署 manifest 属于本地或平台状态，不得提交真实秘密。旧根 `config.yaml`、派生
 renderer 和自动同步 GitHub 配置的入口已经删除，不得重新引入第二套配置决策逻辑。
@@ -395,7 +401,7 @@ baseline/ratchet 门禁，并在 `.github/workflows/reusable-validate.yml` 中�
 ### 12.2 根脚本与发布合同
 
 ```powershell
-python -m unittest discover -s "tests" -p "test_*.py" -v
+python -m pytest -q tests
 python -m unittest discover -s "upstreams/aggregator/tests" -p "test_*.py" -v
 python scripts/validate-release-contract.py
 git diff --check

@@ -271,9 +271,9 @@ The current container path contract is:
 
 - runtime config path:
   - resolved from `EASY_PROXY_CONFIG_PATH`
-  - defaults to `/etc/easyproxy/config.yaml`
-  - GHCR stateful deployments may instead bind
+  - defaults to the writable state path
     `/var/lib/easyproxy/config/config.yaml`
+  - `/etc/easyproxy/config.yaml` is a bootstrap/migration copy only
 - writable runtime home: `/var/lib/easyproxy`
 - SQLite DB: `/var/lib/easyproxy/data/data.db`
 - connector work dir: `/var/lib/easyproxy/connectors`

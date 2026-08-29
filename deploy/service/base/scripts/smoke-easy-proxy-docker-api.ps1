@@ -1,6 +1,7 @@
 param(
     [string]$SmokeId = ("smoke-" + (Get-Date -Format "yyyyMMdd-HHmmss")),
     [string]$Image = "",
+    [switch]$BootstrapMigration,
     [switch]$KeepArtifacts,
     [switch]$SkipCleanup
 )
@@ -40,6 +41,25 @@ function Invoke-JsonApi {
     return Invoke-RestMethod @invokeParams
 }
 
+function Wait-ManagementSettings {
+    param(
+        [Parameter(Mandatory = $true)][string]$BaseUrl,
+        [Parameter(Mandatory = $true)][hashtable]$Headers,
+        [int]$TimeoutSeconds = 480
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        try {
+            return Invoke-JsonApi -Method GET -Uri "$BaseUrl/api/settings" -Headers $Headers
+        }
+        catch {
+            Start-Sleep -Seconds 3
+        }
+    }
+    throw "easy-proxy-monorepo-service management API did not become ready before timeout"
+}
+
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $deployDir = Split-Path -Parent $scriptDir
 $repoRoot = (Resolve-Path (Join-Path $scriptDir "..\..\..\..")).Path
@@ -49,14 +69,18 @@ $proxyPort = Get-FreeTcpPort
 $projectName = ("easyproxysmoke" + ($SmokeId -replace "[^a-zA-Z0-9]", "")).ToLowerInvariant()
 $artifactDir = Join-Path $repoRoot ("tmp\\easy-proxy-docker-api-smoke\\" + $SmokeId)
 $stateDir = Join-Path $artifactDir "state"
-$configDir = Join-Path $stateDir "config"
-$configPath = Join-Path $configDir "config.yaml"
+$configPath = Join-Path $artifactDir "config.yaml"
+$runtimeConfigHostPath = if ($BootstrapMigration) {
+    Join-Path $stateDir "config\\config.yaml"
+} else {
+    $configPath
+}
 $composePath = Join-Path $artifactDir "docker-compose.yaml"
 $evidencePath = Join-Path $artifactDir "evidence.json"
 $authHeaderValue = "smoke-secret"
 $containerConfigPath = "/var/lib/easyproxy/config/config.yaml"
 
-New-Item -ItemType Directory -Force -Path $configDir | Out-Null
+New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
 
 $configYaml = @"
 mode: hybrid
@@ -140,6 +164,11 @@ $composeBuildBlock = if ([string]::IsNullOrWhiteSpace($Image)) {
 } else {
     ""
 }
+$configMount = if ($BootstrapMigration) {
+    "      - ./config.yaml:/etc/easyproxy/config.yaml:ro"
+} else {
+    "      - ./config.yaml:${containerConfigPath}"
+}
 
 $composeYaml = @"
 services:
@@ -155,6 +184,7 @@ ${composeBuildBlock}
       - "${proxyPort}:${proxyPort}"
     volumes:
       - ./state:/var/lib/easyproxy
+${configMount}
 "@
 
 Set-Content -Path $configPath -Value $configYaml -Encoding UTF8
@@ -184,22 +214,7 @@ try {
         throw "docker compose up failed"
     }
 
-    $deadline = (Get-Date).AddMinutes(8)
-    $healthy = $false
-    while ((Get-Date) -lt $deadline) {
-        try {
-            $settings = Invoke-JsonApi -Method GET -Uri "$baseUrl/api/settings" -Headers $headers
-            $healthy = $true
-            break
-        }
-        catch {
-            Start-Sleep -Seconds 3
-        }
-    }
-
-    if (-not $healthy) {
-        throw "easy-proxy-monorepo-service management API did not become ready before timeout"
-    }
+    $settings = Wait-ManagementSettings -BaseUrl $baseUrl -Headers $headers
 
     $nodesConfig = Invoke-JsonApi -Method GET -Uri "$baseUrl/api/nodes/config" -Headers $headers
     try {
@@ -218,6 +233,27 @@ try {
         uri  = "http://127.0.0.1:10"
     }
     $nodesConfigAfterCreate = Invoke-JsonApi -Method GET -Uri "$baseUrl/api/nodes/config" -Headers $headers
+    $settings.log_level = "debug"
+    $settingsUpdate = Invoke-JsonApi -Method PUT -Uri "$baseUrl/api/settings" -Headers $headers -Body $settings
+    if (-not ((Get-Content -LiteralPath $runtimeConfigHostPath -Raw) -match '(?m)^log_level:\s*debug\s*$')) {
+        throw "management API update did not persist to the mounted config authority"
+    }
+    if ($BootstrapMigration -and ((Get-Content -LiteralPath $configPath -Raw) -match '(?m)^log_level:\s*debug\s*$')) {
+        throw "bootstrap migration unexpectedly modified the read-only legacy config"
+    }
+
+    & docker compose @composeArgs restart easy-proxy-monorepo-service
+    if ($LASTEXITCODE -ne 0) {
+        throw "docker compose restart failed"
+    }
+    $settingsAfterRestart = Wait-ManagementSettings -BaseUrl $baseUrl -Headers $headers
+    if ($settingsAfterRestart.log_level -ne "debug") {
+        throw "persisted management setting was missing after container restart"
+    }
+    $nodesConfigAfterRestart = Invoke-JsonApi -Method GET -Uri "$baseUrl/api/nodes/config" -Headers $headers
+    if (-not (@($nodesConfigAfterRestart.nodes).name -contains "dummy-second-http")) {
+        throw "SQLite-backed manual node was missing after container restart"
+    }
 
     & docker compose @composeArgs exec -T easy-proxy-monorepo-service sh -lc "test -f ${containerConfigPath} && test -d /var/lib/easyproxy && test -x /usr/local/bin/easy-proxy && test -f /var/lib/easyproxy/data/data.db"
     if ($LASTEXITCODE -ne 0) {
@@ -235,7 +271,8 @@ try {
         managementBaseUrl = $baseUrl
         proxyPort = $proxyPort
         composePath = $composePath
-        configPath = $configPath
+        configPath = $runtimeConfigHostPath
+        bootstrapMigration = [bool]$BootstrapMigration
         checks = [ordered]@{
             settingsGet = [ordered]@{
                 mode = $settings.mode
@@ -245,11 +282,16 @@ try {
             }
             nodesConfigCount = @($nodesConfig.nodes).Count
             nodesConfigAfterCreateCount = @($nodesConfigAfterCreate.nodes).Count
+            nodesConfigAfterRestartCount = @($nodesConfigAfterRestart.nodes).Count
             createdNodeName = $createdNode.node.name
+            settingsUpdateMessage = $settingsUpdate.message
+            updatedLogLevel = $settingsAfterRestart.log_level
             connectorsConfigStatus = $connectorsConfigStatus
             connectorsConfigCount = $connectorCount
             exportLength = $exportText.Content.Length
             configMounted = $true
+            configWritePersisted = $true
+            restartManagementListen = $settingsAfterRestart.management_listen
             stateDirMounted = $true
             sqliteCreated = $true
             containerConfigPath = $containerConfigPath

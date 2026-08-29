@@ -60,7 +60,7 @@ func (c *Config) applyDefaults() error {
 	}
 	c.MultiPort.Protocol = multiPortProtocol
 	if c.Management.Listen == "" {
-		c.Management.Listen = "0.0.0.0:29888"
+		c.Management.Listen = "127.0.0.1:29888"
 	}
 	if len(c.Management.ProbeTargets) == 0 && c.Management.ProbeTarget == "" {
 		c.Management.ProbeTargets = DefaultManagementProbeTargets()

@@ -59,6 +59,9 @@ func TestApplyDefaultsSetsNeutralProbeTargets(t *testing.T) {
 	if len(cfg.Management.ProbeTargets) == 0 {
 		t.Fatal("expected default probe targets to be populated")
 	}
+	if got, want := cfg.Management.Listen, "127.0.0.1:29888"; got != want {
+		t.Fatalf("unexpected default management listen: got %q want %q", got, want)
+	}
 	wantTargets := []string{
 		"https://connectivitycheck.gstatic.com/generate_204",
 		"https://cp.cloudflare.com/generate_204",

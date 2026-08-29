@@ -8,8 +8,8 @@ services:
       - "${EASY_PROXY_POOL_BINDING:-22323:22323}"
       - "${EASY_PROXY_MANAGEMENT_BINDING:-29888:29888}"
     volumes:
-      - ${EASY_PROXY_CONFIG_PATH:-./runtime/config.yaml}:/etc/easyproxy/config.yaml:ro
       - ${EASY_PROXY_STATE_PATH:-./runtime/data}:/var/lib/easyproxy
+      - ${EASY_PROXY_CONFIG_PATH:-./runtime/config.yaml}:/var/lib/easyproxy/config/config.yaml
     healthcheck:
       test: ["CMD-SHELL", "python3 -c 'import socket; s=socket.create_connection((\"127.0.0.1\", 29888), 5); s.close()'"]
       interval: 30s

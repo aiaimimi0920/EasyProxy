@@ -72,6 +72,14 @@ func (s *Server) PrepareListener(enabled bool, listen string, targetConfigs ...*
 	oldConfigSource := s.cfgSrc
 	oldRuntimeConfig := cloneRuntimeConfig(s.cfg)
 	s.cfgMu.RUnlock()
+	password := oldRuntimeConfig.Password
+	if hasTargetConfig {
+		password = targetRuntime.password
+	}
+	if err := validateManagementListenerAuth(enabled, listen, password); err != nil {
+		s.configUpdateMu.Unlock()
+		return nil, err
+	}
 
 	s.lifecycleMu.Lock()
 	defer s.lifecycleMu.Unlock()
@@ -109,6 +117,26 @@ func (s *Server) PrepareListener(enabled bool, listen string, targetConfigs ...*
 	transition.newListener = listener
 	transition.newServer = &http.Server{Addr: listen, Handler: s.handler}
 	return transition, nil
+}
+
+func validateManagementListenerAuth(enabled bool, listen, password string) error {
+	if !enabled || password != "" {
+		return nil
+	}
+	host, _, err := net.SplitHostPort(strings.TrimSpace(listen))
+	if err != nil {
+		return fmt.Errorf("parse management listen address %q: %w", listen, err)
+	}
+	if strings.EqualFold(host, "localhost") {
+		return nil
+	}
+	if address, _, ok := strings.Cut(host, "%"); ok {
+		host = address
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return nil
+	}
+	return fmt.Errorf("management listener %q requires a password when bound to a non-loopback address", listen)
 }
 
 // Activate publishes the prepared listener while deliberately leaving the old

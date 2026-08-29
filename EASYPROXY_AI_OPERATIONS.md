@@ -87,6 +87,9 @@ For a local checkout and a rendered config:
 
 The embedded management UI is normally served at
 http://127.0.0.1:29888/.
+An empty management password is accepted only on a loopback listener. Binding
+the management plane to a wildcard, LAN, or other non-loopback address requires
+a non-empty password; Local Server mode derives it from `local_server.auth`.
 
 ### 2.3 Debian/NAS gateway deployment
 
@@ -194,6 +197,9 @@ proxy traffic. The default failure policy is:
 ## 5. Management API
 
 Base URL: http://<management-host>:29888.
+
+Container deployments use `/var/lib/easyproxy/config/config.yaml` as the
+writable runtime authority. `/etc/easyproxy/config.yaml` is bootstrap-only.
 
 GET /api/auth is unauthenticated discovery. It reports whether the runtime uses
 the canonical username/password pair. Other API routes use management auth.
@@ -323,7 +329,7 @@ status before escalating.
 
 Run serially from the repository root before committing runtime changes:
 
-    python -m unittest discover -s tests -p "test_*.py" -v
+    python -m pytest -q tests
     python -m unittest discover -s upstreams/aggregator/tests -p "test_*.py" -v
     python scripts/check-go-format.py service/base/cmd service/base/internal
     Set-Location service/base

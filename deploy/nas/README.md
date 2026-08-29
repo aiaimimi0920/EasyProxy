@@ -22,11 +22,12 @@ Docker Compose. Native Synology/QNAP packages are not published or claimed.
    mkdir -p runtime
    cp ../service/base/config.template.yaml runtime/config.yaml
    ```
-2. Create the state directory and assign it to the image UID:
+2. Create the state directory and assign both persistent inputs to the image
+   UID so WebUI/API changes can update the runtime config:
 
    ```sh
    mkdir -p runtime/data
-   sudo chown -R 10001:10001 runtime/data
+   sudo chown -R 10001:10001 runtime
    ```
 
 3. Select an immutable release tag or digest. `latest` is rejected:
@@ -41,10 +42,13 @@ Docker Compose. Native Synology/QNAP packages are not published or claimed.
 4. Verify `http://NAS_IP:29888/` and configure LAN clients to use
    `NAS_IP:22323`.
 
-The config is mounted read-only at `/etc/easyproxy/config.yaml`; SQLite and
-runtime state are mounted at `/var/lib/easyproxy`. Replacing the image does not
-replace either bind mount. Before an update, back up both `runtime/config.yaml`
-and `runtime/data`; restore both if a migration or health check fails.
+The host file `runtime/config.yaml` is mounted as the writable configuration
+authority at `/var/lib/easyproxy/config/config.yaml`; SQLite and other runtime
+state are also under `/var/lib/easyproxy`. The image copy at
+`/etc/easyproxy/config.yaml` is bootstrap-only. Replacing the image does not
+replace either host bind mount. Before an update, back up both
+`runtime/config.yaml` and `runtime/data`; restore both if a migration or health
+check fails.
 
 ## Update
 
@@ -91,7 +95,7 @@ docker compose down
 cp -p "$backup/config.yaml" runtime/config.yaml
 rm -rf runtime/data
 tar -C runtime -xzf "$backup/data.tar.gz"
-sudo chown -R 10001:10001 runtime/data
+sudo chown -R 10001:10001 runtime
 export EASY_PROXY_IMAGE="$(cat "$backup/image.txt")"
 sh ./preflight.sh
 docker compose up -d --force-recreate

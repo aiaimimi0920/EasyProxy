@@ -23,7 +23,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\init-runtime-config.ps1
 Edit `topology.yaml` for deployment/resource choices. Its `secrets` fields are
 environment variable names, not values. Edit
 `deploy/service/base/config.yaml` for local listener, source, connector,
-routing, gateway, and management behavior.
+routing, gateway, and management behavior. Docker mounts that host file as the
+writable in-container authority at `/var/lib/easyproxy/config/config.yaml`;
+`/etc/easyproxy/config.yaml` is only a first-start migration/bootstrap copy.
 
 Validate deployment configuration:
 
@@ -126,11 +128,15 @@ Restrict `22323` and `29888` to trusted LAN CIDRs. See
 [`local-server.md`](local-server.md) before exposing the service to other
 devices.
 
+If `management.password` is empty, EasyProxy accepts only a loopback management
+listener. A wildcard, LAN, or other non-loopback management address requires a
+password; Local Server mode derives it from `local_server.auth`.
+
 ## 7. Validate
 
 ```powershell
 # Root contracts and scripts
-python -m unittest discover -s tests -p "test_*.py" -v
+python -m pytest -q tests
 
 # Lifecycle CLI
 Set-Location tools/easyproxyctl

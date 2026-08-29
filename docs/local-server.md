@@ -160,6 +160,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Projec
 
 Web Console changes persist to the same runtime file. Replace every placeholder
 credential before exposing the listener to a trusted LAN.
+Official Docker deployments mount that host file at the writable container path
+`/var/lib/easyproxy/config/config.yaml`; the image's `/etc/easyproxy/config.yaml`
+is bootstrap-only.
 
 ### Runtime Config Example
 
@@ -203,7 +206,10 @@ management:
   password: ""
 ```
 
-Replace the placeholder password before launching the binary or container.
+Replace the placeholder password before launching the binary or container. In
+Local Server mode that canonical password is synchronized to management auth.
+Outside Local Server mode, an empty management password is allowed only on a
+loopback listener; wildcard, LAN, and other non-loopback addresses fail closed.
 
 Local Server enabled mode rejects:
 

@@ -35,7 +35,7 @@ npm run lint
 npm run build
 
 Set-Location ../../..
-python -m unittest discover -s "tests" -p "test_*.py" -v
+python -m pytest -q tests
 python scripts/validate-release-contract.py
 python scripts/build-native-release-manifest.py --directory <assembled-release-dir> --verify
 git diff --check

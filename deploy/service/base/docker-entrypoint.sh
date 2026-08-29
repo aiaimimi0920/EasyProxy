@@ -5,7 +5,8 @@ EASY_PROXY_STATE_DIR="${EASY_PROXY_STATE_DIR:-/var/lib/easyproxy}"
 EASY_PROXY_RUNTIME_DIR="${EASY_PROXY_RUNTIME_DIR:-${EASY_PROXY_STATE_DIR}/runtime}"
 EASY_PROXY_DATA_DIR="${EASY_PROXY_DATA_DIR:-${EASY_PROXY_STATE_DIR}/data}"
 EASY_PROXY_CONNECTORS_DIR="${EASY_PROXY_CONNECTORS_DIR:-${EASY_PROXY_STATE_DIR}/connectors}"
-EASY_PROXY_CONFIG_PATH="${EASY_PROXY_CONFIG_PATH:-/etc/easyproxy/config.yaml}"
+EASY_PROXY_CONFIG_PATH="${EASY_PROXY_CONFIG_PATH:-${EASY_PROXY_STATE_DIR}/config/config.yaml}"
+EASY_PROXY_BOOTSTRAP_CONFIG_PATH="${EASY_PROXY_BOOTSTRAP_CONFIG_PATH:-/etc/easyproxy/config.yaml}"
 EASY_PROXY_BOOTSTRAP_PATH="${EASY_PROXY_BOOTSTRAP_PATH:-/etc/easyproxy/bootstrap/r2-bootstrap.json}"
 EASY_PROXY_IMPORT_CODE="${EASY_PROXY_IMPORT_CODE:-}"
 EASY_PROXY_IMPORT_STATE_PATH="${EASY_PROXY_IMPORT_STATE_PATH:-${EASY_PROXY_STATE_DIR}/import-sync-state.json}"
@@ -60,7 +61,7 @@ generate_bootstrap_from_import_code() {
         --output "${EASY_PROXY_BOOTSTRAP_PATH}"
 }
 
-bootstrap_runtime_config_if_needed() {
+initialize_runtime_config_if_needed() {
     if [ -f "${EASY_PROXY_CONFIG_PATH}" ]; then
         return 0
     fi
@@ -71,6 +72,15 @@ bootstrap_runtime_config_if_needed() {
             --bootstrap-path "${EASY_PROXY_BOOTSTRAP_PATH}" \
             --config-path "${EASY_PROXY_CONFIG_PATH}" \
             --state-path "${EASY_PROXY_IMPORT_STATE_PATH}"
+        return 0
+    fi
+
+    if [ -f "${EASY_PROXY_BOOTSTRAP_CONFIG_PATH}" ]; then
+        config_temp="${EASY_PROXY_CONFIG_PATH}.bootstrap.$$"
+        echo "[easy-proxy] initializing writable runtime config from ${EASY_PROXY_BOOTSTRAP_CONFIG_PATH}"
+        cp "${EASY_PROXY_BOOTSTRAP_CONFIG_PATH}" "${config_temp}"
+        chmod 0600 "${config_temp}"
+        mv "${config_temp}" "${EASY_PROXY_CONFIG_PATH}"
     fi
 }
 
@@ -189,7 +199,6 @@ ${arg}"
 
     echo "[easy-proxy] starting with config ${EASY_PROXY_CONFIG_PATH}"
     if [ "$(id -u)" = "0" ]; then
-        # The config may be a read-only bind mount; only mutate the writable state tree.
         chown -R easy:easy "${EASY_PROXY_STATE_DIR}"
         if is_truthy "${EASY_PROXY_RUN_AS_ROOT:-0}"; then
             /usr/local/bin/easy-proxy "$@" &
@@ -225,7 +234,7 @@ start_sync_loop() {
 
 ensure_layout
 generate_bootstrap_from_import_code
-bootstrap_runtime_config_if_needed
+initialize_runtime_config_if_needed
 ensure_config_exists
 
 if [ "$(id -u)" = "0" ]; then

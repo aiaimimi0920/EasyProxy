@@ -78,6 +78,11 @@ config. WebUI/API changes persist to that same deployed file. The former root
 `config.yaml` renderer and GitHub-setting synchronizer were removed so there is
 no second writer.
 
+In the official Docker layouts, that host file is mounted read-write at
+`/var/lib/easyproxy/config/config.yaml`. The image file
+`/etc/easyproxy/config.yaml` is bootstrap-only and is copied into writable state
+only when no runtime config or explicit remote bootstrap exists.
+
 ### Secrets
 
 Resolve every reference named by `topology.yaml` in the local process
@@ -248,7 +253,7 @@ go vet ./...
 Set-Location ..\..
 
 # Root scripts
-python -m unittest discover -s tests -p "test_*.py" -v
+python -m pytest -q tests
 
 # Aggregator fork
 python -m unittest discover -s upstreams/aggregator/tests -p "test_*.py" -v

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -93,6 +94,48 @@ func TestServerStartReturnsBindError(t *testing.T) {
 	defer shutdownLifecycleServer(server)
 	if err := server.Start(context.Background()); err == nil {
 		t.Fatal("Start() error = nil, want bind failure")
+	}
+}
+
+func TestValidateManagementListenerAuth(t *testing.T) {
+	tests := []struct {
+		name     string
+		enabled  bool
+		listen   string
+		password string
+		wantErr  bool
+	}{
+		{name: "disabled wildcard", listen: "0.0.0.0:29888"},
+		{name: "IPv4 loopback", enabled: true, listen: "127.0.0.1:29888"},
+		{name: "IPv6 loopback", enabled: true, listen: "[::1]:29888"},
+		{name: "localhost", enabled: true, listen: "localhost:29888"},
+		{name: "authenticated wildcard", enabled: true, listen: "0.0.0.0:29888", password: "secret"},
+		{name: "IPv4 wildcard", enabled: true, listen: "0.0.0.0:29888", wantErr: true},
+		{name: "IPv6 wildcard", enabled: true, listen: "[::]:29888", wantErr: true},
+		{name: "LAN address", enabled: true, listen: "192.0.2.10:29888", wantErr: true},
+		{name: "hostname", enabled: true, listen: "management.internal:29888", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateManagementListenerAuth(tt.enabled, tt.listen, tt.password)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("validateManagementListenerAuth() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestServerStartRejectsUnauthenticatedNonLoopbackListener(t *testing.T) {
+	mgr, err := NewManager(Config{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	defer mgr.Stop()
+	server := NewServer(Config{Enabled: true, Listen: "0.0.0.0:0"}, mgr, log.New(io.Discard, "", 0))
+	defer shutdownLifecycleServer(server)
+	err = server.Start(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "requires a password") {
+		t.Fatalf("Start() error = %v, want non-loopback password requirement", err)
 	}
 }
 

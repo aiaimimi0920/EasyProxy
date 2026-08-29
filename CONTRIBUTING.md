@@ -43,7 +43,7 @@ Clone with `--recurse-submodules`, or run
 Minimum regression checks for repository-level changes:
 
 ```powershell
-python -m unittest discover -s "tests" -p "test_*.py" -v
+python -m pytest -q tests
 python -m unittest discover -s "upstreams/aggregator/tests" -p "test_*.py" -v
 ```
 

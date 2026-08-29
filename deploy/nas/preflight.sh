@@ -23,6 +23,10 @@ if [ ! -f "${CONFIG_PATH}" ]; then
     echo "missing NAS config: ${CONFIG_PATH}" >&2
     exit 1
 fi
+if [ ! -w "${CONFIG_PATH}" ]; then
+    echo "NAS config is not writable: ${CONFIG_PATH}" >&2
+    exit 1
+fi
 mkdir -p "${STATE_PATH}"
 if [ ! -w "${STATE_PATH}" ]; then
     echo "NAS state directory is not writable: ${STATE_PATH}" >&2
@@ -33,6 +37,11 @@ if command -v stat >/dev/null 2>&1; then
     owner_uid="$(stat -c '%u' "${STATE_PATH}" 2>/dev/null || stat -f '%u' "${STATE_PATH}")"
     if [ "${owner_uid}" != "${EXPECTED_UID}" ]; then
         echo "${STATE_PATH} must be owned by UID ${EXPECTED_UID}; current UID is ${owner_uid}" >&2
+        exit 1
+    fi
+    config_owner_uid="$(stat -c '%u' "${CONFIG_PATH}" 2>/dev/null || stat -f '%u' "${CONFIG_PATH}")"
+    if [ "${config_owner_uid}" != "${EXPECTED_UID}" ]; then
+        echo "${CONFIG_PATH} must be owned by UID ${EXPECTED_UID}; current UID is ${config_owner_uid}" >&2
         exit 1
     fi
 fi
