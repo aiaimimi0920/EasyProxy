@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import base64
 import os
+import secrets
 import sys
 import time
 from urllib.parse import urlparse, urlunparse
@@ -71,11 +72,35 @@ def verify_token_rejected(ws_url: str, token: str, label: str) -> None:
     raise RuntimeError(f"{label} unexpectedly established a WebSocket")
 
 
-def verify_tcp_tunnel(ws_url: str, token: str, target: str, host_header: str) -> None:
-    request = (
-        f"GET / HTTP/1.1\r\nHost: {host_header}\r\n"
-        "Connection: close\r\nUser-Agent: EasyProxy-ECH-Verify\r\n\r\n"
-    ).encode("ascii")
+def build_dns_tcp_query(hostname: str, transaction_id: bytes | None = None) -> tuple[bytes, bytes]:
+    transaction_id = transaction_id or secrets.token_bytes(2)
+    ensure(len(transaction_id) == 2, "DNS transaction ID must contain two bytes")
+    labels = hostname.rstrip(".").encode("idna").split(b".")
+    ensure(all(0 < len(label) <= 63 for label in labels), "Invalid DNS tunnel hostname")
+    question = b"".join(bytes((len(label),)) + label for label in labels) + b"\x00\x00\x01\x00\x01"
+    header = transaction_id + b"\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00"
+    packet = header + question
+    return len(packet).to_bytes(2, "big") + packet, transaction_id
+
+
+def dns_tcp_response_complete(response: bytearray) -> bool:
+    return len(response) >= 2 and len(response) >= 2 + int.from_bytes(response[:2], "big")
+
+
+def validate_dns_tcp_response(response: bytes, transaction_id: bytes) -> None:
+    ensure(len(response) >= 14, "ECH worker DNS tunnel returned a truncated response")
+    packet_length = int.from_bytes(response[:2], "big")
+    ensure(packet_length >= 12, "ECH worker DNS tunnel returned an invalid packet length")
+    ensure(len(response) >= packet_length + 2, "ECH worker DNS tunnel returned an incomplete packet")
+    packet = response[2 : packet_length + 2]
+    ensure(packet[:2] == transaction_id, "ECH worker DNS tunnel returned a mismatched transaction")
+    flags = int.from_bytes(packet[2:4], "big")
+    ensure(flags & 0x8000 != 0, "ECH worker DNS tunnel response is not marked as a response")
+    ensure(flags & 0x000F == 0, f"ECH worker DNS tunnel returned DNS error {flags & 0x000F}")
+
+
+def verify_tcp_tunnel(ws_url: str, token: str, target: str, hostname: str) -> None:
+    request, transaction_id = build_dns_tcp_query(hostname)
     command = f"CONNECT:{target}|{base64.b64encode(request).decode('ascii')}|"
     websocket = retry("ECH worker TCP tunnel", 5, 5, lambda: open_websocket(ws_url, token))
     response = bytearray()
@@ -93,15 +118,15 @@ def verify_tcp_tunnel(ws_url: str, token: str, target: str, host_header: str) ->
                 response.extend(message.encode("utf-8"))
             else:
                 response.extend(message)
-            if b"HTTP/1." in response and b"\r\n\r\n" in response:
+            if dns_tcp_response_complete(response):
                 break
-    ensure(response.startswith(b"HTTP/1."), "ECH worker tunnel did not return an HTTP response")
+    validate_dns_tcp_response(response, transaction_id)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Verify ech-workers-cloudflare deployment with HTTP and WebSocket probes.")
     parser.add_argument("--base-url", required=True)
-    parser.add_argument("--tunnel-target", default="example.com:80")
+    parser.add_argument("--tunnel-target", default="8.8.8.8:53")
     parser.add_argument("--tunnel-host", default="example.com")
     parser.add_argument(
         "--previous-token",
