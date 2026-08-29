@@ -291,6 +291,12 @@ class ScriptSmokeTests(unittest.TestCase):
         self.assertIn("--minimum-available-nodes", help_result.stdout)
         self.assertIn("--require-fallback-active", help_result.stdout)
 
+    def test_source_audit_preserves_private_config_permissions(self):
+        source = (REPO_ROOT / "scripts/easyproxy_source_audit.py").read_text(encoding="utf-8")
+
+        self.assertIn("os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600", source)
+        self.assertIn('"EASY_PROXY_RUN_AS_ROOT=1"', source)
+
     def test_local_server_validation_modules_parse_and_load(self):
         script_root = REPO_ROOT / "deploy/service/base/scripts"
         paths = [

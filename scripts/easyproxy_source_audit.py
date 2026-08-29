@@ -161,6 +161,8 @@ def main() -> int:
             f"{management_port}:29888",
             "-p",
             f"{pool_port}:22323",
+            "--env",
+            "EASY_PROXY_RUN_AS_ROOT=1",
             "-v",
             f"{config_path.resolve()}:/etc/easyproxy/config.yaml",
             "-v",
