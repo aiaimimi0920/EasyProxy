@@ -113,12 +113,14 @@ func (p Provider) findExactPages(ctx context.Context, name string) ([]discovery.
 	}
 
 	resources := make([]discovery.Resource, 0, 1)
+	const pageSize = 10
 	for page := 1; ; page++ {
 		endpoint := fmt.Sprintf(
-			"%s/accounts/%s/pages/projects?page=%d&per_page=100",
+			"%s/accounts/%s/pages/projects?page=%d&per_page=%d",
 			baseURL,
 			url.PathEscape(accountID),
 			page,
+			pageSize,
 		)
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 		if err != nil {
@@ -136,9 +138,6 @@ func (p Provider) findExactPages(ctx context.Context, name string) ([]discovery.
 				Name      string `json:"name"`
 				Subdomain string `json:"subdomain"`
 			} `json:"result"`
-			ResultInfo struct {
-				TotalPages int `json:"total_pages"`
-			} `json:"result_info"`
 		}
 		decodeErr := json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(&payload)
 		closeErr := response.Body.Close()
@@ -165,7 +164,7 @@ func (p Provider) findExactPages(ctx context.Context, name string) ([]discovery.
 				})
 			}
 		}
-		if payload.ResultInfo.TotalPages == 0 || page >= payload.ResultInfo.TotalPages {
+		if len(payload.Result) < pageSize {
 			break
 		}
 	}

@@ -47,6 +47,9 @@ func TestProviderListsExactPagesByNameViaAPI(t *testing.T) {
 		if request.URL.Path != "/accounts/account-1/pages/projects" {
 			t.Fatalf("path = %q", request.URL.Path)
 		}
+		if request.URL.Query().Get("page") != "1" || request.URL.Query().Get("per_page") != "10" {
+			t.Fatalf("query = %q", request.URL.RawQuery)
+		}
 		if request.Header.Get("Authorization") != "Bearer token-1" {
 			t.Fatal("missing bearer token")
 		}
