@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "soft_limit": 500,
+  "hard_limit": 700,
+  "legacy_over_limit": {
+    "deploy/service/base/scripts/validate-local-server-device-profiles.ps1": {
+      "max_effective_lines": 780,
+      "reason": "Legacy Local Server end-to-end harness pending behavior-based R6 extraction.",
+      "plan_wave": "R6"
+    },
+    "scripts/easyproxy_source_audit.py": {
+      "max_effective_lines": 849,
+      "reason": "Legacy source audit command pending report and policy extraction in R6.",
+      "plan_wave": "R6"
+    },
+    "service/base/frontend/src/components/ManagePanel.tsx": {
+      "max_effective_lines": 1051,
+      "reason": "Legacy node management component pending state and presentation extraction.",
+      "plan_wave": "R5"
+    },
+    "service/base/frontend/src/components/SettingsPanel.tsx": {
+      "max_effective_lines": 1037,
+      "reason": "Legacy settings component pending domain card and state-hook extraction.",
+      "plan_wave": "R5"
+    },
+    "service/base/internal/app/routing_controller.go": {
+      "max_effective_lines": 783,
+      "reason": "Legacy routing state machine pending decision and runtime adapter extraction.",
+      "plan_wave": "R3"
+    },
+    "service/base/internal/app/routing_controller_test.go": {
+      "max_effective_lines": 1193,
+      "reason": "Legacy routing suite pending split by selection, failover, and lifecycle behavior.",
+      "plan_wave": "R6"
+    },
+    "service/base/internal/boxmgr/manager.go": {
+      "max_effective_lines": 1984,
+      "reason": "Legacy runtime orchestrator pending reload, node service, and monitor adapter extraction.",
+      "plan_wave": "R3"
+    },
+    "service/base/internal/boxmgr/manager_test.go": {
+      "max_effective_lines": 2526,
+      "reason": "Legacy runtime suite pending split by lifecycle, persistence, and concurrency behavior.",
+      "plan_wave": "R6"
+    },
+    "service/base/internal/builder/builder.go": {
+      "max_effective_lines": 1545,
+      "reason": "Legacy sing-box builder pending protocol and route assembly extraction.",
+      "plan_wave": "R3"
+    },
+    "service/base/internal/config/config.go": {
+      "max_effective_lines": 2179,
+      "reason": "Legacy configuration monolith pending schema, decode, normalize, and persistence extraction.",
+      "plan_wave": "R2"
+    },
+    "service/base/internal/config/config_test.go": {
+      "max_effective_lines": 1489,
+      "reason": "Legacy configuration suite pending split by parsing, defaults, validation, and persistence.",
+      "plan_wave": "R6"
+    },
+    "service/base/internal/monitor/local_server.go": {
+      "max_effective_lines": 1195,
+      "reason": "Legacy Local Server API pending profile, device, and routing handler extraction.",
+      "plan_wave": "R4"
+    },
+    "service/base/internal/monitor/manager.go": {
+      "max_effective_lines": 2143,
+      "reason": "Legacy monitor state machine pending scheduler, registry, and read-model extraction.",
+      "plan_wave": "R3"
+    },
+    "service/base/internal/monitor/manager_test.go": {
+      "max_effective_lines": 1356,
+      "reason": "Legacy monitor suite pending split by scheduler, generation, and aggregation behavior.",
+      "plan_wave": "R6"
+    },
+    "service/base/internal/monitor/server_test.go": {
+      "max_effective_lines": 3666,
+      "reason": "Legacy management API suite pending split by auth, handlers, and lease behavior.",
+      "plan_wave": "R6"
+    },
+    "service/base/internal/outbound/pool/pool.go": {
+      "max_effective_lines": 1158,
+      "reason": "Legacy pool runtime pending selection, dial, and accounting extraction.",
+      "plan_wave": "R3"
+    },
+    "service/base/internal/outbound/pool/pool_test.go": {
+      "max_effective_lines": 867,
+      "reason": "Legacy pool suite pending split by selection, failure, and traffic behavior.",
+      "plan_wave": "R6"
+    },
+    "service/base/internal/profile/manager.go": {
+      "max_effective_lines": 796,
+      "reason": "Legacy profile manager pending persistence and runtime publication extraction.",
+      "plan_wave": "R4"
+    },
+    "service/base/internal/store/sqlite.go": {
+      "max_effective_lines": 1201,
+      "reason": "Legacy SQLite repository pending node, profile, device, and status repositories.",
+      "plan_wave": "R4"
+    },
+    "service/base/internal/subscription/connectors.go": {
+      "max_effective_lines": 1126,
+      "reason": "Legacy connector runtime pending ECH, ZenProxy, and process lifecycle extraction.",
+      "plan_wave": "R4"
+    },
+    "service/base/internal/subscription/connectors_test.go": {
+      "max_effective_lines": 1008,
+      "reason": "Legacy connector suite pending split by ECH, ZenProxy, and failure behavior.",
+      "plan_wave": "R6"
+    },
+    "service/base/internal/subscription/manager.go": {
+      "max_effective_lines": 1108,
+      "reason": "Legacy source manager pending scheduler, manifest, and publication extraction.",
+      "plan_wave": "R4"
+    }
+  }
+}
