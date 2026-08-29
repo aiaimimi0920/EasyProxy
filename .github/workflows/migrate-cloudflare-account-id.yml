@@ -14,7 +14,7 @@ jobs:
         shell: bash
         env:
           LEGACY_ACCOUNT_ID: ${{ secrets[format('{0}_{1}', 'CLOUDFLARE_ACCOUNT', 'ID')] }}
-          OPERATOR_TOKEN: ${{ secrets.EASYPROXY_AGGREGATOR_GH_TOKEN }}
+          OPERATOR_TOKEN: ${{ secrets[format('{0}_{1}_{2}', 'EASYPROXY_TEMP', 'MIGRATION', 'TOKEN')] }}
         run: |
           set -euo pipefail
           [[ -n "${LEGACY_ACCOUNT_ID:-}" ]] || { echo "::error::Legacy account ID secret is missing"; exit 1; }
