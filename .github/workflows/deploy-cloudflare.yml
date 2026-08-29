@@ -329,6 +329,7 @@ jobs:
         id: deploy_misub
         uses: cloudflare/wrangler-action@v3
         with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           gitHubToken: ${{ secrets.GITHUB_TOKEN }}
           workingDirectory: upstreams/misub
@@ -475,6 +476,7 @@ jobs:
       - name: Deploy ech-workers-cloudflare
         uses: cloudflare/wrangler-action@v3
         with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           command: deploy --config workers/ech-workers-cloudflare/wrangler.jsonc
         env:
@@ -556,6 +558,7 @@ jobs:
       - name: Deploy aggregator seed relay
         uses: cloudflare/wrangler-action@v3
         with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           command: deploy --config workers/aggregator-seed-relay/wrangler.jsonc
         env:

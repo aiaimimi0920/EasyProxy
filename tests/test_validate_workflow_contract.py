@@ -49,6 +49,15 @@ class ValidateWorkflowContractTests(unittest.TestCase):
     def test_cloudflare_preflight_uses_highest_required_go_version(self):
         self.assertIn("go-version-file: upstreams/ech-workers/go.mod", self.cloudflare_workflow)
 
+    def test_each_wrangler_action_receives_the_cloudflare_token_input(self):
+        action = "uses: cloudflare/wrangler-action@v3"
+        token_input = "apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}"
+        self.assertGreater(self.cloudflare_workflow.count(action), 0)
+        self.assertEqual(
+            self.cloudflare_workflow.count(action),
+            self.cloudflare_workflow.count(token_input),
+        )
+
     def test_profile_sync_requires_the_selected_deployment_to_succeed(self):
         self.assertIn(
             "inputs.target == 'misub-pages' && needs.deploy-misub-pages.result == 'success'",
