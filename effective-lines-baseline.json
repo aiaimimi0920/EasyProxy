@@ -23,30 +23,15 @@
       "reason": "Legacy settings component pending domain card and state-hook extraction.",
       "plan_wave": "R5"
     },
-    "service/base/internal/app/routing_controller.go": {
-      "max_effective_lines": 783,
-      "reason": "Legacy routing state machine pending decision and runtime adapter extraction.",
-      "plan_wave": "R3"
-    },
     "service/base/internal/app/routing_controller_test.go": {
       "max_effective_lines": 1193,
       "reason": "Legacy routing suite pending split by selection, failover, and lifecycle behavior.",
       "plan_wave": "R6"
     },
-    "service/base/internal/boxmgr/manager.go": {
-      "max_effective_lines": 1984,
-      "reason": "Legacy runtime orchestrator pending reload, node service, and monitor adapter extraction.",
-      "plan_wave": "R3"
-    },
     "service/base/internal/boxmgr/manager_test.go": {
       "max_effective_lines": 2526,
       "reason": "Legacy runtime suite pending split by lifecycle, persistence, and concurrency behavior.",
       "plan_wave": "R6"
-    },
-    "service/base/internal/builder/builder.go": {
-      "max_effective_lines": 1545,
-      "reason": "Legacy sing-box builder pending protocol and route assembly extraction.",
-      "plan_wave": "R3"
     },
     "service/base/internal/config/config_test.go": {
       "max_effective_lines": 1489,
@@ -58,11 +43,6 @@
       "reason": "Legacy Local Server API pending profile, device, and routing handler extraction.",
       "plan_wave": "R4"
     },
-    "service/base/internal/monitor/manager.go": {
-      "max_effective_lines": 2143,
-      "reason": "Legacy monitor state machine pending scheduler, registry, and read-model extraction.",
-      "plan_wave": "R3"
-    },
     "service/base/internal/monitor/manager_test.go": {
       "max_effective_lines": 1356,
       "reason": "Legacy monitor suite pending split by scheduler, generation, and aggregation behavior.",
@@ -72,11 +52,6 @@
       "max_effective_lines": 3666,
       "reason": "Legacy management API suite pending split by auth, handlers, and lease behavior.",
       "plan_wave": "R6"
-    },
-    "service/base/internal/outbound/pool/pool.go": {
-      "max_effective_lines": 1158,
-      "reason": "Legacy pool runtime pending selection, dial, and accounting extraction.",
-      "plan_wave": "R3"
     },
     "service/base/internal/outbound/pool/pool_test.go": {
       "max_effective_lines": 867,
