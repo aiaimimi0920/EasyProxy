@@ -27,7 +27,10 @@ class ValidateWorkflowContractTests(unittest.TestCase):
 
     def test_root_ci_checks_go_format_and_vet(self):
         self.assertIn("uses: ./.github/workflows/reusable-validate.yml", self.workflow)
-        self.assertIn("python -m pip install PyYAML tqdm requests boto3", self.reusable_workflow)
+        self.assertIn(
+            "python -m pip install PyYAML tqdm requests boto3 websockets",
+            self.reusable_workflow,
+        )
         self.assertIn("python scripts/check-go-format.py", self.reusable_workflow)
         self.assertIn("go vet ./...", self.reusable_workflow)
         self.assertIn("topology validate", self.reusable_workflow)
