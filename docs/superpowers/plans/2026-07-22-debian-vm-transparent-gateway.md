@@ -326,9 +326,9 @@ DSM EasyProxy container remains unchanged.
 - [ ] **Step 1: Extend the asset tests for Compose safety**
 
 Require the Compose file to use host networking, add only `NET_ADMIN` and
-`NET_RAW`, set `EASY_PROXY_RUN_AS_ROOT=1`, mount a read-only runtime config, use
-a persistent data directory, and avoid host port publishing and source-code
-bind mounts.
+`NET_RAW`, expose `/dev/net/tun`, set `EASY_PROXY_RUN_AS_ROOT=1`, mount a
+writable runtime config inside the persistent state tree, and avoid host port
+publishing and source-code bind mounts.
 
 - [ ] **Step 2: Implement the VM Compose file**
 
@@ -337,18 +337,20 @@ Use this service contract:
 ```yaml
 services:
   easy-proxy-gateway:
-    image: ${EASY_PROXY_IMAGE:-easyproxy/easy-proxy:transparent-20260722-5dece9d}
+    image: ${EASY_PROXY_IMAGE:?Set EASY_PROXY_IMAGE to a version tag or digest}
     container_name: easy-proxy-gateway
     restart: unless-stopped
     network_mode: host
     cap_add:
       - NET_ADMIN
       - NET_RAW
+    devices:
+      - /dev/net/tun:/dev/net/tun
     environment:
       EASY_PROXY_RUN_AS_ROOT: "1"
     volumes:
-      - /opt/easyproxy-gateway/config/config.yaml:/etc/easy-proxy/config.yaml:ro
-      - /opt/easyproxy-gateway/data:/var/lib/easy-proxy
+      - /opt/easyproxy-gateway/data:/var/lib/easyproxy
+      - /opt/easyproxy-gateway/config/config.yaml:/var/lib/easyproxy/config/config.yaml
 ```
 
 - [ ] **Step 3: Prepare the VM runtime directories**

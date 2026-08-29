@@ -201,7 +201,7 @@ go test ./...
 git diff --check
 
 On a disposable Linux/NAS host only:
-./scripts/validate-transparent-gateway-linux.sh --config /etc/easy-proxy/config.yaml
+./scripts/validate-transparent-gateway-linux.sh --config /var/lib/easyproxy/config/config.yaml
 
 Expected: Go tests and diff checks pass on all platforms; Linux smoke reports each acceptance criterion and restores host forwarding/routing state after cleanup.
 

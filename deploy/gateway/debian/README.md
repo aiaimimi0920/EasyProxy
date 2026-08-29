@@ -41,11 +41,11 @@ cd /opt/easyproxy-gateway/compose
 sudo docker compose up -d
 ```
 
-The default `EASY_PROXY_IMAGE` is the locally validated tag
-`easyproxy/easy-proxy:transparent-20260723-gatewayfix7`. It is not a public
-registry reference. Build the image from this repository or import an
-equivalent trusted image onto the VM first; use `.env` to set a different image
-name when deploying from GHCR or another registry.
+Set `EASY_PROXY_IMAGE` in the runtime `.env` to an immutable GHCR release tag or
+digest. Compose intentionally refuses to start when this value is missing. The
+host data directory is mounted at `/var/lib/easyproxy`; the active writable
+configuration is mounted at `/var/lib/easyproxy/config/config.yaml`. The image
+copy at `/etc/easyproxy/config.yaml` is bootstrap-only.
 
 Keep `gateway.enabled: false` until the explicit proxy at
 `192.168.15.201:22323` and the management API at `192.168.15.201:29888` pass

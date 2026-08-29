@@ -43,6 +43,7 @@ def test_compose_uses_host_network_and_only_gateway_capabilities():
     assert "network_mode: host" in text
     assert "NET_ADMIN" in text
     assert "NET_RAW" in text
+    assert "/dev/net/tun:/dev/net/tun" in text
     assert "EASY_PROXY_RUN_AS_ROOT" in text
     assert "ports:" not in text
     assert "context:" not in text
@@ -51,7 +52,7 @@ def test_compose_uses_host_network_and_only_gateway_capabilities():
     assert "/opt/easyproxy-gateway/data:/var/lib/easyproxy" in text
 
 
-def test_service_entrypoint_does_not_chown_read_only_config_mount():
+def test_service_entrypoint_does_not_chown_bootstrap_config():
     text = (ROOT / "deploy" / "service" / "base" / "docker-entrypoint.sh").read_text(encoding="utf-8")
 
     assert 'chown -R easy:easy "${EASY_PROXY_STATE_DIR}"' in text
