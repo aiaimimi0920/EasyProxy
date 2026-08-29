@@ -33,6 +33,11 @@ After resolution:
 
 Bootstrap is reentrant: a second bootstrap reuses the same exact resources and does not create duplicates.
 
+Fork operators normally run this through **Actions > Deploy Cloudflare Apps**
+with `deployment_mode=bootstrap`, `target=both`, an exact Pages project name,
+and verification enabled. The complete prerequisite and input sequence is in
+[`fork-operator-guide.md`](fork-operator-guide.md).
+
 ## Update
 
 The protected order is mandatory:
@@ -66,6 +71,20 @@ Token rotation is not part of update; its overlap, connector switch, real
 traffic validation, revocation, and rollback contract is documented in
 [`ech-lifecycle.md`](ech-lifecycle.md).
 
+## Backup and restore
+
+Run **Backup MiSub** before a manual migration or recovery exercise. The
+workflow uploads an encrypted artifact named `misub-backup-<run-id>` and retains
+it for 30 days.
+
+Run **Restore MiSub** with that workflow run ID and artifact name. `mode=drill`
+creates, verifies, and removes a run-scoped D1 database without touching the
+protected database. The entire workflow is bound to the protected
+`easyproxy-misub-restore` Environment, so both drill and production runs require
+its approval before receiving restore credentials. `mode=production` also requires the exact protected D1 ID in
+`confirm_production_database_id`; it also retains a new pre-restore backup.
+Never use production mode as the first restore test.
+
 ## Migrations
 
 MiSub migrations live in `upstreams/misub/migrations` and are applied with:
@@ -87,7 +106,6 @@ Rules:
 Required repository secrets for MiSub lifecycle:
 
 - `CLOUDFLARE_API_TOKEN`
-- `CLOUDFLARE_ACCOUNT_ID`
 - `MISUB_ADMIN_PASSWORD`
 - `MISUB_COOKIE_SECRET`
 - `MISUB_MANIFEST_TOKEN`
@@ -95,9 +113,12 @@ Required repository secrets for MiSub lifecycle:
 
 Required repository variables:
 
+- `CLOUDFLARE_ACCOUNT_ID`
 - `EASYPROXY_MISUB_PUBLIC_URL`
 - `EASYPROXY_MISUB_CALLBACK_URL`
 - optionally `EASYPROXY_MISUB_D1_DATABASE_NAME`
 - optionally `EASYPROXY_MISUB_D1_DATABASE_BINDING` (must resolve to `MISUB_DB`)
 
-Use a high-entropy backup passphrase independent of the MiSub admin password. Configure approval rules for the `easyproxy-misub-restore` GitHub environment before enabling production restore.
+Use a high-entropy backup passphrase independent of the MiSub admin password.
+Configure approval rules for the `easyproxy-misub-restore` GitHub Environment
+before running either a restore drill or production recovery.

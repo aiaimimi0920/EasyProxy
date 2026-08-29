@@ -81,7 +81,7 @@ jobs:
         shell: bash
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           MISUB_PUBLIC_URL: ${{ vars.EASYPROXY_MISUB_PUBLIC_URL }}
           MISUB_CALLBACK_URL: ${{ vars.EASYPROXY_MISUB_CALLBACK_URL }}
           MISUB_ADMIN_PASSWORD: ${{ secrets.MISUB_ADMIN_PASSWORD }}
@@ -139,7 +139,7 @@ jobs:
         shell: bash
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           MISUB_ADMIN_PASSWORD: ${{ secrets.MISUB_ADMIN_PASSWORD }}
           EASYPROXY_BACKUP_PASSPHRASE: ${{ secrets.EASYPROXY_BACKUP_PASSPHRASE }}
           MISUB_PUBLIC_URL: ${{ vars.EASYPROXY_MISUB_PUBLIC_URL }}
@@ -171,7 +171,7 @@ jobs:
         shell: bash
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           SOURCE_D1_DATABASE: ${{ inputs.d1_database }}
         run: |
           set -euo pipefail

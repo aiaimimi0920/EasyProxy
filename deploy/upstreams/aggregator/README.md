@@ -27,7 +27,7 @@ Removed from this monorepo boundary:
   - crawler enabled
   - `Issue #91` shared source kept as the main fallback seed
 - native materialization now happens through
-  [scripts/materialize-aggregator-config.py](/C:/Users/Public/nas_home/AI/GameEditor/EasyProxy/scripts/materialize-aggregator-config.py)
+  [`scripts/materialize-aggregator-config.py`](../../../scripts/materialize-aggregator-config.py)
   and repository secrets in the current EasyProxy repo
 
 Active root workflow:
@@ -71,7 +71,7 @@ Current note:
   - behavior:
     - triggers the native `deploy-aggregator.yml` workflow in this repository
 - GitHub repository secrets and variables are documented in
-  [docs/github-secrets.md](/C:/Users/Public/nas_home/AI/GameEditor/EasyProxy/docs/github-secrets.md).
+  [`docs/github-secrets.md`](../../../docs/github-secrets.md).
 - GitHub Actions runtime and verification notes are documented in
   [`docs/aggregator-publication.md`](../../../docs/aggregator-publication.md).
 - The legacy external-repository dispatch path is retired; the active

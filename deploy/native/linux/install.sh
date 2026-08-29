@@ -3,6 +3,7 @@ set -eu
 
 VERSION=""
 BASE_URL=""
+REPOSITORY="${EASYPROXY_RELEASE_REPOSITORY:-}"
 ARCHIVE=""
 REPLACE_CONFIG=0
 ROLLBACK_BACKUP=""
@@ -11,13 +12,14 @@ CONFIG_ROOT="${EASYPROXY_CONFIG_ROOT:-/etc/easyproxy}"
 STATE_ROOT="${EASYPROXY_STATE_ROOT:-/var/lib/easyproxy}"
 
 usage() {
-    echo "usage: install.sh --version TAG [--base-url URL | --archive FILE] [--replace-config]"
+    echo "usage: install.sh --version TAG [--repository OWNER/REPO | --base-url URL | --archive FILE] [--replace-config]"
     echo "       install.sh --rollback BACKUP_DIRECTORY"
 }
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --version) VERSION="$2"; shift 2 ;;
+        --repository) REPOSITORY="$2"; shift 2 ;;
         --base-url) BASE_URL="$2"; shift 2 ;;
         --archive) ARCHIVE="$2"; shift 2 ;;
         --replace-config) REPLACE_CONFIG=1; shift ;;
@@ -102,7 +104,13 @@ package="easyproxy-linux-${PACKAGE_ARCH}.tar.gz"
 work="$(mktemp -d)"
 trap 'rm -rf "${work}"' EXIT
 if [ -z "${ARCHIVE}" ]; then
-    [ -n "${BASE_URL}" ] || BASE_URL="https://github.com/aiaimimi0920/EasyProxy/releases/download/${VERSION}"
+    if [ -z "${BASE_URL}" ]; then
+        printf '%s\n' "${REPOSITORY}" | grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' || {
+            echo "set --repository OWNER/REPO, --base-url, or --archive" >&2
+            exit 2
+        }
+        BASE_URL="https://github.com/${REPOSITORY}/releases/download/${VERSION}"
+    fi
     curl -fL "${BASE_URL}/${package}" -o "${work}/${package}"
     curl -fL "${BASE_URL}/SHA256SUMS" -o "${work}/SHA256SUMS"
     expected="$(awk -v f="${package}" '$2 == f {print $1}' "${work}/SHA256SUMS")"

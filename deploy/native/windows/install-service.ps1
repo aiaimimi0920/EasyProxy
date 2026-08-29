@@ -3,6 +3,7 @@ param(
     [string]$Version = '',
     [string]$PackagePath = '',
     [string]$BaseUrl = '',
+    [string]$Repository = $env:EASYPROXY_RELEASE_REPOSITORY,
     [switch]$ReplaceConfig,
     [switch]$Rollback,
     [string]$BackupPath = '',
@@ -104,7 +105,10 @@ $release = ''
 try {
     if ([string]::IsNullOrWhiteSpace($PackagePath)) {
         if ([string]::IsNullOrWhiteSpace($BaseUrl)) {
-            $BaseUrl = "https://github.com/aiaimimi0920/EasyProxy/releases/download/$Version"
+            if ([string]::IsNullOrWhiteSpace($Repository) -or $Repository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
+                throw 'Set -Repository OWNER/REPO, -BaseUrl, or -PackagePath.'
+            }
+            $BaseUrl = "https://github.com/$Repository/releases/download/$Version"
         }
         $PackagePath = Join-Path $temporary 'easyproxy-windows-amd64.zip'
         Invoke-WebRequest "$BaseUrl/easyproxy-windows-amd64.zip" -OutFile $PackagePath

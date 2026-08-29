@@ -21,11 +21,12 @@ runtime, and Cloudflare Worker code are owned by this repository.
 
 ## Clone
 
-Aggregator contains a nested public submodule, so always clone recursively:
+Fork this repository first, then clone the fork recursively. Aggregator contains
+a nested public submodule, so a non-recursive checkout is incomplete:
 
 ```powershell
-git clone --recurse-submodules https://github.com/aiaimimi0920/EasyProxy.git
-Set-Location EasyProxy
+git clone --recurse-submodules https://github.com/<OWNER>/<REPOSITORY>.git
+Set-Location <REPOSITORY>
 git submodule status --recursive
 ```
 
@@ -35,6 +36,9 @@ Repair an existing checkout with:
 git submodule sync --recursive
 git submodule update --init --recursive
 ```
+
+The complete GitHub, Cloudflare, recovery, publication, and local installation
+path for a new fork is [`docs/fork-operator-guide.md`](docs/fork-operator-guide.md).
 
 ## Configuration Authority
 
@@ -194,6 +198,10 @@ publication. The PR validation
 entry delegates to `.github/workflows/reusable-validate.yml`; it is read-only
 and receives no production secrets.
 
+Fork operators should follow the ordered workflow inputs and provider
+prerequisites in [`docs/fork-operator-guide.md`](docs/fork-operator-guide.md)
+rather than reusing maintainer resource names or URLs.
+
 Aggregator uses candidate, immutable release, stable-manifest, and
 last-known-good layers. Fork configuration and failure recovery are documented
 in [`docs/aggregator-publication.md`](docs/aggregator-publication.md).
@@ -211,8 +219,9 @@ easyproxyctl manifest build --topology topology.yaml --output deployment-manifes
 easyproxyctl manifest verify --file deployment-manifest.json
 ```
 
-Cloud and local lifecycle commands fail explicitly until their implementation
-phase is delivered; the CLI never reports a fake deployment success.
+Cloud and local lifecycle commands resolve exact provider identities and fail
+closed on missing, ambiguous, or mismatched resources; the CLI never reports a
+fake deployment success.
 
 ## Runtime Access
 

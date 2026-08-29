@@ -1,12 +1,17 @@
 # Quick Start
 
-## 1. Recursive checkout
+## 1. Fork and recursive checkout
+
+Create a GitHub fork, enable Actions in that fork, and use its URL below:
 
 ```powershell
-git clone --recurse-submodules https://github.com/aiaimimi0920/EasyProxy.git
-Set-Location EasyProxy
+git clone --recurse-submodules https://github.com/<OWNER>/<REPOSITORY>.git
+Set-Location <REPOSITORY>
 git submodule status --recursive
 ```
+
+For the full first-bootstrap, update, recovery, and release path, follow
+[`fork-operator-guide.md`](fork-operator-guide.md).
 
 ## 2. Initialize the two configuration layers
 
@@ -51,8 +56,10 @@ $env:R2_ACCESS_KEY_ID = '<r2-key-id>'
 $env:R2_SECRET_ACCESS_KEY = '<r2-secret>'
 ```
 
-For GitHub-hosted deployment, store secret values in a protected GitHub
-Environment and the account/zone IDs in repository variables. See
+For GitHub-hosted deployment, store ordinary deployment credentials as Actions
+repository secrets and account/zone IDs as repository variables. Restore and
+ECH rotation use separately protected GitHub Environments. See
+[`github-secrets.md`](github-secrets.md) and
 [`secrets-and-permissions.md`](secrets-and-permissions.md).
 
 Do not replace `ECH_TOKEN` as an update shortcut. Configure `ECH_TOKEN_NEXT`
@@ -88,6 +95,11 @@ pwsh .\deploy-host.ps1 -Project easyproxy-ghcr -GhcrOwner <owner> -ReleaseTag <t
 cache.
 
 ## 5. Deploy cloud components
+
+The commands below are local wrappers. A new fork should normally use the
+ordered GitHub Actions bootstrap in
+[`fork-operator-guide.md`](fork-operator-guide.md), which also covers the R2
+prerequisite and recovery artifacts.
 
 ```powershell
 # MiSub Pages

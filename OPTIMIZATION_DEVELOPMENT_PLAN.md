@@ -1,6 +1,6 @@
 # EasyProxy 全面优化开发计划
 
-> 状态：执行中；Phase 0 至 Phase 5 已完成；Phase 6 代码与发布契约已完成，真实跨平台/NAS 发布验收保留到 Phase 8；下一步执行 Phase 7。
+> 状态：执行中；Phase 0 至 Phase 7 已完成；Phase 8 的公开操作合同已就绪，真实 Fork、Cloudflare、跨平台和发布验收待外部测试资源。
 >
 > 优化前基线标签：优化前的稳定版本
 >
@@ -1256,19 +1256,30 @@ Local Server 14 项 E2E，并验证 legacy 容器身份和状态未变化。
 
 ### Phase 8：Fork 用户端到端验收
 
-- P8-01 使用全新 GitHub Fork；
-- P8-02 使用空 Cloudflare 测试账户；
-- P8-03 只按公开文档配置 Secrets；
-- P8-04 一键 Bootstrap；
-- P8-05 安装一个 Linux EasyProxy；
-- P8-06 安装一个 Windows EasyProxy；
-- P8-07 验证 LAN 代理和管理 API；
-- P8-08 制造 MiSub 更新失败并回滚；
-- P8-09 制造 ECH Token 轮换失败并恢复；
-- P8-10 验证 Aggregator last-known-good；
-- P8-11 执行完整 Update；
-- P8-12 收集测试资源清单并执行受保护的测试账户清理；
-- P8-13 发布优化后首个 major release。
+状态：准备完成、真实验收未完成（2026-08-29）。公开 Fork 操作手册、完整
+Variables/Secrets 合同、备份/恢复/轮换步骤、fork-neutral 原生安装入口和 NAS
+更新/回滚步骤已经补齐；工作流统一要求最小权限 API Token，并拒绝 Global API
+Key。静态合同测试、原生发布测试和 release contract 已通过。
+
+当前不能把准备工作写成端到端通过：本机 GitHub API 凭据返回 401，且没有提供
+独立的新 Fork、专用空 Cloudflare 测试账户、Cloudflare 测试 Token/R2 凭据、
+可销毁 Windows Service 主机和 Linux arm64 主机。禁止借用生产账户或当前 NAS
+来伪造破坏性验收；获得这些资源后严格按
+[`docs/fork-operator-guide.md`](docs/fork-operator-guide.md) 逐项执行并留存清单。
+
+- [ ] P8-01 使用全新 GitHub Fork；
+- [ ] P8-02 使用空 Cloudflare 测试账户；
+- [ ] P8-03 只按公开文档配置 Secrets；
+- [ ] P8-04 一键 Bootstrap；
+- [ ] P8-05 安装一个 Linux EasyProxy；
+- [ ] P8-06 安装一个 Windows EasyProxy；
+- [ ] P8-07 验证 LAN 代理和管理 API；
+- [ ] P8-08 制造 MiSub 更新失败并回滚；
+- [ ] P8-09 制造 ECH Token 轮换失败并恢复；
+- [ ] P8-10 验证 Aggregator last-known-good；
+- [ ] P8-11 执行完整 Update；
+- [ ] P8-12 收集测试资源清单并执行受保护的测试账户清理；
+- [ ] P8-13 发布优化后首个 major release。
 
 退出条件：
 

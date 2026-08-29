@@ -30,11 +30,17 @@ service before copying config and SQLite state into a timestamped backup.
 ## Linux
 
 ```sh
-sudo sh install.sh --version v1.0.0
+owner_repo='<OWNER>/<REPOSITORY>'
+version='<RELEASE_TAG>'
+base="https://github.com/${owner_repo}/releases/download/${version}"
+curl -fLO "${base}/install.sh"
+curl -fLO "${base}/SHA256SUMS"
+grep '  install.sh$' SHA256SUMS | sha256sum -c -
+sudo sh install.sh --version "${version}" --repository "${owner_repo}"
 # Explicit config replacement only when intended:
-sudo sh install.sh --version v1.0.1 --replace-config
+sudo sh install.sh --version "${version}" --repository "${owner_repo}" --replace-config
 # Restore both program pointer and data snapshot:
-sudo sh install.sh --rollback /var/lib/easyproxy/backups/before-v1.0.1-...
+sudo sh install.sh --rollback /var/lib/easyproxy/backups/before-<RELEASE_TAG>-...
 ```
 
 The installer downloads the platform archive plus `SHA256SUMS`, verifies the
@@ -46,9 +52,17 @@ active. `--archive` supports an already downloaded verified package.
 Run an elevated PowerShell prompt:
 
 ```powershell
-.\install-service.ps1 -Version v1.0.0
-.\install-service.ps1 -Version v1.0.1 -ReplaceConfig
-.\install-service.ps1 -Rollback -BackupPath 'C:\ProgramData\EasyProxy\backups\before-v1.0.1-...'
+$repository = '<OWNER>/<REPOSITORY>'
+$version = '<RELEASE_TAG>'
+$base = "https://github.com/$repository/releases/download/$version"
+Invoke-WebRequest "$base/install-service.ps1" -OutFile .\install-service.ps1
+Invoke-WebRequest "$base/SHA256SUMS" -OutFile .\SHA256SUMS
+$expected = (((Get-Content .\SHA256SUMS | Where-Object { $_ -match '\s+install-service\.ps1$' }) -split '\s+')[0]).ToLowerInvariant()
+$actual = (Get-FileHash .\install-service.ps1 -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actual -ne $expected) { throw 'installer checksum mismatch' }
+.\install-service.ps1 -Version $version -Repository $repository
+.\install-service.ps1 -Version $version -Repository $repository -ReplaceConfig
+.\install-service.ps1 -Rollback -BackupPath 'C:\ProgramData\EasyProxy\backups\before-<RELEASE_TAG>-...'
 ```
 
 The installer verifies `SHA256SUMS`, registers a real SCM service with an

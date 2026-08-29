@@ -23,16 +23,17 @@ Formal production recommendation:
 The base URL is operator-owned and configured through repository variables;
 MiSub synchronization verifies the stable manifest before consuming it.
 
-Current deployed instance:
+Fork-owned deployment identity:
 
-- Pages project: `misub-git`
-- public URL: `https://misub.aiaimimi.com`
-- Pages fallback URL: `https://misub-git.pages.dev`
-- legacy direct-upload project `misub` deleted on `2026-03-26`
-- local deployment config file:
-  - `upstreams/misub/wrangler.jsonc`
-- reference-only manual Pages sample:
-  - `upstreams/misub/wrangler-cf-pages.toml`
+- choose the exact Pages project in the `Deploy Cloudflare Apps` workflow;
+- set `EASYPROXY_MISUB_PUBLIC_URL` and `EASYPROXY_MISUB_CALLBACK_URL` to URLs
+  owned by the fork operator;
+- the automatic fallback is `https://<pages-project>.pages.dev`;
+- do not reuse maintainer project names, custom domains, or deletion history as
+  deployment input;
+- `upstreams/misub/wrangler.jsonc` is the source template materialized by the
+  root workflow;
+- `upstreams/misub/wrangler-cf-pages.toml` is reference-only.
 
 Local Docker/VPS coexistence default in this monorepo:
 
@@ -65,6 +66,10 @@ Required bindings / variables:
 - `ADMIN_PASSWORD`
 - `COOKIE_SECRET`
 - `MANIFEST_TOKEN`
+
+The root workflow accepts repository secrets `MISUB_ADMIN_PASSWORD`,
+`MISUB_COOKIE_SECRET`, and `MISUB_MANIFEST_TOKEN`, then writes them to the Pages
+runtime names above. Operators configure only the root secret names.
 
 Optional but supported:
 
@@ -147,10 +152,12 @@ Keep the Docker path feature-compatible with Cloudflare:
 
 Managed ECH connector note:
 
-- the target Worker entrypoint for machine-managed connector profiles is:
-  - `https://proxyservice-ech-workers.aiaimimi.com:443`
-- `workers.dev` remains a rollback/debug entrypoint and should not be treated
-  as the preferred long-term machine URL once the custom domain is deployed
+- set `EASYPROXY_ECH_WORKER_PUBLIC_URL` to the fork operator's Worker URL;
+- machine-managed connector profiles use
+  `https://<operator-ech-host>:443`;
+- the operator's own `workers.dev` URL remains a rollback/debug entrypoint and
+  should not be treated as the preferred long-term machine URL once a custom
+  domain is deployed;
 - preferred IP write-back for the managed profile is handled by:
   - `deploy/service/base/scripts/update_ech_preferred_ips.ps1`
 - the script reads `topology.yaml`; credentials are resolved from its named

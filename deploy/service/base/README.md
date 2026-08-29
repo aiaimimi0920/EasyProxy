@@ -460,7 +460,7 @@ bootstrap the runtime config from private R2 storage before starting
 
 See:
 
-- [service-base-config-distribution.md](/C:/Users/Public/nas_home/AI/GameEditor/EasyProxy/docs/service-base-config-distribution.md)
+- [`service-base-config-distribution.md`](../../../docs/service-base-config-distribution.md)
 
 ## Local Source Management
 

@@ -13,8 +13,15 @@ Docker Compose. Native Synology/QNAP packages are not published or claimed.
 
 ## Deploy
 
-1. Download this directory and copy `config.template.yaml` from
-   `deploy/service/base` to `runtime/config.yaml`.
+1. Clone the operator's fork and enter this directory, then copy the runtime
+   template once:
+
+   ```sh
+   git clone --recurse-submodules https://github.com/<OWNER>/<REPOSITORY>.git
+   cd <REPOSITORY>/deploy/nas
+   mkdir -p runtime
+   cp ../service/base/config.template.yaml runtime/config.yaml
+   ```
 2. Create the state directory and assign it to the image UID:
 
    ```sh
@@ -38,3 +45,58 @@ The config is mounted read-only at `/etc/easyproxy/config.yaml`; SQLite and
 runtime state are mounted at `/var/lib/easyproxy`. Replacing the image does not
 replace either bind mount. Before an update, back up both `runtime/config.yaml`
 and `runtime/data`; restore both if a migration or health check fails.
+
+## Update
+
+Pull the candidate before stopping the current container. Then stop it so the
+SQLite copy is consistent, record the exact old image, and create a timestamped
+backup:
+
+```sh
+container="${EASY_PROXY_CONTAINER_NAME:-easy-proxy}"
+new_image='ghcr.io/<OWNER>/easy-proxy-monorepo-service:<NEW_TAG_OR_DIGEST>'
+export EASY_PROXY_IMAGE="$new_image"
+docker compose pull
+
+old_image="$(docker inspect --format '{{.Config.Image}}' "$container")"
+backup="$(pwd)/backups/$(date -u +%Y%m%dT%H%M%SZ)"
+docker compose stop
+mkdir -p "$backup"
+printf '%s\n' "$old_image" > "$backup/image.txt"
+cp -p runtime/config.yaml "$backup/config.yaml"
+tar -C runtime -czf "$backup/data.tar.gz" data
+
+sh ./preflight.sh
+docker compose up -d --force-recreate
+docker compose ps
+docker inspect --format '{{.State.Health.Status}}' "$container"
+```
+
+Do not delete the backup until the management API, LAN HTTP/SOCKS proxy, node
+refresh, and SQLite-backed settings have been checked. `healthy` proves only
+that the management port accepts TCP; it does not prove proxy semantics.
+
+## Rollback
+
+Use one exact backup directory. Stop the candidate before restoring both config
+and data, then return to the recorded image:
+
+```sh
+backup='/absolute/path/to/deploy/nas/backups/<TIMESTAMP>'
+test -f "$backup/image.txt"
+test -f "$backup/config.yaml"
+test -f "$backup/data.tar.gz"
+
+docker compose down
+cp -p "$backup/config.yaml" runtime/config.yaml
+rm -rf runtime/data
+tar -C runtime -xzf "$backup/data.tar.gz"
+sudo chown -R 10001:10001 runtime/data
+export EASY_PROXY_IMAGE="$(cat "$backup/image.txt")"
+sh ./preflight.sh
+docker compose up -d --force-recreate
+docker compose ps
+```
+
+After rollback, repeat the management API, LAN proxy, and SQLite sentinel
+checks. Never point two running containers at the same writable `runtime/data`.
