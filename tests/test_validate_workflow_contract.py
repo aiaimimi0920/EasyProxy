@@ -11,6 +11,7 @@ RESTORE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "restore-misub.yml"
 ROTATE_ECH_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "rotate-ech-token.yml"
 AGGREGATOR_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "deploy-aggregator.yml"
 PUBLISH_GHCR_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "publish-ghcr-images.yml"
+ROOT_TEST_REQUIREMENTS = REPO_ROOT / "requirements-ci.txt"
 
 
 class ValidateWorkflowContractTests(unittest.TestCase):
@@ -24,23 +25,23 @@ class ValidateWorkflowContractTests(unittest.TestCase):
         cls.rotate_ech_workflow = ROTATE_ECH_WORKFLOW.read_text(encoding="utf-8")
         cls.aggregator_workflow = AGGREGATOR_WORKFLOW.read_text(encoding="utf-8")
         cls.publish_ghcr_workflow = PUBLISH_GHCR_WORKFLOW.read_text(encoding="utf-8")
+        cls.root_test_requirements = ROOT_TEST_REQUIREMENTS.read_text(encoding="utf-8").splitlines()
 
     def test_root_ci_checks_go_format_and_vet(self):
         self.assertIn("uses: ./.github/workflows/reusable-validate.yml", self.workflow)
-        self.assertIn(
-            "python -m pip install PyYAML tqdm requests boto3 websockets",
-            self.reusable_workflow,
-        )
         self.assertIn("python scripts/check-go-format.py", self.reusable_workflow)
         self.assertIn("go vet ./...", self.reusable_workflow)
         self.assertIn("topology validate", self.reusable_workflow)
 
-    def test_aggregator_preflight_installs_root_test_dependencies(self):
-        self.assertIn("python -m pip install PyYAML tqdm requests boto3", self.aggregator_workflow)
-
-    def test_other_release_preflights_install_root_test_dependencies(self):
-        self.assertIn("websockets boto3", self.cloudflare_workflow)
-        self.assertIn("python -m pip install PyYAML tqdm requests boto3", self.publish_ghcr_workflow)
+    def test_root_test_workflows_install_shared_dependencies(self):
+        for workflow in (
+            self.reusable_workflow,
+            self.cloudflare_workflow,
+            self.aggregator_workflow,
+            self.publish_ghcr_workflow,
+        ):
+            self.assertIn("python -m pip install -r requirements-ci.txt", workflow)
+        self.assertIn("websockets", self.root_test_requirements)
 
     def test_root_ci_rejects_uncommitted_generated_assets(self):
         self.assertIn("git diff --exit-code", self.reusable_workflow)
