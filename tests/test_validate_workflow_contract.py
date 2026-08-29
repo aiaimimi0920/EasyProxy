@@ -9,6 +9,7 @@ CLOUDFLARE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "deploy-cloudflare.y
 BACKUP_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "backup-misub.yml"
 RESTORE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "restore-misub.yml"
 ROTATE_ECH_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "rotate-ech-token.yml"
+AGGREGATOR_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "deploy-aggregator.yml"
 
 
 class ValidateWorkflowContractTests(unittest.TestCase):
@@ -20,6 +21,7 @@ class ValidateWorkflowContractTests(unittest.TestCase):
         cls.backup_workflow = BACKUP_WORKFLOW.read_text(encoding="utf-8")
         cls.restore_workflow = RESTORE_WORKFLOW.read_text(encoding="utf-8")
         cls.rotate_ech_workflow = ROTATE_ECH_WORKFLOW.read_text(encoding="utf-8")
+        cls.aggregator_workflow = AGGREGATOR_WORKFLOW.read_text(encoding="utf-8")
 
     def test_root_ci_checks_go_format_and_vet(self):
         self.assertIn("uses: ./.github/workflows/reusable-validate.yml", self.workflow)
@@ -27,6 +29,9 @@ class ValidateWorkflowContractTests(unittest.TestCase):
         self.assertIn("python scripts/check-go-format.py", self.reusable_workflow)
         self.assertIn("go vet ./...", self.reusable_workflow)
         self.assertIn("topology validate", self.reusable_workflow)
+
+    def test_aggregator_preflight_installs_root_test_dependencies(self):
+        self.assertIn("python -m pip install PyYAML tqdm requests boto3", self.aggregator_workflow)
 
     def test_root_ci_rejects_uncommitted_generated_assets(self):
         self.assertIn("git diff --exit-code", self.reusable_workflow)
