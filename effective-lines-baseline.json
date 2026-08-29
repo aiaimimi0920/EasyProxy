@@ -48,11 +48,6 @@
       "reason": "Legacy sing-box builder pending protocol and route assembly extraction.",
       "plan_wave": "R3"
     },
-    "service/base/internal/config/config.go": {
-      "max_effective_lines": 2179,
-      "reason": "Legacy configuration monolith pending schema, decode, normalize, and persistence extraction.",
-      "plan_wave": "R2"
-    },
     "service/base/internal/config/config_test.go": {
       "max_effective_lines": 1489,
       "reason": "Legacy configuration suite pending split by parsing, defaults, validation, and persistence.",
