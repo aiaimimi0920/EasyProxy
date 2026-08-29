@@ -46,6 +46,19 @@ class ValidateWorkflowContractTests(unittest.TestCase):
     def test_cloudflare_deploy_attaches_ech_to_runtime_profile(self):
         self.assertIn('--attach-profile-id "${runtime_profile_id}"', self.cloudflare_workflow)
 
+    def test_cloudflare_preflight_uses_highest_required_go_version(self):
+        self.assertIn("go-version-file: upstreams/ech-workers/go.mod", self.cloudflare_workflow)
+
+    def test_profile_sync_requires_the_selected_deployment_to_succeed(self):
+        self.assertIn(
+            "inputs.target == 'misub-pages' && needs.deploy-misub-pages.result == 'success'",
+            self.cloudflare_workflow,
+        )
+        self.assertNotIn(
+            "needs.deploy-misub-pages.result == 'success' || needs.deploy-misub-pages.result == 'skipped'",
+            self.cloudflare_workflow,
+        )
+
     def test_misub_update_backs_up_before_migration_and_deploy(self):
         backup = self.cloudflare_workflow.index("cloud backup")
         retained = self.cloudflare_workflow.index("Retain encrypted pre-update backup")

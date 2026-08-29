@@ -63,10 +63,11 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version-file: tools/easyproxyctl/go.mod
+          go-version-file: upstreams/ech-workers/go.mod
           cache-dependency-path: |
             service/base/go.sum
             tools/easyproxyctl/go.sum
+            upstreams/ech-workers/go.sum
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -588,7 +589,12 @@ jobs:
     needs:
       - deploy-misub-pages
       - deploy-ech-workers-cloudflare
-    if: ${{ always() && (inputs.target == 'both' || inputs.target == 'misub-pages' || inputs.target == 'ech-workers-cloudflare') && (needs.deploy-misub-pages.result == 'success' || needs.deploy-misub-pages.result == 'skipped') && (needs.deploy-ech-workers-cloudflare.result == 'success' || needs.deploy-ech-workers-cloudflare.result == 'skipped') }}
+    if: >-
+      ${{ always() && (
+        (inputs.target == 'both' && needs.deploy-misub-pages.result == 'success' && needs.deploy-ech-workers-cloudflare.result == 'success') ||
+        (inputs.target == 'misub-pages' && needs.deploy-misub-pages.result == 'success') ||
+        (inputs.target == 'ech-workers-cloudflare' && needs.deploy-ech-workers-cloudflare.result == 'success')
+      ) }}
 
     steps:
       - name: Checkout repository
