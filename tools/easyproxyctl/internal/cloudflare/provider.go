@@ -6,9 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/aiaimimi0920/EasyProxy/tools/easyproxyctl/internal/discovery"
 )
@@ -48,9 +52,16 @@ func (r CommandRunner) Run(ctx context.Context, args ...string) ([]byte, error) 
 type Provider struct {
 	Runner           Runner
 	ProductionBranch string
+	APIBaseURL       string
+	HTTPClient       *http.Client
+	AccountID        string
+	APIToken         string
 }
 
 func (p Provider) FindExact(ctx context.Context, kind, name string) ([]discovery.Resource, error) {
+	if kind == "pages" {
+		return p.findExactPages(ctx, name)
+	}
 	args, err := listArgs(kind)
 	if err != nil {
 		return nil, err
@@ -70,15 +81,93 @@ func (p Provider) FindExact(ctx context.Context, kind, name string) ([]discovery
 			continue
 		}
 		id := firstString(item, "uuid", "id")
-		if kind == "pages" && id == "" {
-			id = itemName
-		}
 		resources = append(resources, discovery.Resource{
 			Kind: kind,
 			Name: itemName,
 			ID:   id,
 			URL:  firstString(item, "url", "subdomain"),
 		})
+	}
+	return resources, nil
+}
+
+func (p Provider) findExactPages(ctx context.Context, name string) ([]discovery.Resource, error) {
+	accountID := strings.TrimSpace(p.AccountID)
+	if accountID == "" {
+		accountID = strings.TrimSpace(os.Getenv("CLOUDFLARE_ACCOUNT_ID"))
+	}
+	token := strings.TrimSpace(p.APIToken)
+	if token == "" {
+		token = strings.TrimSpace(os.Getenv("CLOUDFLARE_API_TOKEN"))
+	}
+	if accountID == "" || token == "" {
+		return nil, errors.New("Cloudflare account ID and API token are required for Pages discovery")
+	}
+	baseURL := strings.TrimRight(p.APIBaseURL, "/")
+	if baseURL == "" {
+		baseURL = "https://api.cloudflare.com/client/v4"
+	}
+	client := p.HTTPClient
+	if client == nil {
+		client = &http.Client{Timeout: 30 * time.Second}
+	}
+
+	resources := make([]discovery.Resource, 0, 1)
+	for page := 1; ; page++ {
+		endpoint := fmt.Sprintf(
+			"%s/accounts/%s/pages/projects?page=%d&per_page=100",
+			baseURL,
+			url.PathEscape(accountID),
+			page,
+		)
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			return nil, err
+		}
+		request.Header.Set("Authorization", "Bearer "+token)
+		request.Header.Set("Accept", "application/json")
+		response, err := client.Do(request)
+		if err != nil {
+			return nil, fmt.Errorf("list Cloudflare Pages projects: %w", err)
+		}
+		var payload struct {
+			Success bool `json:"success"`
+			Result  []struct {
+				Name      string `json:"name"`
+				Subdomain string `json:"subdomain"`
+			} `json:"result"`
+			ResultInfo struct {
+				TotalPages int `json:"total_pages"`
+			} `json:"result_info"`
+		}
+		decodeErr := json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(&payload)
+		closeErr := response.Body.Close()
+		if response.StatusCode < 200 || response.StatusCode >= 300 {
+			return nil, fmt.Errorf("list Cloudflare Pages projects returned status %d", response.StatusCode)
+		}
+		if decodeErr != nil {
+			return nil, fmt.Errorf("decode Cloudflare Pages projects: %w", decodeErr)
+		}
+		if closeErr != nil {
+			return nil, fmt.Errorf("close Cloudflare Pages response: %w", closeErr)
+		}
+		if !payload.Success {
+			return nil, errors.New("Cloudflare Pages project listing was unsuccessful")
+		}
+		for _, item := range payload.Result {
+			itemName := strings.TrimSpace(item.Name)
+			if itemName == name {
+				resources = append(resources, discovery.Resource{
+					Kind: "pages",
+					Name: itemName,
+					ID:   itemName,
+					URL:  strings.TrimSpace(item.Subdomain),
+				})
+			}
+		}
+		if payload.ResultInfo.TotalPages == 0 || page >= payload.ResultInfo.TotalPages {
+			break
+		}
 	}
 	return resources, nil
 }
@@ -112,8 +201,6 @@ func (p Provider) Create(ctx context.Context, kind, name string) (discovery.Reso
 
 func listArgs(kind string) ([]string, error) {
 	switch kind {
-	case "pages":
-		return []string{"pages", "project", "list", "--json"}, nil
 	case "d1":
 		return []string{"d1", "list", "--json"}, nil
 	default:

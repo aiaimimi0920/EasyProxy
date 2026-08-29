@@ -3,6 +3,8 @@ package cloudflare
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"testing"
 )
@@ -37,6 +39,34 @@ func TestProviderListsExactD1ByName(t *testing.T) {
 	}
 	if !reflect.DeepEqual(runner.calls[0].args, []string{"d1", "list", "--json"}) {
 		t.Fatalf("args = %#v", runner.calls[0].args)
+	}
+}
+
+func TestProviderListsExactPagesByNameViaAPI(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/accounts/account-1/pages/projects" {
+			t.Fatalf("path = %q", request.URL.Path)
+		}
+		if request.Header.Get("Authorization") != "Bearer token-1" {
+			t.Fatal("missing bearer token")
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"success":true,"result":[{"name":"other"},{"name":"demo-pages","subdomain":"demo.pages.dev"}],"result_info":{"total_pages":1}}`))
+	}))
+	defer server.Close()
+
+	provider := Provider{
+		APIBaseURL: server.URL,
+		HTTPClient: server.Client(),
+		AccountID:  "account-1",
+		APIToken:   "token-1",
+	}
+	resources, err := provider.FindExact(context.Background(), "pages", "demo-pages")
+	if err != nil || len(resources) != 1 || resources[0].ID != "demo-pages" {
+		t.Fatalf("FindExact() = %#v, %v", resources, err)
+	}
+	if resources[0].URL != "demo.pages.dev" {
+		t.Fatalf("URL = %q", resources[0].URL)
 	}
 }
 
