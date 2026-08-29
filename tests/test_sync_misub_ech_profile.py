@@ -81,6 +81,33 @@ class SyncMiSubEchProfileTests(unittest.TestCase):
         self.assertEqual(profiles, [])
         self.assertEqual(missing, ["aggregator-global"])
 
+    def test_candidate_sources_remain_distinct_from_equivalent_live_sources(self):
+        live_sources = sync_misub_ech_profile.build_sources(
+            worker_url="https://ech.example:443",
+            access_token="ech-token",
+            server_ips=[],
+            local_protocol="socks5",
+            source_id_prefix="conn_ech_workers_pref",
+            source_name_prefix="ECH Worker Preferred",
+            source_group="ECH Connectors",
+            notes_prefix="Preferred Cloudflare entry IP",
+        )
+
+        candidates = sync_misub_ech_profile.build_candidate_sources(
+            live_sources, "conn_ech_workers_pref_candidate_"
+        )
+
+        self.assertNotIn(
+            "easyproxy_candidate_source_id", live_sources[0]["connector_config"]
+        )
+        self.assertEqual(
+            candidates[0]["connector_config"]["easyproxy_candidate_source_id"],
+            "conn_ech_workers_pref_candidate_1",
+        )
+        self.assertNotEqual(
+            live_sources[0]["connector_config"], candidates[0]["connector_config"]
+        )
+
     def test_validation_ignores_unmanaged_zenproxy_connector(self):
         sync_misub_ech_profile.validate_managed_connector_sources(
             sources=[

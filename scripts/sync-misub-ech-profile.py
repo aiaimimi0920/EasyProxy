@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import subprocess
@@ -243,6 +244,20 @@ def build_sources(
     return sources
 
 
+def build_candidate_sources(sources: list[dict[str, Any]], candidate_prefix: str) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    for index, source in enumerate(sources, start=1):
+        candidate = copy.deepcopy(source)
+        candidate["id"] = f"{candidate_prefix}{index}"
+        candidate["name"] = f"{source['name']} Candidate"
+        connector_config = source_connector_config(candidate)
+        connector_config["easyproxy_candidate_source_id"] = candidate["id"]
+        candidate["connector_config"] = connector_config
+        candidate.setdefault("options", {})["connector_config"] = connector_config
+        candidates.append(candidate)
+    return candidates
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Synchronize the MiSub ECH connector test profile with the current worker URL/token.")
     parser.add_argument("--base-url", required=True)
@@ -397,12 +412,7 @@ def main() -> int:
         f"MiSub attach profiles not found: {', '.join(missing_attach_profiles)}",
     )
 
-    candidate_sources = []
-    for index, source in enumerate(new_sources, start=1):
-        candidate = dict(source)
-        candidate["id"] = f"{candidate_prefix}{index}"
-        candidate["name"] = f"{source['name']} Candidate"
-        candidate_sources.append(candidate)
+    candidate_sources = build_candidate_sources(new_sources, candidate_prefix)
     candidate_source_ids = [source["id"] for source in candidate_sources]
     old_source_ids = [str(source.get("id", "")).strip() for source in existing_sources]
     candidate_profiles, missing_candidate_profiles = attach_sources_to_profiles(
@@ -472,7 +482,9 @@ def main() -> int:
             raise RuntimeError(
                 f"MiSub connector update failed and rollback also failed: {rollback_error}"
             ) from original_error
-        raise RuntimeError("MiSub connector update failed; original state restored") from original_error
+        raise RuntimeError(
+            f"MiSub connector update failed; original state restored: {original_error}"
+        ) from original_error
 
     summary = {
         "profile_id": args.profile_id,
