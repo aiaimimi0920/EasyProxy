@@ -1,5 +1,6 @@
 PyYAML
 boto3
+cryptography
 pytest>=8.0,<9.0
 requests
 tqdm

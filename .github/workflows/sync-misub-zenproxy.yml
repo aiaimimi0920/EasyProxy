@@ -1,0 +1,63 @@
+name: Sync MiSub ZenProxy Source
+
+'on':
+  workflow_dispatch:
+    inputs:
+      source_id:
+        description: MiSub ZenProxy connector source ID
+        required: true
+        default: conn_zenproxy_primary
+        type: string
+      count:
+        description: Maximum filtered nodes requested from ZenProxy
+        required: true
+        default: '10'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install runtime dependencies
+        run: python -m pip install requests cryptography
+
+      - name: Export backup and update ZenProxy source
+        env:
+          MISUB_PUBLIC_URL: ${{ vars.EASYPROXY_MISUB_PUBLIC_URL }}
+          MISUB_ADMIN_PASSWORD: ${{ secrets.MISUB_ADMIN_PASSWORD }}
+          MISUB_MANIFEST_TOKEN: ${{ secrets.MISUB_MANIFEST_TOKEN }}
+          EASYPROXY_BACKUP_PASSPHRASE: ${{ secrets.EASYPROXY_BACKUP_PASSPHRASE }}
+          SOURCE_ID: ${{ inputs.source_id }}
+          SOURCE_COUNT: ${{ inputs.count }}
+        run: |
+          set -euo pipefail
+          for name in MISUB_PUBLIC_URL MISUB_ADMIN_PASSWORD MISUB_MANIFEST_TOKEN EASYPROXY_BACKUP_PASSPHRASE; do
+            [[ -n "${!name:-}" ]] || { echo "::error::$name is required"; exit 1; }
+          done
+          python scripts/sync-misub-zenproxy-source.py \
+            --base-url "$MISUB_PUBLIC_URL" \
+            --source-id "$SOURCE_ID" \
+            --count "$SOURCE_COUNT" \
+            --type http \
+            --chatgpt \
+            --backup-output "${RUNNER_TEMP}/misub-pre-zenproxy-${GITHUB_RUN_ID}.encrypted.json"
+
+      - name: Upload encrypted pre-update backup
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: misub-pre-zenproxy-${{ github.run_id }}
+          path: ${{ runner.temp }}/misub-pre-zenproxy-${{ github.run_id }}.encrypted.json
+          if-no-files-found: error
+          retention-days: 30
