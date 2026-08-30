@@ -90,6 +90,13 @@ class ValidateWorkflowContractTests(unittest.TestCase):
         self.assertIn("Enforce GitHub Actions as MiSub deployment authority", self.cloudflare_workflow)
         self.assertIn("configure_misub_pages_authority.py", self.cloudflare_workflow)
 
+    def test_misub_deploy_installs_pages_authority_dependency(self):
+        misub_job = self.cloudflare_workflow.split("  deploy-misub-pages:", 1)[1]
+        install = misub_job.index("python -m pip install PyYAML requests")
+        authority = misub_job.index("configure_misub_pages_authority.py")
+
+        self.assertLess(install, authority)
+
     def test_cloudflare_workflow_does_not_pass_runtime_secrets_in_argv(self):
         workflows = self.cloudflare_workflow + self.backup_workflow + self.restore_workflow
         for option in ("--admin-password", "--manifest-token", "--access-token", "--token"):

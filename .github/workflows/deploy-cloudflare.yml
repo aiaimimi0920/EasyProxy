@@ -181,7 +181,7 @@ jobs:
           fi
 
       - name: Install deployment helpers
-        run: python -m pip install PyYAML
+        run: python -m pip install PyYAML requests
 
       - name: Build easyproxyctl
         shell: bash
