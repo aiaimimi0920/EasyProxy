@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import random
+import secrets
 import sys
 import time
 from pathlib import Path
@@ -22,6 +23,7 @@ try:
         discover_directly_usable_nodes,
         fetch_nodes_and_source_sync,
         is_retryable_proxy_lease_error,
+        management_headers,
         normalize_proxy_url_for_host,
         probe_http_proxy,
         release_proxy_lease,
@@ -52,6 +54,7 @@ except ImportError:
         discover_directly_usable_nodes,
         fetch_nodes_and_source_sync,
         is_retryable_proxy_lease_error,
+        management_headers,
         normalize_proxy_url_for_host,
         probe_http_proxy,
         release_proxy_lease,
@@ -128,10 +131,12 @@ def main() -> int:
 
     effective_image = ensure_image(args.image, args.build_if_missing, args.audit_id)
     multi_port_base = get_free_port_range_start(34000 + random.randint(0, 20) * 100, 81)
+    management_password = secrets.token_urlsafe(32)
     config_payload = build_config(
         policy,
         manifest_url=args.manifest_url,
         manifest_token=manifest_token,
+        management_password=management_password,
         subscriptions=subscriptions,
         proxy_uris=proxy_uris,
         fallback_subscriptions=fallback_subscriptions,
@@ -181,13 +186,14 @@ def main() -> int:
     summary_path = Path(args.output_path) if args.output_path.strip() else artifact_dir / "summary.json"
     try:
         base_url = f"http://127.0.0.1:{management_port}"
-        wait_management_ready(base_url, 180)
+        wait_management_ready(base_url, 180, management_password)
         wait_scenario_state(
             base_url,
             scenario_timeout,
             require_manifest_healthy=args.require_manifest_healthy,
             require_fallback_active=args.require_fallback_active,
             require_connector_instances=args.require_connector_instance_count,
+            management_password=management_password,
         )
         probe_deadline = time.time() + scenario_timeout
         last_nodes: dict[str, Any] = {}
@@ -201,7 +207,7 @@ def main() -> int:
         container_networks = collect_container_networks(container_name)
 
         while time.time() < probe_deadline:
-            last_nodes, last_source_sync = fetch_nodes_and_source_sync(base_url)
+            last_nodes, last_source_sync = fetch_nodes_and_source_sync(base_url, management_password)
             all_nodes = list(last_nodes.get("nodes") or [])
             candidate_nodes = collect_direct_probe_candidates(all_nodes, default_scheme="http")
             stable_uris, stable_results = discover_directly_usable_nodes(
@@ -212,7 +218,11 @@ def main() -> int:
 
             last_pool_probe = probe_http_proxy("http://127.0.0.1:22323", policy, network_container=container_name)
             try:
-                best_proxy_response = requests.get(f"{base_url}/api/best-proxy?top=3", timeout=20)
+                best_proxy_response = requests.get(
+                    f"{base_url}/api/best-proxy?top=3",
+                    headers=management_headers(management_password),
+                    timeout=20,
+                )
                 best_proxy_response.raise_for_status()
                 last_best_proxy_payload = best_proxy_response.json()
             except Exception:
@@ -244,7 +254,7 @@ def main() -> int:
                 lease_attempts = max(1, min(len(stable_results), 12))
                 for _ in range(lease_attempts):
                     try:
-                        lease = checkout_proxy_lease(base_url)
+                        lease = checkout_proxy_lease(base_url, management_password)
                     except Exception as exc:
                         compat_probe["attempts"].append({
                             "lease_id": "",
@@ -276,6 +286,7 @@ def main() -> int:
                             report_proxy_lease(
                                 base_url,
                                 lease_id,
+                                management_password=management_password,
                                 success=True,
                                 latency_ms=latency_values[0] if latency_values else 0,
                             )
@@ -294,12 +305,13 @@ def main() -> int:
                         report_proxy_lease(
                             base_url,
                             lease_id,
+                            management_password=management_password,
                             success=False,
                             error_code="runtime-audit:" + ("|".join(failure_codes)[:200] if failure_codes else "probe-failed"),
                         )
                     finally:
                         try:
-                            release_proxy_lease(base_url, lease_id)
+                            release_proxy_lease(base_url, lease_id, management_password)
                         except Exception:
                             pass
 

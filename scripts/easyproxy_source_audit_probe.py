@@ -15,27 +15,46 @@ try:
 except ImportError:
     from easyproxy_source_audit_support import CURL_IMAGE, run
 
-def wait_management_ready(base_url: str, timeout_seconds: int) -> dict[str, Any]:
+def management_headers(management_password: str, *, json_content: bool = False) -> dict[str, str]:
+    headers = {"Authorization": f"Bearer {management_password}"}
+    if json_content:
+        headers["Content-Type"] = "application/json"
+    return headers
+
+
+def wait_management_ready(base_url: str, timeout_seconds: int, management_password: str) -> dict[str, Any]:
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
         try:
-            response = requests.get(f"{base_url}/api/settings", timeout=10)
+            response = requests.get(
+                f"{base_url}/api/settings",
+                headers=management_headers(management_password),
+                timeout=10,
+            )
             response.raise_for_status()
             return response.json()
         except Exception:
             time.sleep(3)
     raise RuntimeError(f"timed out waiting for management API at {base_url}")
 
-def wait_scenario_state(base_url: str, timeout_seconds: int, require_manifest_healthy: bool, require_fallback_active: bool, require_connector_instances: int) -> tuple[dict[str, Any], dict[str, Any] | None]:
+def wait_scenario_state(base_url: str, timeout_seconds: int, require_manifest_healthy: bool, require_fallback_active: bool, require_connector_instances: int, management_password: str) -> tuple[dict[str, Any], dict[str, Any] | None]:
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
         try:
-            nodes_response = requests.get(f"{base_url}/api/nodes", timeout=15)
+            nodes_response = requests.get(
+                f"{base_url}/api/nodes",
+                headers=management_headers(management_password),
+                timeout=15,
+            )
             nodes_response.raise_for_status()
             nodes = nodes_response.json()
             source_sync = None
             try:
-                source_sync_response = requests.get(f"{base_url}/api/source-sync/status", timeout=10)
+                source_sync_response = requests.get(
+                    f"{base_url}/api/source-sync/status",
+                    headers=management_headers(management_password),
+                    timeout=10,
+                )
                 source_sync_response.raise_for_status()
                 source_sync = source_sync_response.json()
             except Exception:
@@ -61,13 +80,21 @@ def wait_scenario_state(base_url: str, timeout_seconds: int, require_manifest_he
             time.sleep(5)
     raise RuntimeError(f"timed out waiting for scenario readiness at {base_url}")
 
-def fetch_nodes_and_source_sync(base_url: str) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    nodes_response = requests.get(f"{base_url}/api/nodes", timeout=15)
+def fetch_nodes_and_source_sync(base_url: str, management_password: str) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    nodes_response = requests.get(
+        f"{base_url}/api/nodes",
+        headers=management_headers(management_password),
+        timeout=15,
+    )
     nodes_response.raise_for_status()
     nodes = nodes_response.json()
     source_sync = None
     try:
-        source_sync_response = requests.get(f"{base_url}/api/source-sync/status", timeout=10)
+        source_sync_response = requests.get(
+            f"{base_url}/api/source-sync/status",
+            headers=management_headers(management_password),
+            timeout=10,
+        )
         source_sync_response.raise_for_status()
         source_sync = source_sync_response.json()
     except Exception:
@@ -163,15 +190,10 @@ def probe_http_proxy(proxy_url: str, policy: dict[str, Any], *, network_containe
         "attempts": attempts,
     }
 
-def compat_headers() -> dict[str, str]:
-    return {
-        "Content-Type": "application/json",
-    }
-
-def checkout_proxy_lease(base_url: str) -> dict[str, Any]:
+def checkout_proxy_lease(base_url: str, management_password: str) -> dict[str, Any]:
     response = requests.post(
         f"{base_url}/proxy/leases/checkout",
-        headers=compat_headers(),
+        headers=management_headers(management_password, json_content=True),
         json={
             "hostId": "easyproxy-source-audit",
             "providerTypeKey": "easy-proxies",
@@ -206,10 +228,10 @@ def is_retryable_proxy_lease_error(message: str) -> bool:
         or "timeout waiting for initial probe completion" in text
     )
 
-def report_proxy_lease(base_url: str, lease_id: str, *, success: bool, latency_ms: int = 0, error_code: str = "") -> None:
+def report_proxy_lease(base_url: str, lease_id: str, *, management_password: str, success: bool, latency_ms: int = 0, error_code: str = "") -> None:
     response = requests.post(
         f"{base_url}/proxy/leases/report",
-        headers=compat_headers(),
+        headers=management_headers(management_password, json_content=True),
         json={
             "leaseId": lease_id,
             "success": bool(success),
@@ -223,9 +245,10 @@ def report_proxy_lease(base_url: str, lease_id: str, *, success: bool, latency_m
     )
     response.raise_for_status()
 
-def release_proxy_lease(base_url: str, lease_id: str) -> None:
+def release_proxy_lease(base_url: str, lease_id: str, management_password: str) -> None:
     response = requests.post(
         f"{base_url}/proxy/leases/{lease_id}/release",
+        headers=management_headers(management_password),
         timeout=20,
     )
     response.raise_for_status()
