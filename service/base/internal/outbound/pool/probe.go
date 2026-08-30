@@ -18,6 +18,8 @@ import (
 	N "github.com/sagernet/sing/common/network"
 )
 
+const maxProbeFallbackReserve = 5 * time.Second
+
 func httpProbe(conn net.Conn, destination M.Socksaddr, skipCertVerify ...bool) (time.Duration, error) {
 	return httpProbeTarget(conn, monitor.ProbeTargetSpec{
 		Scheme:  map[bool]string{true: "https", false: "http"}[destination.Port == 443],
@@ -134,7 +136,14 @@ func nextProbeTargetContext(parent context.Context, remainingTargets int) (conte
 	if remaining <= 0 {
 		return context.WithCancel(parent)
 	}
-	return context.WithTimeout(parent, remaining/time.Duration(remainingTargets))
+	evenBudget := remaining / time.Duration(remainingTargets)
+	fallbackReserve := remaining - evenBudget
+	// Long-lived connectors need more than an even slice, while fallbacks still
+	// need a bounded chance to run before the node deadline.
+	if fallbackReserve > maxProbeFallbackReserve {
+		fallbackReserve = maxProbeFallbackReserve
+	}
+	return context.WithTimeout(parent, remaining-fallbackReserve)
 }
 
 func validateProbeStatus(target monitor.ProbeTargetSpec, status int) error {

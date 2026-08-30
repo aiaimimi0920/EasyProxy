@@ -213,6 +213,22 @@ func TestRunProbeTargetsSlowFirstTargetDoesNotStarveFallback(t *testing.T) {
 	}
 }
 
+func TestNextProbeTargetContextCapsFallbackReserve(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	targetCtx, targetCancel := nextProbeTargetContext(ctx, 6)
+	defer targetCancel()
+	deadline, ok := targetCtx.Deadline()
+	if !ok {
+		t.Fatal("target context has no deadline")
+	}
+	budget := time.Until(deadline)
+	if budget < 4500*time.Millisecond || budget > 5500*time.Millisecond {
+		t.Fatalf("first target budget = %v, want about 5s", budget)
+	}
+}
+
 func TestRunProbeTargetsViaHTTPProxySlowConnectDoesNotStarveFallback(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
