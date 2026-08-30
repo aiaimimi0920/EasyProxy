@@ -30,7 +30,15 @@ func httpProbe(conn net.Conn, destination M.Socksaddr, skipCertVerify ...bool) (
 }
 
 func httpProbeTarget(conn net.Conn, target monitor.ProbeTargetSpec, skipCertVerify ...bool) (time.Duration, error) {
-	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+	return httpProbeTargetContext(context.Background(), conn, target, skipCertVerify...)
+}
+
+func httpProbeTargetContext(ctx context.Context, conn net.Conn, target monitor.ProbeTargetSpec, skipCertVerify ...bool) (time.Duration, error) {
+	stopContextInterrupt := context.AfterFunc(ctx, func() {
+		_ = conn.SetDeadline(time.Now())
+	})
+	defer stopContextInterrupt()
+	_ = conn.SetDeadline(probeOperationDeadline(ctx, 10*time.Second))
 	defer conn.SetDeadline(time.Time{})
 	probeConn := conn
 	host := target.Host
@@ -60,11 +68,11 @@ func httpProbeTarget(conn net.Conn, target monitor.ProbeTargetSpec, skipCertVeri
 	}
 	req := fmt.Sprintf("HEAD %s HTTP/1.1\r\nHost: %s\r\nConnection: keep-alive\r\nUser-Agent: EasyProxy-URLTest/1.0\r\nAccept: */*\r\n\r\n", path, hostHeader)
 	reader := bufio.NewReader(probeConn)
-	firstDuration, firstStatus, err := performHTTPProbeRequest(probeConn, reader, req)
+	firstDuration, firstStatus, err := performHTTPProbeRequest(ctx, probeConn, reader, req)
 	if err != nil {
 		return 0, err
 	}
-	secondDuration, secondStatus, secondErr := performHTTPProbeRequest(probeConn, reader, req)
+	secondDuration, secondStatus, secondErr := performHTTPProbeRequest(ctx, probeConn, reader, req)
 	if secondErr == nil {
 		if err := validateProbeStatus(target, secondStatus); err != nil {
 			return 0, err
@@ -77,13 +85,13 @@ func httpProbeTarget(conn net.Conn, target monitor.ProbeTargetSpec, skipCertVeri
 	return firstDuration, nil
 }
 
-func performHTTPProbeRequest(conn net.Conn, reader *bufio.Reader, request string) (time.Duration, int, error) {
-	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+func performHTTPProbeRequest(ctx context.Context, conn net.Conn, reader *bufio.Reader, request string) (time.Duration, int, error) {
+	_ = conn.SetWriteDeadline(probeOperationDeadline(ctx, 5*time.Second))
 	start := time.Now()
 	if _, err := conn.Write([]byte(request)); err != nil {
 		return 0, 0, fmt.Errorf("write request: %w", err)
 	}
-	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	_ = conn.SetReadDeadline(probeOperationDeadline(ctx, 10*time.Second))
 	statusLine, err := reader.ReadString('\n')
 	if err != nil {
 		return 0, 0, fmt.Errorf("read response: %w", err)
@@ -107,6 +115,26 @@ func performHTTPProbeRequest(conn net.Conn, reader *bufio.Reader, request string
 		}
 	}
 	return duration, status, nil
+}
+
+func probeOperationDeadline(ctx context.Context, maximum time.Duration) time.Time {
+	deadline := time.Now().Add(maximum)
+	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
+		return contextDeadline
+	}
+	return deadline
+}
+
+func nextProbeTargetContext(parent context.Context, remainingTargets int) (context.Context, context.CancelFunc) {
+	deadline, hasDeadline := parent.Deadline()
+	if !hasDeadline || remainingTargets <= 1 {
+		return context.WithCancel(parent)
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return context.WithCancel(parent)
+	}
+	return context.WithTimeout(parent, remaining/time.Duration(remainingTargets))
 }
 
 func validateProbeStatus(target monitor.ProbeTargetSpec, status int) error {
@@ -247,7 +275,12 @@ func dialContextTCP(ctx context.Context, address string) (net.Conn, error) {
 	return dialer.DialContext(ctx, "tcp", address)
 }
 
-func connectHTTPProxy(conn net.Conn, target monitor.ProbeTargetSpec) error {
+func connectHTTPProxy(ctx context.Context, conn net.Conn, target monitor.ProbeTargetSpec) error {
+	stopContextInterrupt := context.AfterFunc(ctx, func() {
+		_ = conn.SetDeadline(time.Now())
+	})
+	defer stopContextInterrupt()
+
 	host := target.Host
 	if host == "" {
 		host = target.Dst.AddrString()
@@ -259,12 +292,12 @@ func connectHTTPProxy(conn net.Conn, target monitor.ProbeTargetSpec) error {
 	authority := net.JoinHostPort(host, strconv.Itoa(int(port)))
 	req := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\nProxy-Connection: Keep-Alive\r\nUser-Agent: EasyProxy-Probe/1.0\r\n\r\n", authority, authority)
 
-	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	_ = conn.SetWriteDeadline(probeOperationDeadline(ctx, 5*time.Second))
 	if _, err := conn.Write([]byte(req)); err != nil {
 		return fmt.Errorf("write CONNECT request: %w", err)
 	}
 
-	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	_ = conn.SetReadDeadline(probeOperationDeadline(ctx, 10*time.Second))
 	reader := bufio.NewReader(conn)
 	statusLine, err := reader.ReadString('\n')
 	if err != nil {
@@ -296,25 +329,34 @@ func connectHTTPProxy(conn net.Conn, target monitor.ProbeTargetSpec) error {
 
 func (p *poolOutbound) runProbeTargetsViaHTTPProxy(ctx context.Context, proxyAddress string, targets []monitor.ProbeTargetSpec) (time.Duration, error) {
 	var errs []string
-	for _, target := range targets {
+	for index, target := range targets {
+		if err := ctx.Err(); err != nil {
+			errs = append(errs, err.Error())
+			break
+		}
+		targetCtx, cancel := nextProbeTargetContext(ctx, len(targets)-index)
 		start := time.Now()
-		conn, err := dialContextTCP(ctx, proxyAddress)
+		conn, err := dialContextTCP(targetCtx, proxyAddress)
 		if err != nil {
+			cancel()
 			errs = append(errs, fmt.Sprintf("%s proxy dial: %v", target.Original, err))
 			continue
 		}
-		err = connectHTTPProxy(conn, target)
+		err = connectHTTPProxy(targetCtx, conn, target)
 		if err != nil {
 			conn.Close()
+			cancel()
 			errs = append(errs, fmt.Sprintf("%s proxy connect: %v", target.Original, err))
 			continue
 		}
 		if target.Scheme == "tcp" {
 			conn.Close()
+			cancel()
 			return time.Since(start), nil
 		}
-		duration, err := httpProbeTarget(conn, target, p.shouldSkipProbeTLSVerify())
+		duration, err := httpProbeTargetContext(targetCtx, conn, target, p.shouldSkipProbeTLSVerify())
 		conn.Close()
+		cancel()
 		if err != nil {
 			errs = append(errs, fmt.Sprintf("%s proxy probe: %v", target.Original, err))
 			continue
@@ -326,19 +368,27 @@ func (p *poolOutbound) runProbeTargetsViaHTTPProxy(ctx context.Context, proxyAdd
 
 func (p *poolOutbound) runProbeTargets(ctx context.Context, outbound adapter.Outbound, targets []monitor.ProbeTargetSpec) (time.Duration, error) {
 	var errs []string
-	for _, target := range targets {
+	for index, target := range targets {
+		if err := ctx.Err(); err != nil {
+			errs = append(errs, err.Error())
+			break
+		}
+		targetCtx, cancel := nextProbeTargetContext(ctx, len(targets)-index)
 		start := time.Now()
-		conn, err := outbound.DialContext(ctx, N.NetworkTCP, target.Dst)
+		conn, err := outbound.DialContext(targetCtx, N.NetworkTCP, target.Dst)
 		if err != nil {
+			cancel()
 			errs = append(errs, fmt.Sprintf("%s dial: %v", target.Original, err))
 			continue
 		}
 		if target.Scheme == "tcp" {
 			conn.Close()
+			cancel()
 			return time.Since(start), nil
 		}
-		duration, err := httpProbeTarget(conn, target, p.shouldSkipProbeTLSVerify())
+		duration, err := httpProbeTargetContext(targetCtx, conn, target, p.shouldSkipProbeTLSVerify())
 		conn.Close()
+		cancel()
 		if err != nil {
 			errs = append(errs, fmt.Sprintf("%s probe: %v", target.Original, err))
 			continue

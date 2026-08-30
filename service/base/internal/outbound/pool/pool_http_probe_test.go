@@ -1,6 +1,9 @@
 package pool
 
 import (
+	"bufio"
+	"context"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +15,32 @@ import (
 
 	M "github.com/sagernet/sing/common/metadata"
 )
+
+type fallbackProbeOutbound struct {
+	calls atomic.Int32
+}
+
+func (*fallbackProbeOutbound) Type() string { return "test" }
+
+func (*fallbackProbeOutbound) Tag() string { return "fallback-probe" }
+
+func (*fallbackProbeOutbound) Network() []string { return []string{"tcp"} }
+
+func (*fallbackProbeOutbound) Dependencies() []string { return nil }
+
+func (o *fallbackProbeOutbound) DialContext(ctx context.Context, _ string, _ M.Socksaddr) (net.Conn, error) {
+	if o.calls.Add(1) == 1 {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	client, server := net.Pipe()
+	server.Close()
+	return client, nil
+}
+
+func (*fallbackProbeOutbound) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, context.Canceled
+}
 
 func TestHTTPProbeSupportsPlainHTTP(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -150,4 +179,103 @@ func TestHTTPProbeTargetUsesWarmSecondRequestDelay(t *testing.T) {
 	if duration >= 50*time.Millisecond {
 		t.Fatalf("unified delay = %v, want warm second-request latency", duration)
 	}
+}
+
+func TestRunProbeTargetsSlowFirstTargetDoesNotStarveFallback(t *testing.T) {
+	outbound := &fallbackProbeOutbound{}
+	targets := []monitor.ProbeTargetSpec{
+		{
+			Original: "tcp://slow.example:443",
+			Scheme:   "tcp",
+			Host:     "slow.example",
+			Port:     443,
+			Dst:      M.ParseSocksaddrHostPort("slow.example", 443),
+		},
+		{
+			Original: "tcp://fast.example:443",
+			Scheme:   "tcp",
+			Host:     "fast.example",
+			Port:     443,
+			Dst:      M.ParseSocksaddrHostPort("fast.example", 443),
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Millisecond)
+	defer cancel()
+
+	if _, err := (&poolOutbound{}).runProbeTargets(ctx, outbound, targets); err != nil {
+		t.Fatalf("runProbeTargets() error = %v", err)
+	}
+	if got := outbound.calls.Load(); got != 2 {
+		t.Fatalf("probe attempts = %d, want 2", got)
+	}
+	if err := ctx.Err(); err != nil {
+		t.Fatalf("fallback completed after the node deadline: %v", err)
+	}
+}
+
+func TestRunProbeTargetsViaHTTPProxySlowConnectDoesNotStarveFallback(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer listener.Close()
+
+	var attempts atomic.Int32
+	go func() {
+		for {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			go serveFallbackConnectAttempt(conn, &attempts)
+		}
+	}()
+
+	targets := []monitor.ProbeTargetSpec{
+		{
+			Original: "tcp://slow.example:443",
+			Scheme:   "tcp",
+			Host:     "slow.example",
+			Port:     443,
+			Dst:      M.ParseSocksaddrHostPort("slow.example", 443),
+		},
+		{
+			Original: "tcp://fast.example:443",
+			Scheme:   "tcp",
+			Host:     "fast.example",
+			Port:     443,
+			Dst:      M.ParseSocksaddrHostPort("fast.example", 443),
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Millisecond)
+	defer cancel()
+
+	if _, err := (&poolOutbound{}).runProbeTargetsViaHTTPProxy(ctx, listener.Addr().String(), targets); err != nil {
+		t.Fatalf("runProbeTargetsViaHTTPProxy() error = %v", err)
+	}
+	if got := attempts.Load(); got != 2 {
+		t.Fatalf("proxy probe attempts = %d, want 2", got)
+	}
+	if err := ctx.Err(); err != nil {
+		t.Fatalf("proxy fallback completed after the node deadline: %v", err)
+	}
+}
+
+func serveFallbackConnectAttempt(conn net.Conn, attempts *atomic.Int32) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return
+		}
+		if line == "\r\n" || line == "\n" {
+			break
+		}
+	}
+	if attempts.Add(1) == 1 {
+		_, _ = io.Copy(io.Discard, reader)
+		return
+	}
+	_, _ = conn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
 }
