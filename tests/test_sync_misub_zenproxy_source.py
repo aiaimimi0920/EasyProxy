@@ -39,6 +39,12 @@ def test_update_zen_source_preserves_secret_and_other_sources():
     assert source["options"]["connector_config"] == source["connector_config"]
 
 
+def test_normalize_proxy_type_supports_all_protocol_sentinel():
+    assert MODULE.normalize_proxy_type("all") == ""
+    assert MODULE.normalize_proxy_type(" ANY ") == ""
+    assert MODULE.normalize_proxy_type("HTTP") == "http"
+
+
 def test_encrypt_backup_matches_browser_envelope_contract():
     payload = {"format": "misub-logical-backup", "data": {"sources": [], "profiles": []}}
     envelope = MODULE.encrypt_backup(payload, "backup-passphrase")

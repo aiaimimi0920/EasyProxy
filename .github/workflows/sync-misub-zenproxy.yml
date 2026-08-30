@@ -13,6 +13,18 @@ name: Sync MiSub ZenProxy Source
         required: true
         default: '10'
         type: string
+      proxy_type:
+        description: ZenProxy protocol filter; all keeps every supported protocol
+        required: true
+        default: http
+        type: choice
+        options:
+          - all
+          - http
+          - vmess
+          - vless
+          - trojan
+          - shadowsocks
 
 permissions:
   contents: read
@@ -40,6 +52,7 @@ jobs:
           EASYPROXY_BACKUP_PASSPHRASE: ${{ secrets.EASYPROXY_BACKUP_PASSPHRASE }}
           SOURCE_ID: ${{ inputs.source_id }}
           SOURCE_COUNT: ${{ inputs.count }}
+          SOURCE_TYPE: ${{ inputs.proxy_type }}
         run: |
           set -euo pipefail
           for name in MISUB_PUBLIC_URL MISUB_ADMIN_PASSWORD MISUB_MANIFEST_TOKEN EASYPROXY_BACKUP_PASSPHRASE; do
@@ -49,7 +62,7 @@ jobs:
             --base-url "$MISUB_PUBLIC_URL" \
             --source-id "$SOURCE_ID" \
             --count "$SOURCE_COUNT" \
-            --type http \
+            --type "$SOURCE_TYPE" \
             --chatgpt \
             --backup-output "${RUNNER_TEMP}/misub-pre-zenproxy-${GITHUB_RUN_ID}.encrypted.json"
 

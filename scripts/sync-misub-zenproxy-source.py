@@ -21,6 +21,13 @@ BACKUP_AAD = b"MiSub encrypted backup v1"
 BACKUP_ITERATIONS = 310_000
 
 
+def normalize_proxy_type(value: str) -> str:
+    normalized = value.strip().lower()
+    if normalized in {"all", "any", "*"}:
+        return ""
+    return normalized
+
+
 def ensure(condition: bool, message: str) -> None:
     if not condition:
         raise RuntimeError(message)
@@ -112,6 +119,7 @@ def main() -> int:
     parser.add_argument("--backup-output", type=Path, required=True)
     args = parser.parse_args()
     ensure(args.count > 0, "count must be positive")
+    args.proxy_type = normalize_proxy_type(args.proxy_type)
 
     admin_password = os.environ.get("MISUB_ADMIN_PASSWORD", "")
     manifest_token = os.environ.get("MISUB_MANIFEST_TOKEN", "")
