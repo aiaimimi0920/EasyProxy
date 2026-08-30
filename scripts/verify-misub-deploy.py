@@ -30,6 +30,23 @@ def retry(label: str, attempts: int, delay_seconds: float, func):
     raise RuntimeError(f"{label} failed after {attempts} attempts: {last_error}") from last_error
 
 
+def get_with_retry(
+    session: requests.Session,
+    label: str,
+    url: str,
+    *,
+    attempts: int = 10,
+    delay_seconds: float = 5,
+    **kwargs,
+) -> requests.Response:
+    def request() -> requests.Response:
+        response = session.get(url, **kwargs)
+        response.raise_for_status()
+        return response
+
+    return retry(label, attempts, delay_seconds, request)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Verify MiSub Pages deployment by checking public and authenticated API routes.")
     parser.add_argument("--base-url", required=True)
@@ -44,13 +61,11 @@ def main() -> int:
     base_url = args.base_url.rstrip("/") + "/"
     session = requests.Session()
 
-    root = retry("MiSub root page", 10, 5, lambda: session.get(base_url, timeout=30))
-    root.raise_for_status()
+    root = get_with_retry(session, "MiSub root page", base_url, timeout=30)
     ensure("html" in root.text.lower(), "MiSub root page did not return HTML content")
 
     public_config_url = urljoin(base_url, "api/public_config")
-    public_config = retry("MiSub public config", 10, 5, lambda: session.get(public_config_url, timeout=30))
-    public_config.raise_for_status()
+    public_config = get_with_retry(session, "MiSub public config", public_config_url, timeout=30)
     try:
         public_payload = public_config.json()
     except json.JSONDecodeError as exc:
@@ -77,8 +92,7 @@ def main() -> int:
     ensure(bool(login_payload.get("success")), "MiSub login did not report success")
 
     settings_url = urljoin(base_url, "api/settings")
-    settings = retry("MiSub settings", 10, 5, lambda: session.get(settings_url, timeout=30))
-    settings.raise_for_status()
+    settings = get_with_retry(session, "MiSub settings", settings_url, timeout=30)
     try:
         settings_payload = settings.json()
     except json.JSONDecodeError as exc:
@@ -86,15 +100,12 @@ def main() -> int:
     ensure(isinstance(settings_payload, dict), "MiSub settings endpoint did not return JSON")
     ensure("mytoken" in settings_payload, "MiSub settings payload is missing expected keys")
 
-    manifest = retry(
+    manifest = get_with_retry(
+        session,
         "MiSub manifest",
-        10,
-        5,
-        lambda: session.get(
-            urljoin(base_url, f"api/manifest/{args.manifest_profile_id}"),
-            headers={"Authorization": f"Bearer {manifest_token}"},
-            timeout=30,
-        ),
+        urljoin(base_url, f"api/manifest/{args.manifest_profile_id}"),
+        headers={"Authorization": f"Bearer {manifest_token}"},
+        timeout=30,
     )
     if manifest.status_code != 200:
         raise RuntimeError(f"Unexpected manifest response status: {manifest.status_code}")
@@ -105,8 +116,7 @@ def main() -> int:
     ensure(len(sources) > 0, "MiSub manifest payload did not return any sources")
 
     cron_url = urljoin(base_url, "api/cron/status")
-    cron_status = retry("MiSub cron status", 10, 5, lambda: session.get(cron_url, timeout=30))
-    cron_status.raise_for_status()
+    cron_status = get_with_retry(session, "MiSub cron status", cron_url, timeout=30)
     try:
         cron_payload = cron_status.json()
     except json.JSONDecodeError as exc:
