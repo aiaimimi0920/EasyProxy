@@ -359,6 +359,14 @@ jobs:
             -ValidationId "local-server-${{ github.run_id }}-${{ github.run_attempt }}" `
             -KeepArtifacts
 
+      - name: Make runtime validation artifacts readable
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          if [[ -d tmp/easy-proxy-runtime-validation ]]; then
+            sudo chmod -R a+rX tmp/easy-proxy-runtime-validation
+          fi
+
       - name: Upload runtime validation artifacts
         if: ${{ always() }}
         uses: actions/upload-artifact@v4

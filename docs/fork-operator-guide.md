@@ -138,6 +138,13 @@ Run **Deploy Cloudflare Apps** with:
 - `misub_branch`: `main`
 - `run_verification`: `true`
 
+This workflow is the deployment authority for MiSub. If the selected Pages
+project was previously connected to GitHub or GitLab, the workflow disables
+automatic production and preview deployments before publishing. This prevents
+a later push to the MiSub fork from replacing the generated D1 binding with the
+portable, unbound source template. Update the root submodule pointer, then run
+**Deploy Cloudflare Apps** instead of relying on Cloudflare Git builds.
+
 The run must identify one exact Pages project, one exact D1 database and one
 exact Worker before it deploys. Run the same bootstrap a second time; it must
 reuse those identities rather than create duplicates.

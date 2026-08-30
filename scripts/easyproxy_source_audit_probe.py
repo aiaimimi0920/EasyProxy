@@ -15,6 +15,7 @@ try:
 except ImportError:
     from easyproxy_source_audit_support import CURL_IMAGE, run
 
+
 def management_headers(management_password: str, *, json_content: bool = False) -> dict[str, str]:
     headers = {"Authorization": f"Bearer {management_password}"}
     if json_content:
@@ -22,8 +23,34 @@ def management_headers(management_password: str, *, json_content: bool = False) 
     return headers
 
 
-def wait_management_ready(base_url: str, timeout_seconds: int, management_password: str) -> dict[str, Any]:
+def stopped_container_exit_code(container_name: str) -> int | None:
+    result = subprocess.run(
+        ["docker", "inspect", container_name, "--format", "{{.State.Running}} {{.State.ExitCode}}"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    fields = result.stdout.strip().split()
+    if len(fields) != 2 or fields[0].lower() == "true":
+        return None
+    try:
+        return int(fields[1])
+    except ValueError:
+        return None
+
+
+def wait_management_ready(
+    base_url: str,
+    timeout_seconds: int,
+    management_password: str,
+    *,
+    container_name: str = "",
+) -> dict[str, Any]:
     deadline = time.time() + timeout_seconds
+    last_error: Exception | None = None
     while time.time() < deadline:
         try:
             response = requests.get(
@@ -33,9 +60,16 @@ def wait_management_ready(base_url: str, timeout_seconds: int, management_passwo
             )
             response.raise_for_status()
             return response.json()
-        except Exception:
+        except Exception as exc:
+            last_error = exc
+            exit_code = stopped_container_exit_code(container_name) if container_name else None
+            if exit_code is not None:
+                raise RuntimeError(
+                    f"container {container_name} exited with code {exit_code} before management API became ready"
+                ) from exc
             time.sleep(3)
-    raise RuntimeError(f"timed out waiting for management API at {base_url}")
+    detail = f"; last error: {type(last_error).__name__}: {last_error}" if last_error else ""
+    raise RuntimeError(f"timed out waiting for management API at {base_url}{detail}")
 
 def wait_scenario_state(base_url: str, timeout_seconds: int, require_manifest_healthy: bool, require_fallback_active: bool, require_connector_instances: int, management_password: str) -> tuple[dict[str, Any], dict[str, Any] | None]:
     deadline = time.time() + timeout_seconds

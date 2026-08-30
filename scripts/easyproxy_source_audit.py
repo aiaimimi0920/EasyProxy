@@ -186,7 +186,12 @@ def main() -> int:
     summary_path = Path(args.output_path) if args.output_path.strip() else artifact_dir / "summary.json"
     try:
         base_url = f"http://127.0.0.1:{management_port}"
-        wait_management_ready(base_url, 180, management_password)
+        wait_management_ready(
+            base_url,
+            180,
+            management_password,
+            container_name=container_name,
+        )
         wait_scenario_state(
             base_url,
             scenario_timeout,

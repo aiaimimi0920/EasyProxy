@@ -1,6 +1,9 @@
 from unittest.mock import Mock, patch
 
-from scripts.easyproxy_source_audit_probe import management_headers, wait_management_ready
+from scripts.easyproxy_source_audit_probe import (
+    management_headers,
+    wait_management_ready,
+)
 from scripts.easyproxy_source_audit_support import build_config
 
 
@@ -45,3 +48,28 @@ def test_management_readiness_uses_bearer_auth():
         headers={"Authorization": "Bearer audit-secret"},
         timeout=10,
     )
+
+
+def test_management_readiness_fails_when_container_exits():
+    inspect = Mock(returncode=0, stdout="false 1\n")
+
+    with (
+        patch(
+            "scripts.easyproxy_source_audit_probe.requests.get",
+            side_effect=ConnectionError("connection refused"),
+        ),
+        patch("scripts.easyproxy_source_audit_probe.subprocess.run", return_value=inspect),
+    ):
+        try:
+            wait_management_ready(
+                "http://127.0.0.1:29888",
+                180,
+                "audit-secret",
+                container_name="audit-container",
+            )
+        except RuntimeError as exc:
+            assert str(exc) == (
+                "container audit-container exited with code 1 before management API became ready"
+            )
+        else:
+            raise AssertionError("stopped audit container was treated as healthy")

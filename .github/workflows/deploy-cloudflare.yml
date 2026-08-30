@@ -298,6 +298,18 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Enforce GitHub Actions as MiSub deployment authority
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          PROJECT_NAME: ${{ steps.misub_resources.outputs.project_name }}
+        run: |
+          set -euo pipefail
+          python scripts/configure_misub_pages_authority.py \
+            --account-id "$CLOUDFLARE_ACCOUNT_ID" \
+            --project-name "$PROJECT_NAME"
+
       - name: Apply runtime config and expand-only D1 migrations
         shell: bash
         working-directory: upstreams/misub

@@ -76,18 +76,32 @@ class ValidateWorkflowContractTests(unittest.TestCase):
         )
 
     def test_misub_update_backs_up_before_migration_and_deploy(self):
+        authority = self.cloudflare_workflow.index("configure_misub_pages_authority.py")
         backup = self.cloudflare_workflow.index("cloud backup")
         retained = self.cloudflare_workflow.index("Retain encrypted pre-update backup")
         migration = self.cloudflare_workflow.index("d1 migrations apply")
         deploy = self.cloudflare_workflow.index("pages deploy dist")
         self.assertLess(backup, retained)
-        self.assertLess(retained, migration)
+        self.assertLess(retained, authority)
+        self.assertLess(authority, migration)
         self.assertLess(migration, deploy)
+
+    def test_misub_deploy_disables_competing_git_deployments(self):
+        self.assertIn("Enforce GitHub Actions as MiSub deployment authority", self.cloudflare_workflow)
+        self.assertIn("configure_misub_pages_authority.py", self.cloudflare_workflow)
 
     def test_cloudflare_workflow_does_not_pass_runtime_secrets_in_argv(self):
         workflows = self.cloudflare_workflow + self.backup_workflow + self.restore_workflow
         for option in ("--admin-password", "--manifest-token", "--access-token", "--token"):
             self.assertNotIn(option, workflows)
+
+    def test_runtime_artifacts_are_readable_before_upload(self):
+        runtime_job = self.publish_ghcr_workflow.split("  runtime-e2e:", 1)[1]
+        permissions = runtime_job.index("Make runtime validation artifacts readable")
+        upload = runtime_job.index("Upload runtime validation artifacts")
+
+        self.assertLess(permissions, upload)
+        self.assertIn("sudo chmod -R a+rX tmp/easy-proxy-runtime-validation", runtime_job)
 
     def test_misub_resources_use_strict_lifecycle_cli(self):
         self.assertIn('easyproxyctl" cloud "$mode"', self.cloudflare_workflow)
