@@ -39,6 +39,7 @@ func (m *connectorRuntimeManager) expandConnectorSources(cfg *config.Config, sou
 			cloned := cloneRuntimeSources(cached)
 			nextCache[cacheKey] = cloned
 			expanded = append(expanded, cloned...)
+			expanded = append(expanded, source)
 			continue
 		}
 
@@ -68,6 +69,7 @@ func (m *connectorRuntimeManager) expandConnectorSources(cfg *config.Config, sou
 		}
 		nextCache[cacheKey] = cloneRuntimeSources(generated)
 		expanded = append(expanded, generated...)
+		expanded = append(expanded, source)
 	}
 
 	m.fanoutCache = nextCache

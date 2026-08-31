@@ -175,18 +175,20 @@ func TestBuildActiveSourceSnapshotPreservesDistinctConnectorVariants(t *testing.
 	}
 }
 
-func TestBuildConnectorSpecsAutoFanoutSingleECHSource(t *testing.T) {
+func TestBuildConnectorSpecsAutoFanoutPreservesDomainFallback(t *testing.T) {
 	binaryPath, err := os.Executable()
 	if err != nil {
 		t.Fatalf("os.Executable() error = %v", err)
 	}
 
+	selectionRuns := 0
 	manager := &connectorRuntimeManager{
 		ctx:         context.Background(),
 		logger:      defaultLogger{},
 		instances:   make(map[string]*connectorInstance),
 		fanoutCache: make(map[string][]RuntimeSource),
 		preferredIPSelector: func(_ context.Context, _ string, _ config.ConnectorRuntimeConfig, _ config.ConnectorSourceConfig, options monitor.PreferredIPRefreshOptions) ([]preferredIPResultRow, string, string, error) {
+			selectionRuns++
 			if options.TopCount != 2 {
 				t.Fatalf("unexpected top count: %d", options.TopCount)
 			}
@@ -231,14 +233,31 @@ func TestBuildConnectorSpecsAutoFanoutSingleECHSource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildConnectorSpecs() error = %v", err)
 	}
-	if len(specs) != 2 {
-		t.Fatalf("expected 2 specs after fanout, got %d", len(specs))
+	if len(specs) != 3 {
+		t.Fatalf("expected 2 preferred specs plus domain fallback, got %d", len(specs))
 	}
 	if !strings.Contains(strings.Join(specs[0].Args, " "), "-ip 198.41.132.114") {
 		t.Fatalf("expected first spec to use preferred ip, got %#v", specs[0].Args)
 	}
 	if !strings.Contains(strings.Join(specs[1].Args, " "), "-ip 198.41.140.152") {
 		t.Fatalf("expected second spec to use preferred ip, got %#v", specs[1].Args)
+	}
+	if strings.Contains(strings.Join(specs[2].Args, " "), "-ip ") {
+		t.Fatalf("expected final spec to preserve domain resolution, got %#v", specs[2].Args)
+	}
+	if specs[2].Key != "manifest-ech" {
+		t.Fatalf("unexpected domain fallback key: %q", specs[2].Key)
+	}
+
+	cachedSpecs, err := manager.buildConnectorSpecs(cfg, sources)
+	if err != nil {
+		t.Fatalf("cached buildConnectorSpecs() error = %v", err)
+	}
+	if len(cachedSpecs) != 3 || cachedSpecs[2].Key != "manifest-ech" {
+		t.Fatalf("cached fanout lost domain fallback: %#v", cachedSpecs)
+	}
+	if selectionRuns != 1 {
+		t.Fatalf("preferred IP selector ran %d times, want 1", selectionRuns)
 	}
 }
 
