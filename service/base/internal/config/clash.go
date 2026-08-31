@@ -102,6 +102,12 @@ func convertClashProxyToURI(p clashProxy) string {
 
 func buildVMessURI(p clashProxy) string {
 	params := url.Values{}
+	if p.Cipher != "" {
+		params.Set("encryption", p.Cipher)
+	}
+	if p.AlterId != 0 {
+		params.Set("alterId", strconv.Itoa(p.AlterId))
+	}
 	if transport, ok := NormalizeV2RayTransport(p.Network); ok {
 		if transport != "" {
 			params.Set("type", transport)

@@ -30,6 +30,7 @@ pool:
   mode: auto
   failure_threshold: 3
   blacklist_duration: 24h
+  detour_source_refs: []
 
 multi_port:
   address: 0.0.0.0

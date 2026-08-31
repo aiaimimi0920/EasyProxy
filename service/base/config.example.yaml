@@ -51,6 +51,9 @@ pool:
   failure_threshold: 3
   # 黑名单持续时间
   blacklist_duration: 24h
+  # 这些来源的非 HTTP 节点经由排除同来源节点后的健康池建立连接，避免递归。
+  # manifest connector 的来源标识格式为 manifest:<connector-id>。
+  detour_source_refs: []
 
 # ───────────────────────────────────────────────────────────────
 # 多端口模式配置（multi-port / hybrid 模式使用）

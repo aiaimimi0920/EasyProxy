@@ -236,6 +236,8 @@ type PoolConfig struct {
 	FailureThreshold  int           `yaml:"failure_threshold"`
 	BlacklistDuration time.Duration `yaml:"blacklist_duration"`
 	MaxRetries        int           `yaml:"max_retries"` // max retry attempts on connection failure (default 2, 0 = no retry)
+	// DetourSourceRefs routes matching non-HTTP nodes through an independent pool.
+	DetourSourceRefs []string `yaml:"detour_source_refs,omitempty"`
 }
 
 // MultiPortConfig defines address/credential defaults for multi-port mode.

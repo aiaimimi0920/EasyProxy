@@ -181,6 +181,21 @@ Current manifest behavior:
 - `service/base` converts each returned sing-box outbound into a runtime proxy
   URI and treats the result as ephemeral manifest-origin nodes
 
+When a provider is reachable only through the existing healthy pool, operators
+may add its exact runtime source reference to `pool.detour_source_refs`, for
+example `manifest:conn_zenproxy_primary`. EasyProxy then:
+
+- leaves matching HTTP proxy nodes on direct dialing
+- dials matching non-HTTP nodes through an internal `proxy-bootstrap` pool
+- excludes every node from the matching source, including its HTTP nodes, from
+  that bootstrap pool so the chain cannot recurse into the same provider
+- rejects the candidate configuration if a detoured node exists but there is no
+  independent bootstrap member
+
+An absent or empty list preserves direct dialing for every source. This is an
+explicit NAS/egress compatibility control, not an automatic rewrite based on a
+provider display name or a transient health result.
+
 Profile lookup accepts either:
 
 - the stored profile `id`

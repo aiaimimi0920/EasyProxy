@@ -64,6 +64,7 @@ func (c *Config) Clone() *Config {
 
 	cloned.Management.Enabled = cloneConfigBool(c.Management.Enabled)
 	cloned.Management.ProbeTargets = cloneConfigSlice(c.Management.ProbeTargets)
+	cloned.Pool.DetourSourceRefs = cloneConfigSlice(c.Pool.DetourSourceRefs)
 	cloned.DNS.Enabled = cloneConfigBool(c.DNS.Enabled)
 	cloned.DNS.RemoteServers = cloneConfigSlice(c.DNS.RemoteServers)
 	cloned.Routing.UseDefaultRules = cloneConfigBool(c.Routing.UseDefaultRules)

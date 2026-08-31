@@ -12,8 +12,8 @@ func TestBuildURIFromSingboxOutboundVMess(t *testing.T) {
 		"server":      "vmess.example.com",
 		"server_port": 443,
 		"uuid":        "11111111-1111-1111-1111-111111111111",
-		"alter_id":    0,
-		"security":    "auto",
+		"alter_id":    2,
+		"security":    "aes-128-gcm",
 		"transport": map[string]any{
 			"type": "ws",
 			"path": "/ws",
@@ -41,6 +41,8 @@ func TestBuildURIFromSingboxOutboundVMess(t *testing.T) {
 		t.Fatalf("unexpected vmess uri prefix: %q", uri)
 	}
 	for _, want := range []string{
+		"alterId=2",
+		"encryption=aes-128-gcm",
 		"type=ws",
 		"path=%2Fws",
 		"host=edge.example.com",

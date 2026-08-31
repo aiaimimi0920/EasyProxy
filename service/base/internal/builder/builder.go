@@ -34,6 +34,13 @@ func Build(cfg *config.Config) (option.Options, error) {
 	nodeEndpointDomains := make([]string, 0, len(cfg.Nodes))
 	var failedNodes []string
 	usedTags := make(map[string]int) // Track tag usage for uniqueness
+	detourSourceRefs := detourSourceRefSet(cfg.Pool.DetourSourceRefs)
+	bootstrapMembers := make([]string, 0, len(cfg.Nodes))
+	bootstrapMetadata := make(map[string]poolout.MemberMeta)
+	detouredNodes := 0
+	if len(detourSourceRefs) > 0 {
+		usedTags[poolout.BootstrapTag] = 1
+	}
 
 	// Initialize GeoIP lookup if enabled
 	var geoLookup *geoip.Lookup
@@ -76,6 +83,13 @@ func Build(cfg *config.Config) (option.Options, error) {
 			failedNodes = append(failedNodes, node.Name)
 			continue
 		}
+		detourSource := sourceUsesBootstrapDetour(node.SourceRef, detourSourceRefs)
+		if detourSource && outbound.Type != C.TypeHTTP {
+			if err := setOutboundDetour(&outbound, poolout.BootstrapTag); err != nil {
+				return option.Options{}, fmt.Errorf("configure bootstrap detour for node %q: %w", node.Name, err)
+			}
+			detouredNodes++
+		}
 		memberTags = append(memberTags, tag)
 		baseOutbounds = append(baseOutbounds, outbound)
 		if endpointDomain := nodeEndpointDomain(node.URI); endpointDomain != "" {
@@ -116,6 +130,10 @@ func Build(cfg *config.Config) (option.Options, error) {
 		}
 
 		metadata[tag] = meta
+		if !detourSource {
+			bootstrapMembers = append(bootstrapMembers, tag)
+			bootstrapMetadata[tag] = meta
+		}
 	}
 
 	// Close GeoIP database after lookup
@@ -154,6 +172,13 @@ func Build(cfg *config.Config) (option.Options, error) {
 		route     option.RouteOptions
 	)
 	copy(outbounds, baseOutbounds)
+	bootstrapOutbound, err := buildBootstrapPool(cfg, bootstrapMembers, bootstrapMetadata, detouredNodes)
+	if err != nil {
+		return option.Options{}, err
+	}
+	if bootstrapOutbound != nil {
+		outbounds = append(outbounds, *bootstrapOutbound)
+	}
 
 	// Determine which components to enable based on mode
 	enablePoolInbound := cfg.Mode == "pool" || cfg.Mode == "hybrid"

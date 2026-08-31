@@ -23,6 +23,8 @@ const (
 	Type = "pool"
 	// Tag is the default outbound tag used by builder.
 	Tag = "proxy-pool"
+	// BootstrapTag is the pool used to reach source groups that cannot dial directly.
+	BootstrapTag = "proxy-bootstrap"
 
 	modeAuto       = "auto"
 	modeSequential = "sequential"
