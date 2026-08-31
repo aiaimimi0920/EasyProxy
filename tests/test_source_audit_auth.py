@@ -1,6 +1,7 @@
 from unittest.mock import Mock, patch
 
 from scripts.easyproxy_source_audit_probe import (
+    discover_directly_usable_nodes,
     management_headers,
     wait_management_ready,
 )
@@ -36,6 +37,32 @@ def test_management_headers_support_json_requests():
         "Authorization": "Bearer audit-secret",
         "Content-Type": "application/json",
     }
+
+
+def test_direct_probe_results_preserve_source_ref():
+    candidates = [
+        {
+            "tag": "zen-node",
+            "name": "Zen Node",
+            "source_ref": "manifest:conn_zenproxy_primary",
+            "port": 34001,
+            "uri": "vless://example",
+            "direct_proxy_url": "http://127.0.0.1:34001",
+        }
+    ]
+
+    with patch(
+        "scripts.easyproxy_source_audit_probe.probe_http_proxy",
+        return_value={"ok": True, "attempts": []},
+    ):
+        stable_uris, stable_results = discover_directly_usable_nodes(
+            candidates,
+            {},
+            network_container="audit-container",
+        )
+
+    assert stable_uris == ["vless://example"]
+    assert stable_results[0]["source_ref"] == "manifest:conn_zenproxy_primary"
 
 
 def test_management_readiness_uses_bearer_auth():

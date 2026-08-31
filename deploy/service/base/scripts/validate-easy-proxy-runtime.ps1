@@ -28,6 +28,7 @@ function Invoke-Audit {
         [string[]]$ProxyUris = @(),
         [string[]]$FallbackSubscriptions = @(),
         [string[]]$DetourSourceRefs = @(),
+        [string[]]$RequireStableSourceRefs = @(),
         [string[]]$DnsServers = @(),
         [string]$ManifestUrl = "",
         [string]$ManifestToken = "",
@@ -65,6 +66,9 @@ function Invoke-Audit {
     }
     foreach ($sourceRef in @($DetourSourceRefs | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
         $args += @("--detour-source-ref", $sourceRef)
+    }
+    foreach ($sourceRef in @($RequireStableSourceRefs | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
+        $args += @("--require-stable-source-ref", $sourceRef)
     }
     foreach ($dnsServer in @($DnsServers | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
         $args += @("--dns-server", $dnsServer)
@@ -243,9 +247,21 @@ $connectorPayload = ConvertTo-Json -InputObject @(
 ) -Depth 20 -Compress
 
 $localSubscription = Invoke-Audit -ScenarioName "local-subscription" -Subscriptions $configuredLocalSubscriptions -DetourSourceRefs $configuredDetourSourceRefs -DnsServers $configuredDnsServers
+$manifestBootstrapUris = @()
+if ($configuredDetourSourceRefs.Count -gt 0) {
+    $manifestBootstrapUris = @(
+        Get-StableAvailableUris -Payload $localSubscription |
+            Select-Object -Unique -First 8
+    )
+    if ($manifestBootstrapUris.Count -lt 1) {
+        throw "No stable local subscription node is available for manifest detour bootstrap"
+    }
+}
 $manifestSubscription = Invoke-Audit `
     -ScenarioName "manifest-subscription" `
+    -ProxyUris $manifestBootstrapUris `
     -DetourSourceRefs $configuredDetourSourceRefs `
+    -RequireStableSourceRefs $configuredDetourSourceRefs `
     -DnsServers $configuredDnsServers `
     -ManifestUrl "$misubPublicUrl/api/manifest/aggregator-global" `
     -ManifestToken $manifestToken `

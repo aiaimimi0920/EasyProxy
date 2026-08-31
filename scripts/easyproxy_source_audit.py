@@ -89,6 +89,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--proxy-uri", action="append", default=[])
     parser.add_argument("--fallback-subscription", action="append", default=[])
     parser.add_argument("--detour-source-ref", action="append", default=[])
+    parser.add_argument("--require-stable-source-ref", action="append", default=[])
     parser.add_argument("--output-path", default="")
     parser.add_argument("--artifact-dir", default="")
     parser.add_argument("--docker-network-name", default="EasyAiMi")
@@ -112,6 +113,7 @@ def main() -> int:
     proxy_uris = normalize_list(args.proxy_uri)
     fallback_subscriptions = normalize_list(args.fallback_subscription)
     detour_source_refs = normalize_list(args.detour_source_ref)
+    required_stable_source_refs = normalize_list(args.require_stable_source_ref)
     dns_servers = normalize_list(args.dns_server)
     manifest_token = os.environ.get("EASYPROXY_AUDIT_MANIFEST_TOKEN", "")
     connectors_json = os.environ.get("EASYPROXY_AUDIT_CONNECTORS_JSON", "")
@@ -212,6 +214,7 @@ def main() -> int:
         compat_probe: dict[str, Any] = {"ok": False, "attempts": []}
         stable_results: list[dict[str, Any]] = []
         stable_uris: list[str] = []
+        missing_stable_source_refs = list(required_stable_source_refs)
         container_networks = collect_container_networks(container_name)
 
         while time.time() < probe_deadline:
@@ -223,6 +226,16 @@ def main() -> int:
                 policy,
                 network_container=container_name,
             )
+            stable_source_refs = {
+                str(item.get("source_ref") or "").strip()
+                for item in stable_results
+                if str(item.get("source_ref") or "").strip()
+            }
+            missing_stable_source_refs = [
+                source_ref
+                for source_ref in required_stable_source_refs
+                if source_ref not in stable_source_refs
+            ]
 
             last_pool_probe = probe_http_proxy("http://127.0.0.1:22323", policy, network_container=container_name)
             try:
@@ -327,6 +340,7 @@ def main() -> int:
                 compat_probe["ok"]
                 and len(stable_uris) >= minimum_available_nodes
                 and len(stable_uris) >= args.require_stable_node_proxies
+                and not missing_stable_source_refs
             ):
                 break
             time.sleep(8)
@@ -340,6 +354,10 @@ def main() -> int:
         if args.require_stable_node_proxies > 0 and len(stable_uris) < args.require_stable_node_proxies:
             raise RuntimeError(
                 f"stable direct proxy count {len(stable_uris)} is lower than required {args.require_stable_node_proxies}"
+            )
+        if missing_stable_source_refs:
+            raise RuntimeError(
+                "stable source refs missing: " + ", ".join(missing_stable_source_refs)
             )
         if args.docker_network_name.strip() and args.docker_network_name.strip() not in container_networks:
             raise RuntimeError(
@@ -398,8 +416,12 @@ def main() -> int:
             "nodes": {
                 "total_nodes": int((last_nodes or {}).get("total_nodes") or 0) if 'last_nodes' in locals() else 0,
                 "available_nodes": int((last_nodes or {}).get("available_nodes") or 0) if 'last_nodes' in locals() else 0,
-                "stable_available_uris": sorted(dict.fromkeys(stable_uris)) if 'stable_uris' in locals() else [],
-                "stable_probe_results": stable_results if 'stable_results' in locals() else [],
+                "stable_available_count": len(set(stable_uris)) if 'stable_uris' in locals() else 0,
+                "stable_source_refs": sorted({
+                    str(item.get("source_ref") or "").strip()
+                    for item in stable_results
+                    if str(item.get("source_ref") or "").strip()
+                }) if 'stable_results' in locals() else [],
             },
             "pool_probe": last_pool_probe if 'last_pool_probe' in locals() else {},
             "best_proxy": last_best_proxy_payload if 'last_best_proxy_payload' in locals() else {},

@@ -394,6 +394,7 @@ def discover_directly_usable_nodes(
                 {
                     "tag": str(candidate.get("tag") or ""),
                     "name": str(candidate.get("name") or ""),
+                    "source_ref": str(candidate.get("source_ref") or ""),
                     "port": int(candidate.get("port") or 0),
                     "uri": uri,
                     "direct_proxy_url": str(candidate.get("direct_proxy_url") or ""),

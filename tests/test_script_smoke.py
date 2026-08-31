@@ -291,6 +291,17 @@ class ScriptSmokeTests(unittest.TestCase):
         self.assertIn("--minimum-available-nodes", help_result.stdout)
         self.assertIn("--require-fallback-active", help_result.stdout)
         self.assertIn("--detour-source-ref", help_result.stdout)
+        self.assertIn("--require-stable-source-ref", help_result.stdout)
+
+    def test_runtime_validation_reuses_local_nodes_for_manifest_bootstrap(self):
+        source = (
+            REPO_ROOT
+            / "deploy/service/base/scripts/validate-easy-proxy-runtime.ps1"
+        ).read_text(encoding="utf-8-sig")
+
+        self.assertIn("Get-StableAvailableUris -Payload $localSubscription", source)
+        self.assertIn("-ProxyUris $manifestBootstrapUris", source)
+        self.assertIn("-RequireStableSourceRefs $configuredDetourSourceRefs", source)
 
     def test_source_audit_preserves_private_config_permissions(self):
         source = (REPO_ROOT / "scripts/easyproxy_source_audit.py").read_text(encoding="utf-8")
