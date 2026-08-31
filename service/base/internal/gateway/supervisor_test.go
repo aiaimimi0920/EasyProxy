@@ -3,6 +3,8 @@ package gateway
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"strings"
 	"testing"
 
@@ -11,6 +13,9 @@ import (
 
 type recordingRunner struct {
 	commands []string
+	failOn   string
+	failErr  error
+	failures map[string]error
 }
 
 func TestMissingNetworkExecutableIsNotIdempotent(t *testing.T) {
@@ -19,9 +24,93 @@ func TestMissingNetworkExecutableIsNotIdempotent(t *testing.T) {
 	}
 }
 
+func TestExecRunnerPreservesCommandStderr(t *testing.T) {
+	t.Setenv("EASYPROXY_GATEWAY_EXEC_HELPER", "1")
+	err := (ExecRunner{}).Run(context.Background(), os.Args[0], "-test.run=TestGatewayExecHelperProcess")
+	if err == nil || !strings.Contains(err.Error(), "RTNETLINK answers: File exists") {
+		t.Fatalf("ExecRunner error = %v, want command stderr", err)
+	}
+	if !isIdempotentNetworkError(err) {
+		t.Fatalf("network duplicate with captured stderr must be idempotent: %v", err)
+	}
+}
+
+func TestGatewayExecHelperProcess(t *testing.T) {
+	if os.Getenv("EASYPROXY_GATEWAY_EXEC_HELPER") != "1" {
+		return
+	}
+	fmt.Fprintln(os.Stderr, "RTNETLINK answers: File exists")
+	os.Exit(2)
+}
+
 func (r *recordingRunner) Run(_ context.Context, name string, args ...string) error {
-	r.commands = append(r.commands, strings.Join(append([]string{name}, args...), " "))
+	command := strings.Join(append([]string{name}, args...), " ")
+	r.commands = append(r.commands, command)
+	for fragment, err := range r.failures {
+		if strings.Contains(command, fragment) {
+			return err
+		}
+	}
+	if r.failOn != "" && strings.Contains(command, r.failOn) {
+		if r.failErr != nil {
+			return r.failErr
+		}
+		return errors.New("injected command failure")
+	}
 	return nil
+}
+
+func TestSupervisorApplyAdoptsExistingPolicyRule(t *testing.T) {
+	runner := &recordingRunner{
+		failOn:  "ip rule add",
+		failErr: errors.New("exit status 2: RTNETLINK answers: File exists"),
+	}
+	supervisor := NewSupervisor(runner)
+	if err := supervisor.Apply(context.Background(), config.GatewayConfig{Enabled: true}); err != nil {
+		t.Fatalf("Apply rejected an existing gateway rule: %v", err)
+	}
+	if len(runner.commands) < 2 || runner.commands[0] != "nft delete table inet easyproxy_gateway" {
+		t.Fatalf("Apply did not rebuild the dedicated nft table first: %v", runner.commands)
+	}
+	appliedCount := len(runner.commands)
+	if err := supervisor.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	cleanup := strings.Join(runner.commands[appliedCount:], "\n")
+	if strings.Contains(cleanup, "ip rule del") {
+		t.Fatalf("Stop cleaned an adopted host rule:\n%s", cleanup)
+	}
+}
+
+func TestSupervisorApplyFailureDoesNotCleanUnappliedRules(t *testing.T) {
+	runner := &recordingRunner{failOn: "ip rule add"}
+	supervisor := NewSupervisor(runner)
+	err := supervisor.Apply(context.Background(), config.GatewayConfig{Enabled: true})
+	if err == nil {
+		t.Fatal("expected gateway rule failure")
+	}
+	joined := strings.Join(runner.commands, "\n")
+	if !strings.Contains(joined, "nft delete table inet easyproxy_gateway") {
+		t.Fatalf("Apply did not clear the dedicated stale table:\n%s", joined)
+	}
+	if strings.Contains(joined, "ip rule del") || strings.Contains(joined, "ip route del") {
+		t.Fatalf("Apply cleaned a rule that it did not install:\n%s", joined)
+	}
+}
+
+func TestSupervisorApplyFailureDoesNotCleanAdoptedRules(t *testing.T) {
+	runner := &recordingRunner{failures: map[string]error{
+		"ip rule add":  errors.New("exit status 2: RTNETLINK answers: File exists"),
+		"ip route add": errors.New("permission denied"),
+	}}
+	supervisor := NewSupervisor(runner)
+	if err := supervisor.Apply(context.Background(), config.GatewayConfig{Enabled: true}); err == nil {
+		t.Fatal("expected route failure")
+	}
+	joined := strings.Join(runner.commands, "\n")
+	if strings.Contains(joined, "ip rule del") {
+		t.Fatalf("Apply cleaned an adopted host rule:\n%s", joined)
+	}
 }
 
 func TestSupervisorApplyAndStopOwnsTransparentRules(t *testing.T) {

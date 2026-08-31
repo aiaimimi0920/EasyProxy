@@ -24,7 +24,11 @@ type CommandRunner interface {
 type ExecRunner struct{}
 
 func (ExecRunner) Run(ctx context.Context, name string, args ...string) error {
-	return exec.CommandContext(ctx, name, args...).Run()
+	output, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	if err != nil && len(output) > 0 {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return err
 }
 
 type gatewayCommand struct {
@@ -58,14 +62,18 @@ func (s *Supervisor) Apply(ctx context.Context, cfg config.GatewayConfig) error 
 		return nil
 	}
 	commands := buildGatewayCommands(cfg)
-	cleanup := buildGatewayCleanup(commands)
+	ownedCleanup := make([]gatewayCommand, 0, 3)
 	for _, command := range commands {
-		if err := s.runIdempotent(ctx, command); err != nil {
-			_ = s.stopLocked(ctx, cleanup[:indexOfCommand(cleanup, command)+1])
+		created, err := s.runIdempotent(ctx, command)
+		if err != nil {
+			_ = s.stopLocked(ctx, ownedCleanup)
 			return fmt.Errorf("apply gateway rule %s %v: %w", command.name, command.args, err)
 		}
+		if created {
+			ownedCleanup = append(ownedCleanup, buildGatewayCleanup([]gatewayCommand{command})...)
+		}
 	}
-	s.cleanup = cleanup
+	s.cleanup = ownedCleanup
 	s.applied = true
 	return nil
 }
@@ -85,7 +93,7 @@ func (s *Supervisor) stopLocked(ctx context.Context, cleanup []gatewayCommand) e
 	}
 	var firstErr error
 	for idx := len(cleanup) - 1; idx >= 0; idx-- {
-		if err := s.runIdempotent(ctx, cleanup[idx]); err != nil && firstErr == nil {
+		if _, err := s.runIdempotent(ctx, cleanup[idx]); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -94,12 +102,17 @@ func (s *Supervisor) stopLocked(ctx context.Context, cleanup []gatewayCommand) e
 	return firstErr
 }
 
-func (s *Supervisor) runIdempotent(ctx context.Context, command gatewayCommand) error {
+// runIdempotent reports whether this invocation changed host state. Accepted
+// already-present or already-absent state is not owned by this generation.
+func (s *Supervisor) runIdempotent(ctx context.Context, command gatewayCommand) (bool, error) {
 	err := s.runner.Run(ctx, command.name, command.args...)
-	if err == nil || isIdempotentNetworkError(err) {
-		return nil
+	if err == nil {
+		return true, nil
 	}
-	return err
+	if isIdempotentNetworkError(err) {
+		return false, nil
+	}
+	return false, err
 }
 
 func isIdempotentNetworkError(err error) bool {
@@ -120,6 +133,7 @@ func isIdempotentNetworkError(err error) bool {
 func buildGatewayCommands(cfg config.GatewayConfig) []gatewayCommand {
 	port := gatewayPort(cfg.Listen)
 	commands := []gatewayCommand{
+		{name: "nft", args: []string{"delete", "table", "inet", "easyproxy_gateway"}},
 		{name: "ip", args: []string{"rule", "add", "fwmark", "0x1/0x1", "lookup", "100"}},
 		{name: "ip", args: []string{"route", "add", "local", "0.0.0.0/0", "dev", "lo", "table", "100"}},
 		{name: "nft", args: []string{"add", "table", "inet", "easyproxy_gateway"}},
@@ -190,13 +204,4 @@ func buildGatewayCleanup(commands []gatewayCommand) []gatewayCommand {
 		}
 	}
 	return cleanup
-}
-
-func indexOfCommand(commands []gatewayCommand, target gatewayCommand) int {
-	for idx, command := range commands {
-		if command.name == target.name && strings.Join(command.args, "\x00") == strings.Join(target.args, "\x00") {
-			return idx
-		}
-	}
-	return len(commands) - 1
 }
