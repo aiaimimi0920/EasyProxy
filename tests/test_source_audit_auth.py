@@ -3,6 +3,7 @@ from unittest.mock import Mock, patch
 from scripts.easyproxy_source_audit_probe import (
     discover_directly_usable_nodes,
     management_headers,
+    probe_http_proxy,
     wait_management_ready,
 )
 from scripts.easyproxy_source_audit_support import build_config
@@ -63,6 +64,43 @@ def test_direct_probe_results_preserve_source_ref():
 
     assert stable_uris == ["vless://example"]
     assert stable_results[0]["source_ref"] == "manifest:conn_zenproxy_primary"
+
+
+def test_proxy_probe_runs_inside_target_container():
+    completed = Mock(returncode=0, stdout="204\n", stderr="")
+    policy = {
+        "http_probe_targets": [
+            {
+                "url": "https://connectivitycheck.gstatic.com/generate_204",
+                "expected_status": [204],
+            }
+        ]
+    }
+
+    with patch(
+        "scripts.easyproxy_source_audit_probe.subprocess.run",
+        return_value=completed,
+    ) as run:
+        result = probe_http_proxy(
+            "http://127.0.0.1:22323",
+            policy,
+            network_container="audit-container",
+        )
+
+    assert result["ok"] is True
+    command = run.call_args.args[0]
+    assert command[:5] == [
+        "docker",
+        "exec",
+        "audit-container",
+        "python3",
+        "-c",
+    ]
+    assert command[-3:] == [
+        "http://127.0.0.1:22323",
+        "https://connectivitycheck.gstatic.com/generate_204",
+        "25",
+    ]
 
 
 def test_management_readiness_uses_bearer_auth():

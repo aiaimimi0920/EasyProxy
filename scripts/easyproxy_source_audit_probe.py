@@ -11,9 +11,32 @@ from typing import Any
 import requests
 
 try:
-    from .easyproxy_source_audit_support import CURL_IMAGE, run
+    from .easyproxy_source_audit_support import run
 except ImportError:
-    from easyproxy_source_audit_support import CURL_IMAGE, run
+    from easyproxy_source_audit_support import run
+
+
+CONTAINER_PROXY_PROBE = """
+import ssl
+import sys
+import urllib.error
+import urllib.request
+
+proxy_url, target_url, timeout = sys.argv[1:4]
+context = ssl._create_unverified_context()
+opener = urllib.request.build_opener(
+    urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url}),
+    urllib.request.HTTPSHandler(context=context),
+)
+try:
+    with opener.open(target_url, timeout=int(timeout)) as response:
+        print(response.getcode())
+except urllib.error.HTTPError as exc:
+    print(exc.code)
+except Exception as exc:
+    print(type(exc).__name__, file=sys.stderr)
+    raise SystemExit(7)
+""".strip()
 
 
 def management_headers(management_password: str, *, json_content: bool = False) -> dict[str, str]:
@@ -148,22 +171,14 @@ def probe_http_proxy(proxy_url: str, policy: dict[str, Any], *, network_containe
             if network_container.strip():
                 command = [
                     "docker",
-                    "run",
-                    "--rm",
-                    "--network",
-                    f"container:{network_container.strip()}",
-                    CURL_IMAGE,
-                    "-s",
-                    "-k",
-                    "-o",
-                    "/dev/null",
-                    "-w",
-                    "%{http_code}",
-                    "--max-time",
-                    timeout,
-                    "-x",
+                    "exec",
+                    network_container.strip(),
+                    "python3",
+                    "-c",
+                    CONTAINER_PROXY_PROBE,
                     proxy_url,
                     url,
+                    timeout,
                 ]
             else:
                 curl_name = shutil.which("curl.exe") or shutil.which("curl")
