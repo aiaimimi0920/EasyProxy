@@ -27,6 +27,7 @@ function Invoke-Audit {
         [string[]]$Subscriptions = @(),
         [string[]]$ProxyUris = @(),
         [string[]]$FallbackSubscriptions = @(),
+        [string[]]$DetourSourceRefs = @(),
         [string[]]$DnsServers = @(),
         [string]$ManifestUrl = "",
         [string]$ManifestToken = "",
@@ -61,6 +62,9 @@ function Invoke-Audit {
     }
     foreach ($sub in @($FallbackSubscriptions | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
         $args += @("--fallback-subscription", $sub)
+    }
+    foreach ($sourceRef in @($DetourSourceRefs | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
+        $args += @("--detour-source-ref", $sourceRef)
     }
     foreach ($dnsServer in @($DnsServers | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
         $args += @("--dns-server", $dnsServer)
@@ -165,7 +169,9 @@ if ([string]::IsNullOrWhiteSpace($effectiveImage)) {
 
 $serviceRuntime = Read-EasyProxyRuntimeConfig -ConfigPath $effectiveConfigPath
 $configuredDnsServers = @('1.1.1.1', '8.8.8.8')
+$poolConfig = Get-EasyProxyRuntimeSection -Object $serviceRuntime -Name 'pool'
 $sourceSyncConfig = Get-EasyProxyRuntimeSection -Object $serviceRuntime -Name 'source_sync'
+$configuredDetourSourceRefs = @(Get-EasyProxyRuntimeValue -Object $poolConfig -Name 'detour_source_refs' -Default @())
 $configuredLocalSubscriptions = @(Get-EasyProxyRuntimeValue -Object $serviceRuntime -Name 'subscriptions' -Default @())
 
 if ($configuredLocalSubscriptions.Count -lt 1) {
@@ -236,9 +242,10 @@ $connectorPayload = ConvertTo-Json -InputObject @(
     }
 ) -Depth 20 -Compress
 
-$localSubscription = Invoke-Audit -ScenarioName "local-subscription" -Subscriptions $configuredLocalSubscriptions -DnsServers $configuredDnsServers
+$localSubscription = Invoke-Audit -ScenarioName "local-subscription" -Subscriptions $configuredLocalSubscriptions -DetourSourceRefs $configuredDetourSourceRefs -DnsServers $configuredDnsServers
 $manifestSubscription = Invoke-Audit `
     -ScenarioName "manifest-subscription" `
+    -DetourSourceRefs $configuredDetourSourceRefs `
     -DnsServers $configuredDnsServers `
     -ManifestUrl "$misubPublicUrl/api/manifest/aggregator-global" `
     -ManifestToken $manifestToken `
@@ -263,7 +270,7 @@ $candidateIndex = 0
 foreach ($candidate in $directProxyCandidates) {
     $candidateIndex++
     try {
-        $null = Invoke-Audit -ScenarioName "local-direct-proxy" -ProxyUris @($candidate) -DnsServers $configuredDnsServers
+        $null = Invoke-Audit -ScenarioName "local-direct-proxy" -ProxyUris @($candidate) -DetourSourceRefs $configuredDetourSourceRefs -DnsServers $configuredDnsServers
         $directValidated = $true
         break
     }
@@ -281,6 +288,7 @@ if ($fallbackSubscriptions.Count -lt 1) {
 }
 $null = Invoke-Audit `
     -ScenarioName "fallback-subscription" `
+    -DetourSourceRefs $configuredDetourSourceRefs `
     -DnsServers $configuredDnsServers `
     -ManifestUrl "http://127.0.0.1:1/api/manifest/broken" `
     -ManifestToken $manifestToken `
@@ -289,12 +297,14 @@ $null = Invoke-Audit `
 
 $null = Invoke-Audit `
     -ScenarioName "local-connector" `
+    -DetourSourceRefs $configuredDetourSourceRefs `
     -DnsServers $configuredDnsServers `
     -ConnectorsJson $connectorPayload `
     -RequireConnectorInstanceCount 5
 
 $null = Invoke-Audit `
     -ScenarioName "manifest-connector" `
+    -DetourSourceRefs $configuredDetourSourceRefs `
     -DnsServers $configuredDnsServers `
     -ManifestUrl "$misubPublicUrl/api/manifest/$misubConnectorProfileId" `
     -ManifestToken $manifestToken `

@@ -88,6 +88,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--subscription", action="append", default=[])
     parser.add_argument("--proxy-uri", action="append", default=[])
     parser.add_argument("--fallback-subscription", action="append", default=[])
+    parser.add_argument("--detour-source-ref", action="append", default=[])
     parser.add_argument("--output-path", default="")
     parser.add_argument("--artifact-dir", default="")
     parser.add_argument("--docker-network-name", default="EasyAiMi")
@@ -110,6 +111,7 @@ def main() -> int:
     subscriptions = normalize_list(args.subscription)
     proxy_uris = normalize_list(args.proxy_uri)
     fallback_subscriptions = normalize_list(args.fallback_subscription)
+    detour_source_refs = normalize_list(args.detour_source_ref)
     dns_servers = normalize_list(args.dns_server)
     manifest_token = os.environ.get("EASYPROXY_AUDIT_MANIFEST_TOKEN", "")
     connectors_json = os.environ.get("EASYPROXY_AUDIT_CONNECTORS_JSON", "")
@@ -140,6 +142,7 @@ def main() -> int:
         subscriptions=subscriptions,
         proxy_uris=proxy_uris,
         fallback_subscriptions=fallback_subscriptions,
+        detour_source_refs=detour_source_refs,
         connectors=connectors,
         multi_port_base=multi_port_base,
     )

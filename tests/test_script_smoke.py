@@ -290,6 +290,7 @@ class ScriptSmokeTests(unittest.TestCase):
         self.assertEqual(help_result.returncode, 0, msg=help_result.stderr)
         self.assertIn("--minimum-available-nodes", help_result.stdout)
         self.assertIn("--require-fallback-active", help_result.stdout)
+        self.assertIn("--detour-source-ref", help_result.stdout)
 
     def test_source_audit_preserves_private_config_permissions(self):
         source = (REPO_ROOT / "scripts/easyproxy_source_audit.py").read_text(encoding="utf-8")

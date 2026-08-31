@@ -154,7 +154,19 @@ def ensure_image(image: str, build_if_missing: bool, audit_id: str) -> str:
     )
     return effective_image
 
-def build_config(policy: dict[str, Any], *, manifest_url: str, manifest_token: str, management_password: str, subscriptions: list[str], proxy_uris: list[str], fallback_subscriptions: list[str], connectors: list[dict[str, Any]], multi_port_base: int) -> dict[str, Any]:
+def build_config(
+    policy: dict[str, Any],
+    *,
+    manifest_url: str,
+    manifest_token: str,
+    management_password: str,
+    subscriptions: list[str],
+    proxy_uris: list[str],
+    fallback_subscriptions: list[str],
+    detour_source_refs: list[str],
+    connectors: list[dict[str, Any]],
+    multi_port_base: int,
+) -> dict[str, Any]:
     source_sync_enabled = bool(manifest_url.strip())
     management_probe_targets = [
         str(item).strip()
@@ -183,6 +195,7 @@ def build_config(policy: dict[str, Any], *, manifest_url: str, manifest_token: s
             "mode": "auto",
             "failure_threshold": 3,
             "blacklist_duration": "24h0m0s",
+            "detour_source_refs": detour_source_refs,
         },
         "multi_port": {
             "address": "0.0.0.0",

@@ -16,12 +16,16 @@ def test_source_audit_config_has_management_password():
         subscriptions=[],
         proxy_uris=[],
         fallback_subscriptions=[],
+        detour_source_refs=["manifest:conn_zenproxy_primary"],
         connectors=[],
         multi_port_base=34000,
     )
 
     assert config["management"]["listen"] == "0.0.0.0:29888"
     assert config["management"]["password"] == "audit-secret"
+    assert config["pool"]["detour_source_refs"] == [
+        "manifest:conn_zenproxy_primary"
+    ]
 
 
 def test_management_headers_support_json_requests():
