@@ -155,6 +155,17 @@ jobs:
           fi
           test -c /dev/net/tun
 
-      - name: Build and validate the native TUN data plane
+      - name: Build the native TUN E2E image
         shell: bash
-        run: python3 scripts/validate-tun-gateway-docker.py --build
+        run: |
+          docker build \
+            --build-arg NPM_REGISTRY=https://registry.npmjs.org \
+            --build-arg GOPROXY=https://proxy.golang.org,direct \
+            --build-arg DEBIAN_MIRROR=deb.debian.org \
+            -f deploy/service/base/Dockerfile \
+            -t easyproxy-native-tun:e2e \
+            .
+
+      - name: Validate the native TUN data plane
+        shell: bash
+        run: python3 scripts/validate-tun-gateway-docker.py --image easyproxy-native-tun:e2e

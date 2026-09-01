@@ -98,6 +98,7 @@ def build_quic_probe(work: Path) -> Path:
             listener, err := quic.ListenAddr("[::]:443", serverTLS(), &quic.Config{})
             must(err)
             defer listener.Close()
+            must(os.WriteFile("/tmp/quic-ready", []byte("ready\n"), 0644))
             fmt.Println("QUIC_SERVER_READY")
             for index := 0; index < 2; index++ {
                 conn, err := listener.Accept(context.Background())
@@ -217,12 +218,12 @@ def write_fixtures(work: Path) -> None:
         r'''
         import socket, threading, time
 
-        def tcp_server(family, address):
+        def tcp_server(family, address, ready):
             server = socket.socket(family, socket.SOCK_STREAM)
             if family == socket.AF_INET6:
                 server.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
             server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            server.bind((address, 18080)); server.listen(16)
+            server.bind((address, 18080)); server.listen(16); ready.set()
             while True:
                 client, _ = server.accept()
                 try:
@@ -230,18 +231,22 @@ def write_fixtures(work: Path) -> None:
                 finally:
                     client.close()
 
-        def udp_server(family, address):
+        def udp_server(family, address, ready):
             server = socket.socket(family, socket.SOCK_DGRAM)
             if family == socket.AF_INET6:
                 server.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
-            server.bind((address, 444))
+            server.bind((address, 444)); ready.set()
             while True:
                 data, peer = server.recvfrom(65535)
                 server.sendto(b"UDP-ECHO:" + data, peer)
 
-        for item in [(socket.AF_INET, "0.0.0.0"), (socket.AF_INET6, "::")]:
-            threading.Thread(target=tcp_server, args=item, daemon=True).start()
-            threading.Thread(target=udp_server, args=item, daemon=True).start()
+        ready_events = []
+        for family, address in [(socket.AF_INET, "0.0.0.0"), (socket.AF_INET6, "::")]:
+            for target in (tcp_server, udp_server):
+                ready = threading.Event(); ready_events.append(ready)
+                threading.Thread(target=target, args=(family, address, ready), daemon=True).start()
+        if not all(ready.wait(5) for ready in ready_events): raise RuntimeError("origin listeners did not become ready")
+        with open("/tmp/origin-ready", "w", encoding="utf-8") as marker: marker.write("ready\n")
         print("ORIGIN_READY", flush=True)
         while True: time.sleep(3600)
         ''',
@@ -355,6 +360,26 @@ def wait_gateway(container: str) -> None:
     raise RuntimeError("native TUN gateway did not become ready")
 
 
+def wait_origin(container: str) -> None:
+    for _ in range(30):
+        ready = docker(
+            "exec",
+            container,
+            "sh",
+            "-c",
+            "test -f /tmp/origin-ready && test -f /tmp/quic-ready && echo ready",
+            capture=True,
+            check=False,
+        )
+        if ready == "ready":
+            return
+        status = docker("inspect", "-f", "{{.State.Running}}", container, capture=True, check=False)
+        if status != "true":
+            break
+        time.sleep(1)
+    raise RuntimeError("origin TCP, UDP, and QUIC listeners did not become ready")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--image", default="easyproxy-native-tun:e2e")
@@ -391,6 +416,7 @@ def main() -> int:
             docker("exec", origin, "chmod", "755", "/tmp/quic-probe")
             docker("exec", "-d", origin, "python3", "/tmp/origin.py")
             docker("exec", "-d", origin, "/tmp/quic-probe", "server")
+            wait_origin(origin)
 
             docker("create", "--name", gateway, "--network", client_network, "--ip", "192.0.2.2", "--ip6", "2001:db8:1::2", "--cap-add", "NET_ADMIN", "--cap-add", "NET_RAW", "--device", "/dev/net/tun", "--sysctl", "net.ipv4.ip_forward=1", "--sysctl", "net.ipv6.conf.all.forwarding=1", "-e", "EASY_PROXY_RUN_AS_ROOT=1", "-v", f"{work / 'config.yaml'}:/etc/easyproxy/config.yaml:ro", "-v", f"{work / 'data'}:/var/lib/easyproxy/data", args.image)
             docker("network", "connect", "--ip", "203.0.113.3", "--ip6", "2001:db8:2::3", origin_network, gateway)

@@ -106,7 +106,8 @@ def test_ci_runs_native_tun_dual_stack_e2e():
 
     assert validator.is_file()
     assert "native-tun-e2e:" in workflow
-    assert "validate-tun-gateway-docker.py --build" in workflow
+    assert "Build the native TUN E2E image" in workflow
+    assert "validate-tun-gateway-docker.py --image easyproxy-native-tun:e2e" in workflow
     assert "PASS real-quic" in validator.read_text(encoding="utf-8")
 
 

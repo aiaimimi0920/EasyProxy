@@ -44,10 +44,11 @@ RUN mkdir -p /out/share && cp ip.txt /out/share/ip.txt
 
 FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS cloudflared-fetch
 ARG TARGETARCH
+ARG DEBIAN_MIRROR=mirrors.aliyun.com
 ARG CLOUDFLARED_VERSION=2025.11.0
 ARG CLOUDFLARED_AMD64_SHA256=17bb991c31fab3377977ef631e5701d5548181fe6cc9c2d51ae916ef758dea59
 ARG CLOUDFLARED_ARM64_SHA256=3535f4686458918ccb1266b7840685b023768205574fa636d55a310fcb73135a
-RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources \
+RUN sed -i "s|deb.debian.org|${DEBIAN_MIRROR}|g" /etc/apt/sources.list.d/debian.sources \
     && apt-get -o Acquire::Retries=3 update \
     && apt-get install -y --no-install-recommends ca-certificates wget \
     && rm -rf /var/lib/apt/lists/*
@@ -61,7 +62,8 @@ RUN case "${TARGETARCH}" in \
     && chmod +x /out-cloudflared
 
 FROM debian:bookworm-slim AS runtime
-RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources \
+ARG DEBIAN_MIRROR=mirrors.aliyun.com
+RUN sed -i "s|deb.debian.org|${DEBIAN_MIRROR}|g" /etc/apt/sources.list.d/debian.sources \
     && apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates gosu iproute2 nftables python3 python3-boto3 \
     && rm -rf /var/lib/apt/lists/* \
