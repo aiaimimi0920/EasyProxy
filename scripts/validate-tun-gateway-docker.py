@@ -40,7 +40,7 @@ def run(*args: str, capture: bool = False, check: bool = True, cwd: Path | None 
         if capture:
             sys.stderr.write(result.stdout)
             sys.stderr.write(result.stderr)
-        raise subprocess.CalledProcessError(result.returncode, args)
+        raise subprocess.CalledProcessError(result.returncode, args, output=result.stdout, stderr=result.stderr)
     return (result.stdout + result.stderr).strip() if capture else ""
 
 
@@ -400,7 +400,6 @@ def wait_gateway_status(container: str) -> dict[str, object]:
     state = docker("inspect", "-f", "{{.State.Status}}/{{.State.ExitCode}}", container, capture=True, check=False)
     raise RuntimeError(f"gateway management API did not become ready; container={state}; last={raw.splitlines()[-1:]}")
 
-
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--image", default="easyproxy-native-tun:e2e")
@@ -492,7 +491,8 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except subprocess.CalledProcessError as error:
-        print(f"::error title=Native TUN E2E failed::{CURRENT_STAGE}: command exited with {error.returncode}", file=sys.stderr, flush=True)
+        tail = ((error.stderr or "") + (error.output or "")).splitlines()[-1:]
+        print(f"::error title=Native TUN E2E failed::{CURRENT_STAGE}: command exited with {error.returncode}; last={tail}", file=sys.stderr, flush=True)
         raise
     except Exception as error:
         detail = str(error).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
