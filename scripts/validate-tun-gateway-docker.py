@@ -367,7 +367,6 @@ def wait_gateway(container: str) -> None:
     docker("logs", "--tail", "150", container, check=False)
     raise RuntimeError("native TUN gateway did not become ready")
 
-
 def wait_origin(container: str) -> None:
     for _ in range(30):
         ready = docker(
@@ -387,16 +386,17 @@ def wait_origin(container: str) -> None:
         time.sleep(1)
     raise RuntimeError("origin TCP, UDP, and QUIC listeners did not become ready")
 
-
 def wait_gateway_status(container: str) -> dict[str, object]:
     code = "import json,urllib.request; r=urllib.request.Request('http://127.0.0.1:29888/api/gateway/status',headers={'Authorization':'e2e-validation-only'}); print(json.dumps(json.load(urllib.request.urlopen(r))))"
     raw = ""
     for _ in range(30):
         raw = docker("exec", container, "python3", "-c", code, capture=True, check=False)
         try:
-            return json.loads(raw)
+            status = json.loads(raw)
+            if all(status.get(key) for key in ("enabled", "applied", "tun_ready")): return status
         except json.JSONDecodeError:
-            time.sleep(1)
+            pass
+        time.sleep(1)
     state = docker("inspect", "-f", "{{.State.Status}}/{{.State.ExitCode}}", container, capture=True, check=False)
     raise RuntimeError(f"gateway management API did not become ready; container={state}; last={raw.splitlines()[-1:]}")
 
