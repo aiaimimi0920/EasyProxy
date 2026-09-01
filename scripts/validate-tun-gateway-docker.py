@@ -17,6 +17,13 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 SERVICE_ROOT = ROOT / "service" / "base"
+CURRENT_STAGE = "startup"
+
+
+def stage(name: str) -> None:
+    global CURRENT_STAGE
+    CURRENT_STAGE = name
+    print(f"E2E_STAGE {name}", flush=True)
 
 
 def run(*args: str, capture: bool = False, check: bool = True, cwd: Path | None = None) -> str:
@@ -387,10 +394,13 @@ def main() -> int:
     args = parser.parse_args()
     if shutil.which("docker") is None or shutil.which("go") is None:
         raise RuntimeError("docker and go are required")
+    stage("docker-capability")
     docker("info", capture=True)
     if args.build:
+        stage("image-build")
         docker("build", "-f", str(ROOT / "deploy/service/base/Dockerfile"), "-t", args.image, str(ROOT))
     else:
+        stage("image-inspect")
         docker("image", "inspect", args.image, capture=True)
 
     suffix = str(os.getpid())
@@ -406,37 +416,49 @@ def main() -> int:
             work = Path(temp)
             (work / "data").mkdir()
             write_fixtures(work)
+            stage("quic-probe-build")
             quic_probe = build_quic_probe(work)
+            stage("network-create")
             docker("network", "create", "--ipv6", "--subnet", "192.0.2.0/24", "--gateway", "192.0.2.1", "--subnet", "2001:db8:1::/64", "--gateway", "2001:db8:1::1", client_network)
             docker("network", "create", "--ipv6", "--subnet", "203.0.113.0/24", "--gateway", "203.0.113.1", "--subnet", "2001:db8:2::/64", "--gateway", "2001:db8:2::1", origin_network)
 
+            stage("origin-start")
             docker("run", "-d", "--name", origin, "--network", origin_network, "--ip", "203.0.113.2", "--ip6", "2001:db8:2::2", "--entrypoint", "sleep", args.image, "600")
             for fixture in ("origin.py",): copy_into(origin, work / fixture, f"/tmp/{fixture}")
             copy_into(origin, quic_probe, "/tmp/quic-probe")
             docker("exec", origin, "chmod", "755", "/tmp/quic-probe")
             docker("exec", "-d", origin, "python3", "/tmp/origin.py")
             docker("exec", "-d", origin, "/tmp/quic-probe", "server")
+            stage("origin-ready")
             wait_origin(origin)
 
+            stage("gateway-create")
             docker("create", "--name", gateway, "--network", client_network, "--ip", "192.0.2.2", "--ip6", "2001:db8:1::2", "--cap-add", "NET_ADMIN", "--cap-add", "NET_RAW", "--device", "/dev/net/tun", "--sysctl", "net.ipv4.ip_forward=1", "--sysctl", "net.ipv6.conf.all.forwarding=1", "-e", "EASY_PROXY_RUN_AS_ROOT=1", "-v", f"{work / 'config.yaml'}:/etc/easyproxy/config.yaml:ro", "-v", f"{work / 'data'}:/var/lib/easyproxy/data", args.image)
             docker("network", "connect", "--ip", "203.0.113.3", "--ip6", "2001:db8:2::3", origin_network, gateway)
             docker("start", gateway)
+            stage("gateway-ready")
             wait_gateway(gateway)
 
+            stage("gateway-status")
             status_code = "import json,urllib.request; r=urllib.request.Request('http://127.0.0.1:29888/api/gateway/status',headers={'Authorization':'e2e-validation-only'}); print(json.dumps(json.load(urllib.request.urlopen(r))))"
             status = json.loads(docker("exec", gateway, "python3", "-c", status_code, capture=True))
             expected = {"applied": True, "tun_ready": True, "ipv4": True, "ipv6": True, "udp": True, "dns": True}
             if any(status.get(key) != value for key, value in expected.items()):
                 raise RuntimeError(f"unexpected gateway status: {status}")
 
+            stage("client-start")
             docker("run", "-d", "--name", client, "--network", client_network, "--ip", "192.0.2.3", "--ip6", "2001:db8:1::3", "--cap-add", "NET_ADMIN", "--entrypoint", "sleep", args.image, "600")
             for fixture in ("client.py", "socks_udp.py"): copy_into(client, work / fixture, f"/tmp/{fixture}")
             copy_into(client, quic_probe, "/tmp/quic-probe")
             docker("exec", client, "chmod", "755", "/tmp/quic-probe")
             docker("exec", client, "sh", "-c", "ip route replace default via 192.0.2.2 && ip -6 route replace default via 2001:db8:1::2")
+            stage("client-tcp-udp-dns-fakeip")
             docker("exec", client, "python3", "/tmp/client.py")
+            stage("client-quic")
             docker("exec", client, "/tmp/quic-probe", "client", "203.0.113.2", "2001:db8:2::2")
+            stage("client-socks-udp")
             docker("exec", client, "python3", "/tmp/socks_udp.py")
+            stage("gateway-log-check")
             logs = docker("logs", gateway, capture=True)
             if "panic:" in logs:
                 raise RuntimeError("gateway panicked during E2E validation")
@@ -450,4 +472,16 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except subprocess.CalledProcessError as error:
+        print(
+            f"::error title=Native TUN E2E failed::{CURRENT_STAGE}: command exited with {error.returncode}",
+            file=sys.stderr,
+            flush=True,
+        )
+        raise
+    except Exception as error:
+        detail = str(error).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+        print(f"::error title=Native TUN E2E failed::{CURRENT_STAGE}: {detail}", file=sys.stderr, flush=True)
+        raise
