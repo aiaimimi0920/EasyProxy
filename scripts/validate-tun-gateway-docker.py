@@ -387,6 +387,17 @@ def wait_origin(container: str) -> None:
     raise RuntimeError("origin TCP, UDP, and QUIC listeners did not become ready")
 
 
+def wait_gateway_status(container: str) -> dict[str, object]:
+    code = "import json,urllib.request; r=urllib.request.Request('http://127.0.0.1:29888/api/gateway/status',headers={'Authorization':'e2e-validation-only'}); print(json.dumps(json.load(urllib.request.urlopen(r))))"
+    for _ in range(30):
+        raw = docker("exec", container, "python3", "-c", code, capture=True, check=False)
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            time.sleep(1)
+    raise RuntimeError("gateway management API did not become ready")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--image", default="easyproxy-native-tun:e2e")
@@ -411,8 +422,9 @@ def main() -> int:
     client = f"easyproxy-tun-client-{suffix}"
     containers = [client, gateway, origin]
     networks = [client_network, origin_network]
+    work: Path | None = None
     try:
-        with tempfile.TemporaryDirectory(prefix="easyproxy-tun-e2e-") as temp:
+        with tempfile.TemporaryDirectory(prefix="easyproxy-tun-e2e-", ignore_cleanup_errors=True) as temp:
             work = Path(temp)
             (work / "data").mkdir()
             write_fixtures(work)
@@ -440,8 +452,7 @@ def main() -> int:
             wait_gateway(gateway)
 
             stage("gateway-status")
-            status_code = "import json,urllib.request; r=urllib.request.Request('http://127.0.0.1:29888/api/gateway/status',headers={'Authorization':'e2e-validation-only'}); print(json.dumps(json.load(urllib.request.urlopen(r))))"
-            status = json.loads(docker("exec", gateway, "python3", "-c", status_code, capture=True))
+            status = wait_gateway_status(gateway)
             expected = {"applied": True, "tun_ready": True, "ipv4": True, "ipv6": True, "udp": True, "dns": True}
             if any(status.get(key) != value for key, value in expected.items()):
                 raise RuntimeError(f"unexpected gateway status: {status}")
@@ -469,17 +480,16 @@ def main() -> int:
             docker("rm", "-f", container, check=False)
         for network in networks:
             docker("network", "rm", network, check=False)
+        if work is not None and work.exists():
+            docker("run", "--rm", "--entrypoint", "chmod", "-v", f"{work}:/cleanup", args.image, "-R", "a+rwx", "/cleanup", capture=True, check=False)
+            shutil.rmtree(work, ignore_errors=True)
 
 
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except subprocess.CalledProcessError as error:
-        print(
-            f"::error title=Native TUN E2E failed::{CURRENT_STAGE}: command exited with {error.returncode}",
-            file=sys.stderr,
-            flush=True,
-        )
+        print(f"::error title=Native TUN E2E failed::{CURRENT_STAGE}: command exited with {error.returncode}", file=sys.stderr, flush=True)
         raise
     except Exception as error:
         detail = str(error).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
