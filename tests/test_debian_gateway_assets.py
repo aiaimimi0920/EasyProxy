@@ -21,6 +21,8 @@ def test_bootstrap_has_required_host_prerequisites():
     assert "net.ipv6.conf.all.forwarding=1" in text
     assert "net.ipv6.conf.default.forwarding=1" in text
     assert "net.ipv6.conf.all.accept_ra=2" in text
+    assert "ip -o -4 route show default" in text
+    assert "net.ipv6.conf.%s.accept_ra=2" in text
     assert "net.ipv6.conf.all.accept_redirects=0" in text
     assert "test -c /dev/net/tun" in text
     assert "docker-ce" in text

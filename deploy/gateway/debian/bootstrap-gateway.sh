@@ -59,6 +59,15 @@ net.ipv6.conf.all.accept_redirects=0
 net.ipv6.conf.default.accept_redirects=0
 EOF
 
+# Forwarding makes Linux ignore router advertisements unless accept_ra=2 is
+# also set on the already-created upstream interface. Persist the interface
+# selected by the pre-TUN IPv4 default route so IPv6 has a real bypass route.
+while read -r upstream_interface; do
+  [[ "$upstream_interface" =~ ^[[:alnum:]_-]+$ ]] || continue
+  printf 'net.ipv6.conf.%s.accept_ra=2\n' "$upstream_interface" \
+    >> /etc/sysctl.d/99-easyproxy-gateway.conf
+done < <(ip -o -4 route show default | awk '{for (i = 1; i <= NF; i++) if ($i == "dev") print $(i + 1)}' | sort -u)
+
 sysctl --system
 printf 'include "/etc/nftables.d/*.nft"\n' > /etc/nftables.conf
 nft -c -f /etc/nftables.conf
