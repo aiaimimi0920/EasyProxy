@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import json
 import os
 from pathlib import Path
@@ -276,14 +277,16 @@ def write_fixtures(work: Path) -> None:
 
         def dns_query(qtype):
             qname = b"".join(bytes([len(part)]) + part.encode() for part in "example.com".split(".")) + b"\0"
-            for attempt in range(3):
+            for attempt in range(10):
                 txid = 0x4550 + attempt
                 packet = struct.pack("!HHHHHH", txid, 0x0100, 1, 0, 0, 0) + qname + struct.pack("!HH", qtype, 1)
                 conn = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); conn.settimeout(10)
-                conn.sendto(packet, ("1.1.1.1", 53)); data, _ = conn.recvfrom(4096); conn.close()
+                try: conn.sendto(packet, ("1.1.1.1", 53)); data, _ = conn.recvfrom(4096)
+                except TimeoutError: conn.close(); continue
+                conn.close()
                 rid, flags, _, answers, _, _ = struct.unpack("!HHHHHH", data[:12])
                 if rid != txid or not flags & 0x8000 or answers == 0:
-                    time.sleep(0.2)
+                    time.sleep(0.5)
                     continue
                 offset = 12
                 while data[offset]: offset += 1 + data[offset]
@@ -349,10 +352,8 @@ def write_fixtures(work: Path) -> None:
         ''',
     )
 
-
 def copy_into(container: str, source: Path, target: str) -> None:
     docker("cp", str(source), f"{container}:{target}")
-
 
 def wait_gateway(container: str) -> None:
     for _ in range(30):
@@ -389,13 +390,15 @@ def wait_origin(container: str) -> None:
 
 def wait_gateway_status(container: str) -> dict[str, object]:
     code = "import json,urllib.request; r=urllib.request.Request('http://127.0.0.1:29888/api/gateway/status',headers={'Authorization':'e2e-validation-only'}); print(json.dumps(json.load(urllib.request.urlopen(r))))"
+    raw = ""
     for _ in range(30):
         raw = docker("exec", container, "python3", "-c", code, capture=True, check=False)
         try:
             return json.loads(raw)
         except json.JSONDecodeError:
             time.sleep(1)
-    raise RuntimeError("gateway management API did not become ready")
+    state = docker("inspect", "-f", "{{.State.Status}}/{{.State.ExitCode}}", container, capture=True, check=False)
+    raise RuntimeError(f"gateway management API did not become ready; container={state}; last={raw.splitlines()[-1:]}")
 
 
 def main() -> int:
@@ -424,7 +427,7 @@ def main() -> int:
     networks = [client_network, origin_network]
     work: Path | None = None
     try:
-        with tempfile.TemporaryDirectory(prefix="easyproxy-tun-e2e-", ignore_cleanup_errors=True) as temp:
+        with nullcontext(tempfile.mkdtemp(prefix="easyproxy-tun-e2e-")) as temp:
             work = Path(temp)
             (work / "data").mkdir()
             write_fixtures(work)
