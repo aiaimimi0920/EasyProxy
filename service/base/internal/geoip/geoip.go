@@ -515,27 +515,6 @@ func (l *Lookup) LookupIP(ipStr string) RegionInfo {
 	}
 }
 
-// LookupURI extracts server from URI and returns region info
-func (l *Lookup) LookupURI(uri string) RegionInfo {
-	host := extractHostFromURI(uri)
-	if host == "" {
-		return RegionInfo{Code: RegionOther, Country: "Unknown", ISOCode: ""}
-	}
-
-	// Resolve hostname to IP if needed
-	ip := net.ParseIP(host)
-	if ip == nil {
-		// It's a hostname, try to resolve
-		ips, err := net.LookupIP(host)
-		if err != nil || len(ips) == 0 {
-			return RegionInfo{Code: RegionOther, Country: "Unknown", ISOCode: ""}
-		}
-		host = ips[0].String()
-	}
-
-	return l.LookupIP(host)
-}
-
 // extractHostFromURI extracts the host/IP from various proxy URI formats
 func extractHostFromURI(uri string) string {
 	// Handle different URI schemes

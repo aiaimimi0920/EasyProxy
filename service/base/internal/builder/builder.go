@@ -63,8 +63,16 @@ func Build(cfg *config.Config) (option.Options, error) {
 	for _, region := range geoip.AllRegions() {
 		regionMembers[region] = []string{}
 	}
+	var nodeRegions []geoip.RegionInfo
+	if geoLookup != nil && geoLookup.IsEnabled() {
+		uris := make([]string, len(cfg.Nodes))
+		for index := range cfg.Nodes {
+			uris[index] = cfg.Nodes[index].URI
+		}
+		nodeRegions = geoLookup.LookupURIs(uris)
+	}
 
-	for _, node := range cfg.Nodes {
+	for nodeIndex, node := range cfg.Nodes {
 		baseTag := sanitizeTag(node.Name)
 		if baseTag == "" {
 			baseTag = fmt.Sprintf("node-%d", len(memberTags)+1)
@@ -120,7 +128,7 @@ func Build(cfg *config.Config) (option.Options, error) {
 
 		// GeoIP lookup for region classification
 		if geoLookup != nil && geoLookup.IsEnabled() {
-			regionInfo := geoLookup.LookupURI(node.URI)
+			regionInfo := nodeRegions[nodeIndex]
 			meta.Region = regionInfo.Code
 			meta.Country = regionInfo.Country
 			meta.CountryISO = regionInfo.ISOCode
