@@ -12,9 +12,10 @@ Copy this directory to the VM and run:
 sudo ./bootstrap-gateway.sh
 ```
 
-The script installs Docker Engine, enables IPv4 forwarding, disables ICMP
-redirects, and installs the `easyproxy_forwarding` nftables table. It does not
-create or delete EasyProxy's `easyproxy_gateway` capture table.
+The script installs Docker Engine, enables IPv4 and IPv6 forwarding, preserves
+IPv6 router advertisements for the upstream LAN, disables redirects, verifies
+`/dev/net/tun`, and installs the `easyproxy_forwarding` nftables table. It does
+not create or delete EasyProxy's `easyproxy_gateway` capture table.
 
 ## Runtime Layout
 
@@ -69,8 +70,25 @@ do not copy this option to physical or otherwise healthy virtual disks.
 
 ## Gateway Scope
 
-The current transparent data plane captures IPv4 TCP with TPROXY. UDP is
-intentionally disabled and IPv6 is not advertised as transparent-gateway
-support. Clients that need the gateway should use `192.168.15.201` as their
-IPv4 default gateway (or route their overlay IPv4 subnet through that address);
-the NAS DSM host at `192.168.15.200` remains a separate container host.
+`gateway.mode: tun` uses EasyProxy's embedded sing-box TUN inbound for IPv4 and
+IPv6 TCP/UDP. DNS port 53 can be hijacked into the same DNS engine, and fake-IP
+association preserves domains for later routing. QUIC/HTTP3 and other UDP flows
+use only UDP-capable pool members and follow the configured DIRECT fallback.
+
+The forwarding fixture assumes the VM's trusted LAN interface is `ens3`; change
+that single nftables interface value before bootstrap when the VM uses another
+name. Do not broaden it to a WAN-facing interface. The provider-neutral template
+describes both address families but leaves the gateway disabled and trusted CIDRs
+empty. Before enabling it, either verify IPv6 egress and add the LAN IPv6 CIDR,
+or set `gateway.tun.ipv6: false`.
+
+Clients use `192.168.15.201` as their IPv4 default gateway and the VM's routed
+IPv6 address as their IPv6 next hop, or route an overlay subnet through those
+addresses. The NAS DSM host at `192.168.15.200` remains a separate container
+host.
+
+Rollback to the legacy path by setting `gateway.mode: transparent`, disabling
+all `gateway.tun` capture features, and restoring `capture.tcp: tproxy`. After a
+restart, verify `easyproxy0` is absent, tables 100/101 contain no EasyProxy
+routes, and `nft list table inet easyproxy_gateway` contains only the expected
+TPROXY rules.

@@ -224,6 +224,7 @@ gateway:
     trusted_cidrs:
       - 192.168.15.0/24
       - 100.64.0.0/10
+      - fd00:15::/64
   routing:
     final_policy: PROXY
     no_available_proxy_policy: DIRECT

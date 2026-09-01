@@ -8,6 +8,20 @@ import (
 
 func validateGatewayTun(g *GatewayConfig, trustedNetworks []*net.IPNet) error {
 	tun := &g.Tun
+	trustedIPv4, trustedIPv6 := false, false
+	for _, trusted := range trustedNetworks {
+		if trusted.IP.To4() != nil {
+			trustedIPv4 = true
+		} else {
+			trustedIPv6 = true
+		}
+	}
+	if g.Enabled && tun.IPv4 && !trustedIPv4 {
+		return fmt.Errorf("gateway.tun.ipv4 requires an IPv4 gateway.ingress.trusted_cidrs entry")
+	}
+	if g.Enabled && tun.IPv6 && !trustedIPv6 {
+		return fmt.Errorf("gateway.tun.ipv6 requires an IPv6 gateway.ingress.trusted_cidrs entry")
+	}
 	if name := strings.TrimSpace(tun.InterfaceName); !validIdentityToken(name) || len(name) > 15 {
 		return fmt.Errorf("invalid gateway.tun.interface_name %q", tun.InterfaceName)
 	}

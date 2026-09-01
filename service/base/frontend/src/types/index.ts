@@ -290,7 +290,17 @@ export interface RoutingStatus {
 export interface GatewayStatus {
   enabled: boolean
   applied: boolean
+  mode?: 'transparent' | 'tun'
   listen?: string
+  interface?: string
+  stack?: string
+  mtu?: number
+  tun_ready?: boolean
+  ipv4?: boolean
+  ipv6?: boolean
+  tcp?: boolean
+  udp?: boolean
+  dns?: boolean
   active_connections?: number
   direct_connections?: number
   proxy_connections?: number

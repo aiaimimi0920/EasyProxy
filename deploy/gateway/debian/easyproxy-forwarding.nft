@@ -2,7 +2,9 @@ table inet easyproxy_forwarding {
   chain forward {
     type filter hook forward priority filter; policy drop;
     ct state established,related accept
+    meta l4proto ipv6-icmp accept
     ip saddr 192.168.15.0/24 accept
+    iifname "ens3" meta nfproto ipv6 accept
   }
 
   chain postrouting {

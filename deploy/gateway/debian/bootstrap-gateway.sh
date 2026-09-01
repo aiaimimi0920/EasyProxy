@@ -51,6 +51,12 @@ cat > /etc/sysctl.d/99-easyproxy-gateway.conf <<'EOF'
 net.ipv4.ip_forward=1
 net.ipv4.conf.all.send_redirects=0
 net.ipv4.conf.default.send_redirects=0
+net.ipv6.conf.all.forwarding=1
+net.ipv6.conf.default.forwarding=1
+net.ipv6.conf.all.accept_ra=2
+net.ipv6.conf.default.accept_ra=2
+net.ipv6.conf.all.accept_redirects=0
+net.ipv6.conf.default.accept_redirects=0
 EOF
 
 sysctl --system
@@ -71,3 +77,5 @@ docker compose version
 command -v nft >/dev/null
 command -v ip >/dev/null
 test "$(sysctl -n net.ipv4.ip_forward)" = 1
+test "$(sysctl -n net.ipv6.conf.all.forwarding)" = 1
+test -c /dev/net/tun

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -206,7 +207,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	// Keep the manager in an explicit idle state when the dispatcher owns the
 	// entry but the proxy source is empty. This lets DIRECT traffic continue
 	// while a later reload activates the pool without a process restart.
-	if cfg.DispatchEnabled() && len(cfg.Nodes) == 0 {
+	if cfg.DispatchEnabled() && len(cfg.Nodes) == 0 && !tunDirectFallback(cfg) {
 		return m.startIdle(cfg, "no proxy nodes")
 	}
 
@@ -217,7 +218,7 @@ func (m *Manager) Start(ctx context.Context) error {
 		var err error
 		instance, err = m.createManagedBox(ctx, cfg)
 		if err != nil {
-			if cfg.DispatchEnabled() && errors.Is(err, builder.ErrNoValidNodes) {
+			if cfg.DispatchEnabled() && errors.Is(err, builder.ErrNoValidNodes) && !tunDirectFallback(cfg) {
 				return m.startIdle(cfg, "no valid proxy nodes")
 			}
 			return err
@@ -258,7 +259,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	m.startPeriodicHealthCheck(cfg)
 
 	// Wait for initial health check if min nodes configured
-	if cfg.SubscriptionRefresh.MinAvailableNodes > 0 {
+	if cfg.SubscriptionRefresh.MinAvailableNodes > 0 && len(cfg.Nodes) > 0 {
 		timeout := cfg.SubscriptionRefresh.HealthCheckTimeout
 		if timeout <= 0 {
 			timeout = defaultHealthCheckTimeout
@@ -271,6 +272,11 @@ func (m *Manager) Start(ctx context.Context) error {
 
 	m.logger.Infof("sing-box instance started with %d nodes", len(cfg.Nodes))
 	return nil
+}
+
+func tunDirectFallback(cfg *config.Config) bool {
+	return cfg != nil && cfg.Gateway.Enabled && strings.EqualFold(cfg.Gateway.Mode, "tun") &&
+		strings.EqualFold(cfg.Gateway.Routing.NoAvailableProxyPolicy, "DIRECT")
 }
 
 func (m *Manager) startIdle(cfg *config.Config, reason string) error {

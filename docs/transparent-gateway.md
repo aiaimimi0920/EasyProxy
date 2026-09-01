@@ -1,6 +1,7 @@
 # EasyProxy Transparent Gateway
 
-EasyProxy Phase 1 provides a native Linux transparent TCP ingress. It is
+EasyProxy provides a native Linux TUN gateway and retains the legacy transparent
+TCP ingress as a rollback mode. It is
 network-fabric independent: physical LAN, Tailscale, 星空组网, and future
 overlays only need to route trusted client packets to the NAS. EasyProxy does
 not call a Tailscale or 星空组网 API and must not be bound to one interface.
@@ -12,26 +13,36 @@ Enable `gateway.enabled` only on a Linux/NAS host that can provide:
 - host networking, or an equivalent network namespace with forwarding;
 - `CAP_NET_ADMIN` and `CAP_NET_RAW`;
 - `iproute2` and `nftables` binaries;
-- a kernel with `IP_TRANSPARENT`, policy routing, and nftables TPROXY support;
+- `/dev/net/tun`, policy routing, and nftables support for TUN mode;
+- a kernel with `IP_TRANSPARENT` and nftables TPROXY support only for legacy
+  `mode: transparent`;
 - an ingress route from each trusted physical/overlay CIDR.
+
+Each enabled TUN address family requires at least one trusted client CIDR from
+that family. This prevents an apparently healthy IPv4 or IPv6 mode from silently
+capturing no clients.
 
 The container image includes `ip` and `nft`, but gateway deployments must set
 `EASY_PROXY_RUN_AS_ROOT=1` and add the two capabilities in compose. Ordinary
 proxy deployments remain unprivileged. Do not expose `22323`, `29888`, or the
 TPROXY listener to WAN or guest networks.
 
-The gateway listens on `gateway.listen` (default `0.0.0.0:15001`). The host
-supervisor installs an fwmark route and nftables rules for configured trusted
-interfaces/CIDRs. Local/private destinations, marked EasyProxy egress, and
-control-plane traffic are bypassed before capture. Rules are removed on clean
-shutdown, reload, and listener startup failure.
+In `mode: tun`, sing-box owns `easyproxy0`; the host supervisor installs IPv4
+and optional IPv6 fwmark routes to that interface for configured trusted
+interfaces/CIDRs. TCP, UDP, QUIC, and intercepted DNS use the same EasyProxy
+route outbound and node pool. Local/private destinations, marked EasyProxy
+egress, DHCP/NDP/multicast, and control-plane traffic are bypassed before
+capture. Rules are removed on clean shutdown and before reload or TUN teardown.
+
+In legacy `mode: transparent`, the gateway listens on `gateway.listen` (default
+`0.0.0.0:15001`) and captures IPv4 TCP through TPROXY.
 
 ## Routing And Failure Policy
 
-Transparent TCP uses the same rule engine and node pool as explicit HTTP,
-HTTPS CONNECT, and SOCKS5 requests. The original destination is taken from the
-transparent socket; the client source address remains available for device and
-session mapping.
+TUN TCP and UDP use the same rule engine and node pool as explicit HTTP, HTTPS
+CONNECT, and SOCKS5 requests. Sniffed or fake-IP-recovered domains are evaluated
+before literal destination IPs. UDP-capable members carry QUIC and ordinary
+datagrams; an unavailable UDP pool follows `no_available_proxy_policy`.
 
 The default policy is fail-open:
 
@@ -39,9 +50,10 @@ The default policy is fail-open:
     no usable node    -> DIRECT
     gateway stopped   -> normal host forwarding after rule cleanup
 
-`GET /api/gateway/status` reports listener state, active connections, DIRECT /
-PROXY counts, DIRECT fallbacks, and the last lifecycle error. The endpoint is
-protected by the existing management authentication.
+`GET /api/gateway/status` reports mode, TUN interface/stack/MTU, IPv4/IPv6,
+TCP/UDP/DNS readiness, listener state, legacy transparent connection counters,
+and the last lifecycle error. The endpoint is protected by the existing
+management authentication.
 
 ## Docker/NAS Example
 
@@ -66,8 +78,10 @@ gateway behind a Docker bridge and assume it is a LAN router.
 ## Safe Rollback
 
 1. Set `gateway.enabled: false` and reload EasyProxy, or stop the container.
-2. Confirm `GET /api/gateway/status` reports `applied: false`.
-3. On the NAS, inspect `ip rule`, `ip route show table 100`, and
+2. Confirm `GET /api/gateway/status` reports `applied: false` and
+   `tun_ready: false`.
+3. On the NAS, inspect `ip rule`, `ip -6 rule`, `ip route show table 100`,
+   `ip -6 route show table 101`, and
    `nft list table inet easyproxy_gateway`; the EasyProxy entries must be gone.
 4. Restore the client's previous default route/exit-node selection.
 
@@ -75,17 +89,21 @@ Never delete another application's nftables table or policy rule by hand.
 
 ## Capability Boundary
 
-Phase 1 intentionally supports transparent TCP only. UDP/UDP ASSOCIATE, QUIC,
-WebRTC-like flows, IPv6 forwarding/capture, and DNS interception are not
-claimed as complete. DoH/DoT can bypass any port-53 resolver. These are Phase 2
-work and require a real UDP-capable outbound path rather than a TCP wrapper.
+TUN mode handles IPv4/IPv6 TCP and UDP, including QUIC/HTTP3, and intercepts
+trusted-client TCP/UDP port 53 when `dns_hijack` is enabled. Fake-IP domain
+association is persisted under the EasyProxy data directory. ICMP, ESP, GRE,
+and other non-TCP/UDP protocols remain DIRECT/bypassed rather than externally
+proxied. DoH/DoT are ordinary encrypted TUN flows; certificate-pinned clients
+may not provide a recoverable domain, so IP/GeoIP/final rules still apply.
 
 ## Validation
 
 Use `scripts/validate-transparent-gateway.ps1` for a read-only management API
-check from Windows. Run `scripts/validate-transparent-gateway-linux.sh` on a
-disposable Linux/NAS host with the gateway configuration; it checks kernel
-prerequisites, forwarding, the management status endpoint, and cleanup state.
-Client-side Google reachability must be tested from one physical-LAN client and
-one overlay client whose default route points at the NAS; the validation script
-does not alter those routes.
+check from Windows. Run `scripts/validate-transparent-gateway-linux.sh
+--require-tun` on a disposable Linux/NAS host with the gateway configuration; it
+checks TUN readiness, IPv4/IPv6 forwarding and policy routes, plus live nftables
+TCP/UDP/DNS capture rules. `scripts/validate-tun-gateway-docker.py --build`
+creates an isolated dual-stack topology and proves IPv4/IPv6 TCP, UDP, real QUIC,
+Fake-IP DNS and SOCKS5 UDP ASSOCIATE. Client-side reachability must still be
+tested from each actual LAN/overlay whose default route points at the NAS; the
+host validator does not alter client routes.

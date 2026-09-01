@@ -38,7 +38,7 @@ func TestManagerDisabledIsNoOp(t *testing.T) {
 	}
 }
 
-func TestManagerStopsRulesWhenListenerFails(t *testing.T) {
+func TestManagerDoesNotApplyRulesWhenListenerFails(t *testing.T) {
 	rules := &recordingRuleSupervisor{}
 	manager := NewManager(rules, func(context.Context, config.GatewayConfig) (net.Listener, error) {
 		return nil, errors.New("listen denied")
@@ -47,10 +47,40 @@ func TestManagerStopsRulesWhenListenerFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected listener error")
 	}
-	if rules.applyCalls != 1 || rules.stopCalls != 1 {
-		t.Fatalf("listener failure leaked rules: %+v", rules)
+	if rules.applyCalls != 0 || rules.stopCalls != 0 {
+		t.Fatalf("listener failure changed host rules: %+v", rules)
 	}
 	if got := manager.Status().Applied; got {
 		t.Fatal("manager reports applied after failed startup")
+	}
+}
+
+func TestManagerTunModeAppliesWithoutTransparentListener(t *testing.T) {
+	rules := &recordingRuleSupervisor{}
+	manager := NewManager(rules, func(context.Context, config.GatewayConfig) (net.Listener, error) {
+		t.Fatal("TUN mode attempted to create a transparent TCP listener")
+		return nil, nil
+	}, nil)
+	cfg := config.GatewayConfig{
+		Enabled: true,
+		Mode:    "tun",
+		Tun: config.GatewayTunConfig{
+			InterfaceName: "easyproxy0", Stack: "mixed", MTU: 1500,
+			IPv4: true, IPv6: true, UDP: true, DNSHijack: true,
+		},
+		DNS: config.GatewayDNSConfig{Enabled: true},
+	}
+	if err := manager.Start(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	status := manager.Status()
+	if rules.applyCalls != 1 || !status.Applied || !status.TunReady || !status.IPv6 || !status.UDP || !status.DNS {
+		t.Fatalf("unexpected TUN manager state: rules=%+v status=%+v", rules, status)
+	}
+	if err := manager.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	if rules.stopCalls != 1 {
+		t.Fatalf("TUN Stop calls = %d, want 1", rules.stopCalls)
 	}
 }

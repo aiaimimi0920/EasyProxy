@@ -13,6 +13,7 @@ package routerule
 import (
 	"fmt"
 	"net/netip"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -54,14 +55,26 @@ const (
 	kindDomain
 	kindIPCIDR
 	kindGeoIP
+	kindDestinationPort
 	kindFinal
 )
 
 type rule struct {
-	kind   ruleKind
-	value  string       // domain / keyword / ISO code (upper for geoip)
-	prefix netip.Prefix // for kindIPCIDR
-	policy Policy
+	kind      ruleKind
+	value     string       // domain / keyword / ISO code (upper for geoip)
+	prefix    netip.Prefix // for kindIPCIDR
+	portStart uint16
+	portEnd   uint16
+	policy    Policy
+}
+
+// Request carries destination metadata that is available to native TUN and
+// explicit proxy callers. Network is retained for network-aware rules and
+// observability; current rule syntax uses Host and Port.
+type Request struct {
+	Host    string
+	Port    uint16
+	Network string
 }
 
 // Engine evaluates an ordered rule list against destinations.
@@ -161,7 +174,12 @@ func (e *Engine) SetFinal(final Policy) {
 // domain name or a literal IP (with or without brackets for IPv6). Matching is
 // case-insensitive for domains.
 func (e *Engine) Match(host string) Policy {
-	host = normalizeHost(host)
+	return e.MatchRequest(Request{Host: host})
+}
+
+// MatchRequest returns the routing policy for complete destination metadata.
+func (e *Engine) MatchRequest(request Request) Policy {
+	host := normalizeHost(request.Host)
 	if host == "" {
 		e.mu.RLock()
 		f := e.final
@@ -204,6 +222,10 @@ func (e *Engine) Match(host string) Policy {
 				if iso := e.geo.CountryISO(addr); iso != "" && strings.EqualFold(iso, r.value) {
 					return r.policy
 				}
+			}
+		case kindDestinationPort:
+			if request.Port >= r.portStart && request.Port <= r.portEnd {
+				return r.policy
 			}
 		}
 	}
@@ -306,7 +328,39 @@ func parseRule(line string) (rule, bool) {
 			return rule{}, false
 		}
 		return rule{kind: kindGeoIP, value: strings.ToUpper(parts[1]), policy: NormalizePolicy(parts[2])}, true
+	case "DST-PORT":
+		if len(parts) != 3 {
+			return rule{}, false
+		}
+		start, end, ok := parsePortRange(parts[1])
+		if !ok {
+			return rule{}, false
+		}
+		return rule{kind: kindDestinationPort, portStart: start, portEnd: end, policy: NormalizePolicy(parts[2])}, true
 	default:
 		return rule{}, false
 	}
+}
+
+func parsePortRange(value string) (uint16, uint16, bool) {
+	parts := strings.Split(strings.TrimSpace(value), "-")
+	if len(parts) == 0 || len(parts) > 2 {
+		return 0, 0, false
+	}
+	parse := func(raw string) (uint16, bool) {
+		port, err := strconv.ParseUint(strings.TrimSpace(raw), 10, 16)
+		return uint16(port), err == nil && port > 0
+	}
+	start, ok := parse(parts[0])
+	if !ok {
+		return 0, 0, false
+	}
+	if len(parts) == 1 {
+		return start, start, true
+	}
+	end, ok := parse(parts[1])
+	if !ok || end < start {
+		return 0, 0, false
+	}
+	return start, end, true
 }

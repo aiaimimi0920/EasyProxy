@@ -168,17 +168,29 @@ export default function RoutingPanel() {
       {gateway && (
         <div className="rounded-lg border border-base-300/50 bg-base-100 p-5 shadow-sm">
           <div className="flex items-center justify-between gap-3 mb-3">
-            <div className="font-bold">透明网关</div>
+            <div className="font-bold">局域网网关</div>
             <span className={`badge ${gateway.applied ? 'badge-success' : gateway.enabled ? 'badge-warning' : 'badge-ghost'}`}>
               {gateway.applied ? '运行中' : gateway.enabled ? '错误' : '未启用'}
             </span>
           </div>
           <div className="grid gap-3 text-sm md:grid-cols-4">
-            <div><div className="text-base-content/50">监听</div><div className="font-mono">{gateway.listen || '未配置'}</div></div>
+            <div><div className="text-base-content/50">模式</div><div className="font-mono">{gateway.mode === 'tun' ? 'Native TUN' : 'Transparent'}</div></div>
+            <div><div className="text-base-content/50">接口 / 监听</div><div className="font-mono">{gateway.mode === 'tun' ? gateway.interface || '未就绪' : gateway.listen || '未配置'}</div></div>
+            <div><div className="text-base-content/50">栈 / MTU</div><div>{gateway.mode === 'tun' ? `${gateway.stack || 'unknown'} / ${gateway.mtu || '-'}` : '-'}</div></div>
             <div><div className="text-base-content/50">活动连接</div><div>{gateway.active_connections ?? 0}</div></div>
             <div><div className="text-base-content/50">DIRECT / PROXY</div><div>{gateway.direct_connections ?? 0} / {gateway.proxy_connections ?? 0}</div></div>
             <div><div className="text-base-content/50">故障策略</div><div>{gateway.direct_fallbacks ?? 0} 次 DIRECT 回退</div></div>
           </div>
+          {gateway.mode === 'tun' && (
+            <div className="mt-4 flex flex-wrap gap-2 text-xs">
+              <span className={`badge badge-sm ${gateway.tun_ready ? 'badge-success' : 'badge-error'}`}>TUN {gateway.tun_ready ? '就绪' : '未就绪'}</span>
+              <span className={`badge badge-sm ${gateway.ipv4 ? 'badge-success' : 'badge-ghost'}`}>IPv4</span>
+              <span className={`badge badge-sm ${gateway.ipv6 ? 'badge-success' : 'badge-ghost'}`}>IPv6</span>
+              <span className={`badge badge-sm ${gateway.tcp ? 'badge-success' : 'badge-ghost'}`}>TCP</span>
+              <span className={`badge badge-sm ${gateway.udp ? 'badge-success' : 'badge-ghost'}`}>UDP / QUIC</span>
+              <span className={`badge badge-sm ${gateway.dns ? 'badge-success' : 'badge-ghost'}`}>DNS 劫持</span>
+            </div>
+          )}
           {gateway.last_error && <div className="text-xs text-error mt-3">{gateway.last_error}</div>}
         </div>
       )}

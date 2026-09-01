@@ -9,6 +9,7 @@ import (
 	"easy_proxies/internal/builder"
 	"easy_proxies/internal/config"
 	"easy_proxies/internal/monitor"
+	"easy_proxies/internal/outbound/gatewayroute"
 	"easy_proxies/internal/outbound/pool"
 
 	box "github.com/sagernet/sing-box"
@@ -36,6 +37,7 @@ func (m *Manager) createBox(ctx context.Context, cfg *config.Config) (*box.Box, 
 	inboundRegistry := include.InboundRegistry()
 	outboundRegistry := include.OutboundRegistry()
 	pool.Register(outboundRegistry)
+	gatewayroute.Register(outboundRegistry)
 	endpointRegistry := include.EndpointRegistry()
 	dnsRegistry := include.DNSTransportRegistry()
 	serviceRegistry := include.ServiceRegistry()

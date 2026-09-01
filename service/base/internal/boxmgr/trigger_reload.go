@@ -138,7 +138,7 @@ func (m *Manager) triggerReload(
 
 	// If no enabled nodes available after merging, enter idle state:
 	// stop the running box gracefully so disabled nodes are no longer served.
-	if len(newCfg.Nodes) == 0 {
+	if len(newCfg.Nodes) == 0 && !tunDirectFallback(newCfg) {
 		return m.enterIdleLockedWithEphemeralNodes(newCfg, ephemeralNodes, publishEphemeral)
 	}
 

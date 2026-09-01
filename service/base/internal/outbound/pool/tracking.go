@@ -71,11 +71,16 @@ func (c *trackedConn) reportUnconfirmedFailure(err error) {
 
 type trackedPacketConn struct {
 	net.PacketConn
-	once               sync.Once
-	successOnce        sync.Once
-	release            func()
-	onTraffic          func(upload, download int64)
-	onConfirmedSuccess func()
+	once                 sync.Once
+	successOnce          sync.Once
+	failureOnce          sync.Once
+	closing              atomic.Bool
+	wrote                atomic.Bool
+	confirmed            atomic.Bool
+	release              func()
+	onTraffic            func(upload, download int64)
+	onConfirmedSuccess   func()
+	onUnconfirmedFailure func(error)
 }
 
 func (c *trackedPacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
@@ -84,7 +89,10 @@ func (c *trackedPacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
 		c.onTraffic(0, int64(n))
 	}
 	if n > 0 && c.onConfirmedSuccess != nil {
+		c.confirmed.Store(true)
 		c.successOnce.Do(c.onConfirmedSuccess)
+	} else if err != nil && c.wrote.Load() {
+		c.reportUnconfirmedFailure(err)
 	}
 	return n, addr, err
 }
@@ -92,15 +100,31 @@ func (c *trackedPacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
 func (c *trackedPacketConn) WriteTo(b []byte, addr net.Addr) (int, error) {
 	n, err := c.PacketConn.WriteTo(b, addr)
 	if n > 0 && c.onTraffic != nil {
+		c.wrote.Store(true)
 		c.onTraffic(int64(n), 0)
+	}
+	if err != nil && n == 0 {
+		c.reportUnconfirmedFailure(err)
 	}
 	return n, err
 }
 
 func (c *trackedPacketConn) Close() error {
+	c.closing.Store(true)
 	err := c.PacketConn.Close()
 	c.once.Do(c.release)
 	return err
+}
+
+func (c *trackedPacketConn) reportUnconfirmedFailure(err error) {
+	if err == nil || c.onUnconfirmedFailure == nil || c.closing.Load() || c.confirmed.Load() {
+		return
+	}
+	c.failureOnce.Do(func() {
+		if !c.closing.Load() && !c.confirmed.Load() {
+			c.onUnconfirmedFailure(err)
+		}
+	})
 }
 
 func (p *poolOutbound) incActive(member *memberState) {

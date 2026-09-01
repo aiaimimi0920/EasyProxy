@@ -57,16 +57,30 @@ func (rc *RoutingController) RoutingStatus() monitor.RoutingStatus {
 	return st
 }
 
-// effectiveRules builds the ordered rule set: user rules first (highest
-// priority), then the built-in China-direct defaults unless opted out. Remote
-// providers are layered in at runtime by the provider callback.
-func effectiveRules(cfg *config.Config) []string {
-	rules := make([]string, 0, len(cfg.Routing.Rules)+64)
+// configuredRules builds the static rule set: inline rules first, then local
+// files in declaration order. Remote providers and defaults are layered later.
+func configuredRules(cfg *config.Config) ([]string, error) {
+	localRules, err := routerule.LoadLocalRuleFiles(cfg.Routing.RuleFiles)
+	if err != nil {
+		return nil, err
+	}
+	rules := make([]string, 0, len(cfg.Routing.Rules)+len(localRules))
 	rules = append(rules, cfg.Routing.Rules...)
+	rules = append(rules, localRules...)
+	return rules, nil
+}
+
+// effectiveRules appends built-in defaults after the static rule set. Remote
+// providers are inserted between local files and defaults by their callback.
+func effectiveRules(cfg *config.Config) ([]string, error) {
+	rules, err := configuredRules(cfg)
+	if err != nil {
+		return nil, err
+	}
 	if cfg.RoutingUseDefaultRules() {
 		rules = append(rules, routerule.DefaultRules()...)
 	}
-	return rules
+	return rules, nil
 }
 
 func applyEngineConfig(engine *routerule.Engine, rules []string, finalPolicy string) {
@@ -74,8 +88,12 @@ func applyEngineConfig(engine *routerule.Engine, rules []string, finalPolicy str
 }
 
 // buildEngine constructs a rule engine from cfg with an optional country lookup.
-func buildEngine(cfg *config.Config, countryLookup routerule.CountryLookup) *routerule.Engine {
+func buildEngine(cfg *config.Config, countryLookup routerule.CountryLookup) (*routerule.Engine, error) {
+	rules, err := effectiveRules(cfg)
+	if err != nil {
+		return nil, err
+	}
 	engine := routerule.New(nil, routerule.NormalizePolicy(cfg.Routing.FinalPolicy), countryLookup)
-	applyEngineConfig(engine, effectiveRules(cfg), cfg.Routing.FinalPolicy)
-	return engine
+	applyEngineConfig(engine, rules, cfg.Routing.FinalPolicy)
+	return engine, nil
 }

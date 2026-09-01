@@ -125,7 +125,13 @@ func routingEngineInputsChanged(from, to *config.Config) bool {
 	if from.RoutingUseDefaultRules() != to.RoutingUseDefaultRules() ||
 		routerule.NormalizePolicy(from.Routing.FinalPolicy) != routerule.NormalizePolicy(to.Routing.FinalPolicy) ||
 		!reflect.DeepEqual(from.Routing.Rules, to.Routing.Rules) ||
+		!reflect.DeepEqual(from.Routing.RuleFiles, to.Routing.RuleFiles) ||
 		!reflect.DeepEqual(from.Routing.RuleProviders, to.Routing.RuleProviders) {
+		return true
+	}
+	// A referenced local file may change without its path changing. Any config
+	// reload with local files present must rematerialize the rule layer.
+	if len(from.Routing.RuleFiles) > 0 || len(to.Routing.RuleFiles) > 0 {
 		return true
 	}
 	return false

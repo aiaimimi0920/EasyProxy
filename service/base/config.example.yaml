@@ -166,26 +166,26 @@ geoip:
 # ───────────────────────────────────────────────────────────────
 # 原生透明网关 gateway（Linux/NAS，默认关闭）
 # ───────────────────────────────────────────────────────────────
-# 启用后由宿主机/网络命名空间的 TPROXY 规则把可信 LAN/虚拟局域网流量
-# 送入 EasyProxy。接口名只是示例，不能假设 tailscale0 或任意产品名一定存在。
+# 启用后由宿主机策略路由把可信 LAN/虚拟局域网流量送入 EasyProxy TUN。
+# 接口名只是示例，不能假设 tailscale0 或任意产品名一定存在。
 #
 # gateway:
 #   enabled: false
-#   mode: transparent
+#   mode: tun
 #   listen: 0.0.0.0:15001
 #   ingress:
 #     interfaces: [eth0, tailscale0, xingkong0]
 #     interface_patterns: [ts-*, star-*]
-#     trusted_cidrs: [192.168.15.0/24, 100.64.0.0/10, 10.66.0.0/16]
+#     trusted_cidrs: [192.168.15.0/24, 100.64.0.0/10, 10.66.0.0/16, "fd00:15::/64"]
 #   capture:
-#     tcp: tproxy
-#     udp: disabled                 # Phase 2
+#     tcp: disabled
+#     udp: disabled                 # TUN 模式由 tun.udp 接管
 #     preserve_original_destination: true
 #   routing:
 #     final_policy: PROXY
 #     no_available_proxy_policy: DIRECT  # fail-open，节点池为空仍可直连
 #   dns:
-#     enabled: false                # DNS/DoH/DoT 边界见透明网关文档
+#     enabled: true                 # TUN DNS/DoH/DoT 边界见透明网关文档
 #     listen: 0.0.0.0:53
 #   tun:                            # mode: tun 时生效；与 TPROXY capture 互斥
 #     interface_name: easyproxy0
@@ -193,11 +193,11 @@ geoip:
 #     stack: mixed                  # system / gvisor / mixed
 #     mtu: 1500                     # 1280-9000
 #     ipv4: true
-#     ipv6: false                   # 部署具备完整 IPv6 转发/出口后再启用
+#     ipv6: true                    # 同时要求至少一个 IPv6 trusted_cidrs；无出口时改为 false
 #     udp: true
 #     strict_route: true
-#     dns_hijack: false             # true 要求 gateway.dns.enabled: true
-#     fake_ip: false
+#     dns_hijack: true              # 要求 gateway.dns.enabled: true
+#     fake_ip: true
 #     fake_ipv4_range: 198.18.0.0/16
 #     fake_ipv6_range: "fc00::/18"
 #   devices:

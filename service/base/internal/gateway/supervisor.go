@@ -131,6 +131,13 @@ func isIdempotentNetworkError(err error) bool {
 }
 
 func buildGatewayCommands(cfg config.GatewayConfig) []gatewayCommand {
+	if strings.EqualFold(strings.TrimSpace(cfg.Mode), "tun") {
+		return buildTunGatewayCommands(cfg)
+	}
+	return buildTransparentGatewayCommands(cfg)
+}
+
+func buildTransparentGatewayCommands(cfg config.GatewayConfig) []gatewayCommand {
 	port := gatewayPort(cfg.Listen)
 	commands := []gatewayCommand{
 		{name: "nft", args: []string{"delete", "table", "inet", "easyproxy_gateway"}},
@@ -160,8 +167,10 @@ func buildGatewayCommands(cfg config.GatewayConfig) []gatewayCommand {
 			commands = appendCaptureRule(commands, "iifname", pattern, cidr, port)
 		}
 	}
-	for _, cidr := range cfg.Ingress.TrustedCIDRs {
-		commands = appendCaptureRule(commands, "", "", cidr, port)
+	if len(cfg.Ingress.Interfaces) == 0 && len(cfg.Ingress.InterfacePatterns) == 0 {
+		for _, cidr := range cfg.Ingress.TrustedCIDRs {
+			commands = appendCaptureRule(commands, "", "", cidr, port)
+		}
 	}
 	return commands
 }
@@ -197,10 +206,10 @@ func buildGatewayCleanup(commands []gatewayCommand) []gatewayCommand {
 		switch {
 		case command.name == "nft" && len(command.args) >= 3 && command.args[0] == "add" && command.args[1] == "table":
 			cleanup = append(cleanup, gatewayCommand{name: "nft", args: []string{"delete", "table", "inet", "easyproxy_gateway"}})
-		case command.name == "ip" && len(command.args) >= 2 && command.args[0] == "rule":
-			cleanup = append(cleanup, gatewayCommand{name: "ip", args: []string{"rule", "del", "fwmark", "0x1/0x1", "lookup", "100"}})
-		case command.name == "ip" && len(command.args) >= 2 && command.args[0] == "route":
-			cleanup = append(cleanup, gatewayCommand{name: "ip", args: []string{"route", "del", "local", "0.0.0.0/0", "dev", "lo", "table", "100"}})
+		case command.name == "ip":
+			if inverse, ok := tunIPCleanup(command.args); ok {
+				cleanup = append(cleanup, gatewayCommand{name: "ip", args: inverse})
+			}
 		}
 	}
 	return cleanup

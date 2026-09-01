@@ -28,6 +28,8 @@ var ErrNoValidNodes = errors.New("no valid nodes available")
 
 // Build converts high level config into sing-box Options tree.
 func Build(cfg *config.Config) (option.Options, error) {
+	tunEnabled := tunGatewayEnabled(cfg)
+	directOnlyTun := tunDirectFallbackEnabled(cfg)
 	baseOutbounds := make([]option.Outbound, 0, len(cfg.Nodes))
 	memberTags := make([]string, 0, len(cfg.Nodes))
 	metadata := make(map[string]poolout.MemberMeta)
@@ -142,7 +144,7 @@ func Build(cfg *config.Config) (option.Options, error) {
 	}
 
 	// Check if we have at least one valid node
-	if len(baseOutbounds) == 0 {
+	if len(baseOutbounds) == 0 && !directOnlyTun {
 		return option.Options{}, fmt.Errorf("%w (all %d nodes failed to build)", ErrNoValidNodes, len(cfg.Nodes))
 	}
 
@@ -210,7 +212,8 @@ func Build(cfg *config.Config) (option.Options, error) {
 	// Smart routing dials the global pool outbound directly. Pure multi-port
 	// mode therefore still needs proxy-pool even though it has no plain pool
 	// inbound and keeps its per-node pools below.
-	if enablePoolInbound || cfg.DispatchEnabled() {
+	hasGlobalPool := len(memberTags) > 0 && (enablePoolInbound || cfg.DispatchEnabled() || tunEnabled)
+	if hasGlobalPool {
 		poolOptions := poolout.Options{
 			Mode:              cfg.Pool.Mode,
 			Members:           memberTags,
@@ -226,7 +229,7 @@ func Build(cfg *config.Config) (option.Options, error) {
 			Options: &poolOptions,
 		})
 	}
-	if enablePoolInbound {
+	if enablePoolInbound && hasGlobalPool {
 		route.Final = poolout.Tag
 	}
 
@@ -392,17 +395,33 @@ func Build(cfg *config.Config) (option.Options, error) {
 		log.Println("   Default (no path): all nodes pool")
 	}
 
-	dnsOptions, err := buildDNSOptions(cfg.DNS, nodeEndpointDomains, len(memberTags) > 0 && (enablePoolInbound || cfg.DispatchEnabled()))
+	dnsConfig := cfg.DNS
+	if tunEnabled && cfg.Gateway.DNS.Enabled {
+		enabled := true
+		dnsConfig.Enabled = &enabled
+	}
+	dnsOptions, err := buildDNSOptions(dnsConfig, nodeEndpointDomains, hasGlobalPool)
 	if err != nil {
 		return option.Options{}, fmt.Errorf("build DNS options: %w", err)
 	}
+	var experimental *option.ExperimentalOptions
+	if tunEnabled {
+		tunInbound, tunOutbounds, tunExperimental, err := configureTunGateway(cfg, &route, dnsOptions, hasGlobalPool)
+		if err != nil {
+			return option.Options{}, fmt.Errorf("build native TUN gateway: %w", err)
+		}
+		inbounds = append(inbounds, tunInbound)
+		outbounds = append(outbounds, tunOutbounds...)
+		experimental = tunExperimental
+	}
 
 	opts := option.Options{
-		Log:       &option.LogOptions{Level: strings.ToLower(cfg.LogLevel)},
-		Inbounds:  inbounds,
-		Outbounds: outbounds,
-		Route:     &route,
-		DNS:       dnsOptions,
+		Log:          &option.LogOptions{Level: strings.ToLower(cfg.LogLevel)},
+		Inbounds:     inbounds,
+		Outbounds:    outbounds,
+		Route:        &route,
+		DNS:          dnsOptions,
+		Experimental: experimental,
 	}
 	return opts, nil
 }

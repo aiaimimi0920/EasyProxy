@@ -60,21 +60,21 @@ routing:
 # Provider-neutral gateway. Keep disabled for ordinary proxy deployments.
 gateway:
   enabled: false
-  mode: transparent
+  mode: tun
   listen: 0.0.0.0:15001
   ingress:
     interfaces: []
     interface_patterns: []
     trusted_cidrs: []
   capture:
-    tcp: tproxy
+    tcp: disabled
     udp: disabled
     preserve_original_destination: true
   routing:
     final_policy: PROXY
     no_available_proxy_policy: DIRECT
   dns:
-    enabled: false
+    enabled: true
     listen: 0.0.0.0:53
   tun:
     interface_name: easyproxy0
@@ -82,11 +82,11 @@ gateway:
     stack: mixed
     mtu: 1500
     ipv4: true
-    ipv6: false
+    ipv6: true
     udp: true
     strict_route: true
-    dns_hijack: false
-    fake_ip: false
+    dns_hijack: true
+    fake_ip: true
     fake_ipv4_range: 198.18.0.0/16
     fake_ipv6_range: "fc00::/18"
   devices: {}
@@ -128,7 +128,7 @@ geoip:
   auto_update_interval: 24h0m0s
 
 source_sync:
-  enabled: true
+  enabled: false
   manifest_url: "https://your-misub-domain.example.com/api/manifest/your-profile"
   manifest_token: ""
   refresh_interval: 1h0m0s
@@ -161,15 +161,12 @@ connectors:
       local_protocol: "socks5"
       access_token: ""
 
-subscriptions:
-  - "https://example.com/subscription-1"
-  - "https://example.com/subscription-2"
+subscriptions: []
 
 # Notes:
 # - management.password is also accepted directly as an Authorization header
 #   by the management API for service-to-service calls.
-# - The real migrated runtime profile currently uses hybrid mode and an
-#   aggregator-backed subscription plus several external subscription URLs.
+# - Add real subscription URLs or a MiSub manifest before enabling source_sync.
 # - source_sync only augments runtime sources; local subscriptions and manual
 #   direct proxies remain local-first and take precedence over manifest/fallback.
 # - connector_runtime controls local execution of manifest connectors such as

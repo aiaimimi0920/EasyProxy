@@ -47,7 +47,7 @@ func (m *Manager) reloadLockedWithEphemeralNodes(
 	if targetCfg == nil {
 		return errors.New("new config is nil")
 	}
-	if targetCfg.DispatchEnabled() && len(targetCfg.Nodes) > 0 && !builder.HasValidNode(targetCfg) {
+	if targetCfg.DispatchEnabled() && len(targetCfg.Nodes) > 0 && !builder.HasValidNode(targetCfg) && !tunDirectFallback(targetCfg) {
 		return m.enterIdleLockedWithEphemeralNodes(targetCfg, ephemeralNodes, publishEphemeral)
 	}
 

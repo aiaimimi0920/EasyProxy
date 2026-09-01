@@ -200,7 +200,11 @@ func (rc *RoutingController) startLocked(cfg *config.Config) error {
 	if err := validateRuleProviders(cfg.Routing.RuleProviders); err != nil {
 		return err
 	}
-	engine := buildEngine(cfg, rc.openGeoLocked(cfg))
+	engine, err := buildEngine(cfg, rc.openGeoLocked(cfg))
+	if err != nil {
+		rc.closeGeoLocked()
+		return err
+	}
 	rc.engine = engine
 
 	if err := rc.startProviderLocked(cfg, engine); err != nil {

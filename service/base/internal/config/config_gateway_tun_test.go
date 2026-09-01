@@ -44,7 +44,11 @@ func TestGatewayDeviceAliasesClone(t *testing.T) {
 }
 
 func TestGatewayTunDefaults(t *testing.T) {
-	cfg := &Config{Gateway: GatewayConfig{Enabled: true, Mode: "tun"}}
+	cfg := &Config{Gateway: GatewayConfig{
+		Enabled: true,
+		Mode:    "tun",
+		Ingress: GatewayIngressConfig{TrustedCIDRs: []string{"192.0.2.0/24"}},
+	}}
 	if err := cfg.normalize(); err != nil {
 		t.Fatalf("normalize() error = %v", err)
 	}
@@ -91,12 +95,49 @@ func TestGatewayTunRejectsConflicts(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := &Config{Gateway: GatewayConfig{Enabled: true, Mode: "tun"}}
+			cfg := &Config{Gateway: GatewayConfig{
+				Enabled: true,
+				Mode:    "tun",
+				Ingress: GatewayIngressConfig{TrustedCIDRs: []string{"192.0.2.0/24"}},
+			}}
 			tt.mutate(cfg)
 			if err := cfg.normalize(); err == nil {
 				t.Fatal("normalize() unexpectedly accepted invalid TUN configuration")
 			}
 		})
+	}
+}
+
+func TestGatewayTunRequiresTrustedCIDRForEachEnabledFamily(t *testing.T) {
+	tests := []struct {
+		name    string
+		trusted []string
+	}{
+		{name: "missing IPv4", trusted: []string{"2001:db8:1::/64"}},
+		{name: "missing IPv6", trusted: []string{"192.0.2.0/24"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{Gateway: GatewayConfig{
+				Enabled: true,
+				Mode:    "tun",
+				Ingress: GatewayIngressConfig{TrustedCIDRs: tt.trusted},
+				Tun: GatewayTunConfig{
+					IPv4: true,
+					IPv6: true,
+				},
+			}}
+			if err := cfg.normalize(); err == nil {
+				t.Fatal("normalize() accepted an enabled address family without a trusted CIDR")
+			}
+		})
+	}
+}
+
+func TestDisabledTunGatewayAllowsTemplateCIDRsToRemainEmpty(t *testing.T) {
+	cfg := &Config{Gateway: GatewayConfig{Mode: "tun"}}
+	if err := cfg.normalize(); err != nil {
+		t.Fatalf("normalize() rejected a disabled TUN template: %v", err)
 	}
 }
 
@@ -195,7 +236,7 @@ func TestLoadForReloadPreservesExplicitGeoIPDisable(t *testing.T) {
 
 func TestGatewayTunPreservesExplicitFalseBooleansFromYAML(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
-	data := []byte("mode: pool\ngateway:\n  enabled: true\n  mode: tun\n  tun:\n    ipv4: false\n    ipv6: true\n    udp: false\n    strict_route: false\n")
+	data := []byte("mode: pool\ngateway:\n  enabled: true\n  mode: tun\n  ingress:\n    trusted_cidrs: [2001:db8:1::/64]\n  tun:\n    ipv4: false\n    ipv6: true\n    udp: false\n    strict_route: false\n")
 	if err := os.WriteFile(configPath, data, 0o644); err != nil {
 		t.Fatal(err)
 	}

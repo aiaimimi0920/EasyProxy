@@ -61,6 +61,9 @@ func (p *poolOutbound) wrapPacketConn(conn net.PacketConn, member *memberState, 
 		onConfirmedSuccess: func() {
 			p.recordSuccess(member, destination)
 		},
+		onUnconfirmedFailure: func(cause error) {
+			p.recordFailure(member, cause, destination)
+		},
 	}
 }
 

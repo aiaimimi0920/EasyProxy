@@ -130,3 +130,31 @@ jobs:
         run: |
           git diff --check
           git diff --exit-code
+
+  native-tun-e2e:
+    name: Native TUN Dual-Stack E2E
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository recursively
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: service/base/go.mod
+          cache-dependency-path: service/base/go.sum
+
+      - name: Ensure the Linux TUN device is available
+        shell: bash
+        run: |
+          if [[ ! -c /dev/net/tun ]]; then
+            sudo modprobe tun
+          fi
+          test -c /dev/net/tun
+
+      - name: Build and validate the native TUN data plane
+        shell: bash
+        run: python3 scripts/validate-tun-gateway-docker.py --build

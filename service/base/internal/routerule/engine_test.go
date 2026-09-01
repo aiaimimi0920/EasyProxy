@@ -241,3 +241,35 @@ func TestValidateRulesRejectsMalformedRuleButKeepsLegacyNewLenient(t *testing.T)
 		t.Fatalf("legacy New() should still skip malformed lines: got %d want %d", got, want)
 	}
 }
+
+func TestEngineMatchRequestDestinationPort(t *testing.T) {
+	engine := New([]string{
+		"DST-PORT,53,DIRECT",
+		"DST-PORT,443-445,PROXY",
+		"FINAL,DIRECT",
+	}, PolicyProxy, nil)
+
+	if got := engine.MatchRequest(Request{Host: "8.8.8.8", Port: 53, Network: "udp"}); got != PolicyDirect {
+		t.Fatalf("DNS destination port policy = %s, want %s", got, PolicyDirect)
+	}
+	if got := engine.MatchRequest(Request{Host: "2001:4860:4860::8888", Port: 444, Network: "tcp"}); got != PolicyProxy {
+		t.Fatalf("inclusive destination port range policy = %s, want %s", got, PolicyProxy)
+	}
+	if got := engine.MatchRequest(Request{Host: "example.com", Port: 446, Network: "udp"}); got != PolicyDirect {
+		t.Fatalf("out-of-range destination port policy = %s, want %s", got, PolicyDirect)
+	}
+}
+
+func TestDestinationPortRuleRejectsMalformedRanges(t *testing.T) {
+	for _, line := range []string{
+		"DST-PORT,0,DIRECT",
+		"DST-PORT,65536,DIRECT",
+		"DST-PORT,100-99,DIRECT",
+		"DST-PORT,1-2-3,DIRECT",
+		"DST-PORT,53,DIRECT,EXTRA",
+	} {
+		if _, ok := parseRule(line); ok {
+			t.Errorf("parseRule(%q) unexpectedly succeeded", line)
+		}
+	}
+}

@@ -38,7 +38,17 @@ beforeEach(() => {
   apiMocks.fetchGatewayStatus.mockResolvedValue({
     enabled: true,
     applied: true,
+    mode: 'tun',
     listen: '0.0.0.0:15001',
+    interface: 'easyproxy0',
+    stack: 'mixed',
+    mtu: 1500,
+    tun_ready: true,
+    ipv4: true,
+    ipv6: true,
+    tcp: true,
+    udp: true,
+    dns: true,
     direct_connections: 4,
     proxy_connections: 7,
     direct_fallbacks: 2,
@@ -61,7 +71,11 @@ it('uses ProfileForm while preserving legacy listener settings on save', async (
   expect(screen.getByText('当前粘性绑定')).toBeInTheDocument()
   expect(screen.getByText('node-a')).toBeInTheDocument()
   expect(screen.getByText('node-b')).toBeInTheDocument()
-  expect(screen.getByText('透明网关')).toBeInTheDocument()
-  expect(screen.getByText('0.0.0.0:15001')).toBeInTheDocument()
+  expect(screen.getByText('局域网网关')).toBeInTheDocument()
+  expect(screen.getByText('easyproxy0')).toBeInTheDocument()
+  expect(screen.getByText('TUN 就绪')).toBeInTheDocument()
+  expect(screen.getByText('IPv6')).toBeInTheDocument()
+  expect(screen.getByText('UDP / QUIC')).toBeInTheDocument()
+  expect(screen.getByText('DNS 劫持')).toBeInTheDocument()
   expect(screen.getByText('2 次 DIRECT 回退')).toBeInTheDocument()
 })

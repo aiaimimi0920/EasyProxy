@@ -15,7 +15,10 @@ func TestBuildEngineFinalPolicy(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Routing.FinalPolicy = string(routerule.PolicyDirect)
 
-	engine := buildEngine(cfg, nil)
+	engine, err := buildEngine(cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if engine.RuleCount() == 0 {
 		t.Fatal("expected built-in default rules to be installed")

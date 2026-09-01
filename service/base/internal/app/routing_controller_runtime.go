@@ -66,7 +66,13 @@ func (rc *RoutingController) applyRuntimeConfigLocked(previous, cfg *config.Conf
 	}
 	if geoChanged {
 		newGeo, countryLookup := openGeoConfig(cfg)
-		newEngine := buildEngine(cfg, countryLookup)
+		newEngine, err := buildEngine(cfg, countryLookup)
+		if err != nil {
+			if newGeo != nil {
+				_ = newGeo.Close()
+			}
+			return err
+		}
 		oldGeo := rc.geo
 
 		rc.stopProviderLocked()
@@ -86,7 +92,11 @@ func (rc *RoutingController) applyRuntimeConfigLocked(previous, cfg *config.Conf
 		// Invalidate the old provider generation before publishing the new rule
 		// snapshot so an in-flight stale callback cannot win last.
 		rc.stopProviderLocked()
-		applyEngineConfig(rc.engine, effectiveRules(cfg), cfg.Routing.FinalPolicy)
+		rules, err := effectiveRules(cfg)
+		if err != nil {
+			return err
+		}
+		applyEngineConfig(rc.engine, rules, cfg.Routing.FinalPolicy)
 		if err := rc.startProviderLocked(cfg, rc.engine); err != nil {
 			return err
 		}
@@ -120,7 +130,10 @@ func (rc *RoutingController) startProviderLocked(cfg *config.Config, engine *rou
 	}
 	// Snapshot the static rule inputs so the provider callback merges against a
 	// stable base (providers sit between user rules and the default set).
-	staticRules := append([]string(nil), cfg.Routing.Rules...)
+	staticRules, err := configuredRules(cfg)
+	if err != nil {
+		return err
+	}
 	useDefaults := cfg.RoutingUseDefaultRules()
 	finalPolicy := cfg.Routing.FinalPolicy
 	pm := routerule.NewProviderManager(specs, func(providerRules []string) {
