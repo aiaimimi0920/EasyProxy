@@ -16,10 +16,11 @@ import (
 )
 
 type recordingOutbound struct {
-	tag         string
-	dials       atomic.Int32
-	packetDials atomic.Int32
-	dialErr     error
+	tag           string
+	dials         atomic.Int32
+	packetDials   atomic.Int32
+	dialErr       error
+	lastDirective *pool.SelectionDirective
 }
 
 func (*recordingOutbound) Type() string           { return "test" }
@@ -27,8 +28,9 @@ func (o *recordingOutbound) Tag() string          { return o.tag }
 func (*recordingOutbound) Network() []string      { return []string{N.NetworkTCP, N.NetworkUDP} }
 func (*recordingOutbound) Dependencies() []string { return nil }
 
-func (o *recordingOutbound) DialContext(context.Context, string, M.Socksaddr) (net.Conn, error) {
+func (o *recordingOutbound) DialContext(ctx context.Context, _ string, _ M.Socksaddr) (net.Conn, error) {
 	o.dials.Add(1)
+	o.lastDirective = pool.DirectiveFrom(ctx)
 	if o.dialErr != nil {
 		return nil, o.dialErr
 	}
@@ -37,8 +39,9 @@ func (o *recordingOutbound) DialContext(context.Context, string, M.Socksaddr) (n
 	return client, nil
 }
 
-func (o *recordingOutbound) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+func (o *recordingOutbound) ListenPacket(ctx context.Context, _ M.Socksaddr) (net.PacketConn, error) {
 	o.packetDials.Add(1)
+	o.lastDirective = pool.DirectiveFrom(ctx)
 	if o.dialErr != nil {
 		return nil, o.dialErr
 	}
@@ -101,5 +104,37 @@ func TestRouteFallsBackDirectWhenProxyUnavailable(t *testing.T) {
 	stats := route.Snapshot()
 	if direct.dials.Load() != 1 || stats.NoNodeFallback != 1 || stats.Direct != 1 {
 		t.Fatalf("unexpected direct fallback state: dials=%d stats=%+v", direct.dials.Load(), stats)
+	}
+}
+
+func TestRouteUDPUsesIndependentNativeProtocolPreference(t *testing.T) {
+	direct := &recordingOutbound{tag: "direct"}
+	proxy := &recordingOutbound{tag: "pool"}
+	route := newTestRoute(nil, "PROXY", "DIRECT", direct, proxy)
+	packetConn, err := route.ListenPacket(context.Background(), M.ParseSocksaddr("1.1.1.1:443"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = packetConn.Close()
+	directive := proxy.lastDirective
+	if directive == nil || directive.ProfileID != udpProfileID {
+		t.Fatalf("UDP directive = %+v", directive)
+	}
+	if len(directive.PreferredProtocolFamilies) != 2 || directive.PreferredProtocolFamilies[0] != "hysteria2" {
+		t.Fatalf("UDP protocol preference = %v", directive.PreferredProtocolFamilies)
+	}
+}
+
+func TestRouteUDPFallsBackDirectWhenProxyUnavailable(t *testing.T) {
+	direct := &recordingOutbound{tag: "direct"}
+	route := newTestRoute(nil, "PROXY", "DIRECT", direct, nil)
+	packetConn, err := route.ListenPacket(context.Background(), M.ParseSocksaddr("1.1.1.1:443"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = packetConn.Close()
+	stats := route.Snapshot()
+	if direct.packetDials.Load() != 1 || stats.NoNodeFallback != 1 || stats.UDP != 1 {
+		t.Fatalf("unexpected UDP fallback: dials=%d stats=%+v", direct.packetDials.Load(), stats)
 	}
 }

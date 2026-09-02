@@ -8,6 +8,7 @@ import (
 
 	"github.com/sagernet/sing/common"
 	E "github.com/sagernet/sing/common/exceptions"
+	N "github.com/sagernet/sing/common/network"
 )
 
 func (p *poolOutbound) pickMember(network string, excluded map[string]struct{}, directive *SelectionDirective) (*memberState, error) {
@@ -24,7 +25,8 @@ func (p *poolOutbound) pickMember(network string, excluded map[string]struct{}, 
 			return nil, err
 		}
 	}
-	candidates = p.availableMembersLocked(now, network, candidates, sourceStates, secondaryStates, true, true, excluded, directive)
+	enforceTCPHealth := network != N.NetworkUDP
+	candidates = p.availableMembersLocked(now, network, candidates, sourceStates, secondaryStates, enforceTCPHealth, enforceTCPHealth, excluded, directive)
 	p.mu.Unlock()
 
 	if len(candidates) == 0 {
@@ -41,7 +43,7 @@ func (p *poolOutbound) pickMember(network string, excluded map[string]struct{}, 
 
 	if len(candidates) == 0 && len(excluded) == 0 {
 		p.mu.Lock()
-		if p.releaseIfAllBlacklistedLocked(now) {
+		if p.releaseIfAllBlacklistedLocked(now, network) {
 			candidates = p.availableMembersLocked(now, network, candidates, sourceStates, secondaryStates, false, false, excluded, directive)
 		}
 		p.mu.Unlock()
@@ -71,10 +73,14 @@ func (p *poolOutbound) selectMemberWithDirective(
 	}
 
 	selectionCandidates := candidates
+	selectionCandidates, protocolCandidates := p.preferProtocolCandidates(selectionCandidates, directive)
+	if protocolCandidates != nil {
+		defer p.putCandidateBuffer(protocolCandidates)
+	}
 	var preferredCandidates []*memberState
 	if directive.Strategy == StrategyStable && directive.Filter.LongLived == nil {
 		preferredCandidates = p.getCandidateBuffer()
-		for _, member := range candidates {
+		for _, member := range selectionCandidates {
 			if p.memberMeetsLongLivedPolicy(member, directive) {
 				preferredCandidates = append(preferredCandidates, member)
 			}
@@ -132,7 +138,7 @@ func (p *poolOutbound) availableMembersLocked(
 			continue
 		}
 		// Check blacklist via shared state (auto-clears if expired)
-		if member.shared != nil && member.shared.isBlacklisted(now) {
+		if member.shared != nil && member.shared.isTransportBlacklisted(network, now) {
 			continue
 		}
 		if network != "" && !common.Contains(member.outbound.Network(), network) {
@@ -217,20 +223,23 @@ func (p *poolOutbound) memberMeetsLongLivedPolicy(member *memberState, directive
 	return snapshot.LongLived
 }
 
-func (p *poolOutbound) releaseIfAllBlacklistedLocked(now time.Time) bool {
+func (p *poolOutbound) releaseIfAllBlacklistedLocked(now time.Time, network string) bool {
 	if len(p.members) == 0 {
 		return false
 	}
 	// Check if all members are blacklisted
 	for _, member := range p.members {
-		if member.shared == nil || !member.shared.isBlacklisted(now) {
+		if member.shared == nil || !member.shared.isTransportBlacklisted(network, now) {
 			return false
 		}
+	}
+	if network == N.NetworkUDP {
+		return false
 	}
 	// All blacklisted, force release all
 	for _, member := range p.members {
 		if member.shared != nil {
-			member.shared.forceRelease()
+			member.shared.forceReleaseTransport(network)
 		}
 	}
 	p.logger.Warn("all upstream proxies were blacklisted, releasing them for retry")

@@ -19,9 +19,13 @@ import (
 )
 
 const (
-	Type = "easyproxy-gateway-route"
-	Tag  = "easyproxy-gateway-route"
+	Type         = "easyproxy-gateway-route"
+	Tag          = "easyproxy-gateway-route"
+	tcpProfileID = Tag + "/tcp"
+	udpProfileID = Tag + "/udp"
 )
+
+var nativeUDPProtocolFamilies = []string{"hysteria2", "tuic"}
 
 // Options controls native TUN routing through EasyProxy's direct and pool
 // outbounds. An empty PoolTag represents a valid direct-only runtime.
@@ -117,7 +121,10 @@ func (r *routeOutbound) DialContext(ctx context.Context, network string, destina
 		return r.direct.DialContext(ctx, network, destination)
 	}
 	if r.pool != nil {
-		directive := &pool.SelectionDirective{Strategy: pool.NormalizeStrategy(string(r.options.DefaultStrategy))}
+		directive := &pool.SelectionDirective{
+			ProfileID: tcpProfileID,
+			Strategy:  pool.NormalizeStrategy(string(r.options.DefaultStrategy)),
+		}
 		conn, err := r.pool.DialContext(pool.WithDirective(ctx, directive), network, destination)
 		if err == nil {
 			r.proxyCount.Add(1)
@@ -142,7 +149,11 @@ func (r *routeOutbound) ListenPacket(ctx context.Context, destination M.Socksadd
 		return r.direct.ListenPacket(ctx, destination)
 	}
 	if r.pool != nil {
-		directive := &pool.SelectionDirective{Strategy: pool.NormalizeStrategy(string(r.options.DefaultStrategy))}
+		directive := &pool.SelectionDirective{
+			ProfileID:                 udpProfileID,
+			Strategy:                  pool.NormalizeStrategy(string(r.options.DefaultStrategy)),
+			PreferredProtocolFamilies: nativeUDPProtocolFamilies,
+		}
 		packetConn, err := r.pool.ListenPacket(pool.WithDirective(ctx, directive), destination)
 		if err == nil {
 			r.proxyCount.Add(1)

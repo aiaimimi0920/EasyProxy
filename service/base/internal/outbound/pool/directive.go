@@ -119,14 +119,15 @@ func (f NodeFilter) bucketKey() string {
 // SelectionDirective carries per-request / per-session selection intent from
 // the dispatcher into the pool outbound through the dial context.
 type SelectionDirective struct {
-	ProfileID       string
-	ProfileRevision int64
-	Strategy        Strategy
-	SessionKey      string // session stickiness key (StrategySession)
-	SessionTTL      time.Duration
-	PinnedTag       string // manually requested member tag
-	Filter          NodeFilter
-	LongLived       LongLivedPolicy
+	ProfileID                 string
+	ProfileRevision           int64
+	Strategy                  Strategy
+	SessionKey                string // session stickiness key (StrategySession)
+	SessionTTL                time.Duration
+	PinnedTag                 string // manually requested member tag
+	PreferredProtocolFamilies []string
+	Filter                    NodeFilter
+	LongLived                 LongLivedPolicy
 }
 
 func (d SelectionDirective) namespaced(value string) string {
@@ -141,7 +142,11 @@ func (d SelectionDirective) namespacedSessionKey() string {
 }
 
 func (d SelectionDirective) stableBucketKey() string {
-	return d.namespaced(d.Filter.bucketKey())
+	key := d.Filter.bucketKey()
+	if protocols := normalizeTokens(d.PreferredProtocolFamilies, strings.ToLower); len(protocols) > 0 {
+		key += "|p=" + strings.Join(protocols, ",")
+	}
+	return d.namespaced(key)
 }
 
 type directiveCtxKey struct{}

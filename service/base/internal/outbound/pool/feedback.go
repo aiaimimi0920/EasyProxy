@@ -2,18 +2,20 @@ package pool
 
 import (
 	"net"
+
+	N "github.com/sagernet/sing/common/network"
 )
 
 func (p *poolOutbound) shouldSkipProbeTLSVerify() bool {
 	return p != nil && p.monitor != nil && p.monitor.SkipCertVerify()
 }
 
-func (p *poolOutbound) recordFailure(member *memberState, cause error, destination string) {
+func (p *poolOutbound) recordFailure(member *memberState, network string, cause error, destination string) {
 	if member.shared == nil {
 		p.logger.Warn("proxy ", member.tag, " failure (no shared state): ", cause)
 		return
 	}
-	failures, blacklisted, _ := member.shared.recordFailure(cause, p.options.FailureThreshold, p.options.BlacklistDuration, destination)
+	failures, blacklisted, _ := member.shared.recordTransportFailure(network, cause, p.options.FailureThreshold, p.options.BlacklistDuration, destination)
 	if blacklisted {
 		p.logger.Warn("proxy ", member.tag, " blacklisted for ", p.options.BlacklistDuration, ": ", cause)
 	} else {
@@ -21,13 +23,13 @@ func (p *poolOutbound) recordFailure(member *memberState, cause error, destinati
 	}
 }
 
-func (p *poolOutbound) recordSuccess(member *memberState, destination string) {
+func (p *poolOutbound) recordSuccess(member *memberState, network, destination string) {
 	if member.shared != nil {
-		member.shared.recordSuccess(destination)
+		member.shared.recordTransportSuccess(network, destination)
 	}
 }
 
-func (p *poolOutbound) wrapConn(conn net.Conn, member *memberState, destination string) net.Conn {
+func (p *poolOutbound) wrapConn(conn net.Conn, member *memberState, network, destination string) net.Conn {
 	return &trackedConn{
 		Conn: conn,
 		release: func() {
@@ -39,10 +41,10 @@ func (p *poolOutbound) wrapConn(conn net.Conn, member *memberState, destination 
 			}
 		},
 		onConfirmedSuccess: func() {
-			p.recordSuccess(member, destination)
+			p.recordSuccess(member, network, destination)
 		},
 		onUnconfirmedFailure: func(cause error) {
-			p.recordFailure(member, cause, destination)
+			p.recordFailure(member, network, cause, destination)
 		},
 	}
 }
@@ -59,10 +61,10 @@ func (p *poolOutbound) wrapPacketConn(conn net.PacketConn, member *memberState, 
 			}
 		},
 		onConfirmedSuccess: func() {
-			p.recordSuccess(member, destination)
+			p.recordSuccess(member, N.NetworkUDP, destination)
 		},
 		onUnconfirmedFailure: func(cause error) {
-			p.recordFailure(member, cause, destination)
+			p.recordFailure(member, N.NetworkUDP, cause, destination)
 		},
 	}
 }

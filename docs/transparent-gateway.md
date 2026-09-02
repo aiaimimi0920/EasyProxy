@@ -41,8 +41,11 @@ In legacy `mode: transparent`, the gateway listens on `gateway.listen` (default
 
 TUN TCP and UDP use the same rule engine and node pool as explicit HTTP, HTTPS
 CONNECT, and SOCKS5 requests. Sniffed or fake-IP-recovered domains are evaluated
-before literal destination IPs. UDP-capable members carry QUIC and ordinary
-datagrams; an unavailable UDP pool follows `no_available_proxy_policy`.
+before literal destination IPs. TCP and UDP maintain independent sticky choices
+and failure cooldowns so a transport-specific failure does not suppress a working
+path on the same node. UDP first prefers native UDP transports such as Hysteria2
+and TUIC, then falls back to other UDP-capable members. An unavailable UDP pool
+follows `no_available_proxy_policy`.
 
 The default policy is fail-open:
 

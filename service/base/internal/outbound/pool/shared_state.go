@@ -17,6 +17,7 @@ type sharedMemberState struct {
 	failures         int
 	blacklisted      bool
 	blacklistedUntil time.Time
+	udp              transportFailureState
 	entry            atomic.Pointer[monitor.EntryHandle]
 	active           atomic.Int32
 	totalUpload      atomic.Int64
@@ -280,6 +281,7 @@ func (s *sharedMemberState) forceRelease() {
 	s.failures = 0
 	s.blacklisted = false
 	s.blacklistedUntil = time.Time{}
+	s.udp = transportFailureState{}
 	s.mu.Unlock()
 
 	if entry := s.entry.Load(); entry != nil {

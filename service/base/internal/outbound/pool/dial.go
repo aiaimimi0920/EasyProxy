@@ -36,11 +36,11 @@ func (p *poolOutbound) DialContext(ctx context.Context, network string, destinat
 		conn, err := member.outbound.DialContext(ctx, network, destination)
 		if err != nil {
 			p.decActive(member)
-			p.recordFailure(member, err, dst)
+			p.recordFailure(member, network, err, dst)
 			lastErr = err
 			continue
 		}
-		return p.wrapConn(conn, member, dst), nil
+		return p.wrapConn(conn, member, network, dst), nil
 	}
 
 	if lastErr != nil {
@@ -76,7 +76,7 @@ func (p *poolOutbound) ListenPacket(ctx context.Context, destination M.Socksaddr
 		conn, err := member.outbound.ListenPacket(ctx, destination)
 		if err != nil {
 			p.decActive(member)
-			p.recordFailure(member, err, dst)
+			p.recordFailure(member, N.NetworkUDP, err, dst)
 			lastErr = err
 			continue
 		}
