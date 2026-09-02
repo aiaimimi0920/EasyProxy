@@ -48,6 +48,17 @@ def docker(*args: str, capture: bool = False, check: bool = True) -> str:
     return run("docker", *args, capture=capture, check=check)
 
 
+def try_docker(*args: str) -> tuple[int, str]:
+    result = subprocess.run(
+        ["docker", *args],
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    return result.returncode, (result.stdout + result.stderr).strip()
+
+
 def write_text(path: Path, value: str) -> None:
     path.write_text(textwrap.dedent(value).lstrip(), encoding="utf-8", newline="\n")
 
@@ -166,7 +177,7 @@ def build_quic_probe(work: Path) -> Path:
     return binary
 
 
-def write_fixtures(work: Path) -> None:
+def write_fixtures(work: Path, client_ipv4_cidr: str, client_ipv6_cidr: str) -> None:
     write_text(
         work / "config.yaml",
         """
@@ -200,7 +211,7 @@ def write_fixtures(work: Path) -> None:
           listen: 0.0.0.0:15001
           ingress:
             interfaces: [eth0]
-            trusted_cidrs: [192.0.2.0/24, "2001:db8:1::/64"]
+            trusted_cidrs: [__CLIENT_IPV4_CIDR__, "__CLIENT_IPV6_CIDR__"]
           capture: {tcp: disabled, udp: disabled, preserve_original_destination: true}
           routing: {final_policy: PROXY, no_available_proxy_policy: DIRECT}
           dns: {enabled: true, listen: "0.0.0.0:53"}
@@ -219,7 +230,7 @@ def write_fixtures(work: Path) -> None:
             fake_ipv6_range: "fc00::/18"
         nodes: []
         subscriptions: []
-        """,
+        """.replace("__CLIENT_IPV4_CIDR__", client_ipv4_cidr).replace("__CLIENT_IPV6_CIDR__", client_ipv6_cidr),
     )
     write_text(
         work / "origin.py",
@@ -262,7 +273,7 @@ def write_fixtures(work: Path) -> None:
     write_text(
         work / "client.py",
         r'''
-        import ipaddress, socket, struct, time
+        import ipaddress, os, socket, struct, time
 
         def tcp(host, family):
             conn = socket.socket(family, socket.SOCK_STREAM); conn.settimeout(8)
@@ -275,22 +286,24 @@ def write_fixtures(work: Path) -> None:
             conn.sendto(b"datagram", (host, 444)); response, _ = conn.recvfrom(1024); conn.close()
             assert response == b"UDP-ECHO:datagram", response
 
-        def dns_query(qtype):
+        def dns_query(qtype, conn):
             qname = b"".join(bytes([len(part)]) + part.encode() for part in "example.com".split(".")) + b"\0"
+            last = "no response"
             for attempt in range(10):
                 txid = 0x4550 + attempt
                 packet = struct.pack("!HHHHHH", txid, 0x0100, 1, 0, 0, 0) + qname + struct.pack("!HH", qtype, 1)
-                conn = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); conn.settimeout(10)
-                try: conn.sendto(packet, ("1.1.1.1", 53)); data, _ = conn.recvfrom(4096)
-                except TimeoutError: conn.close(); continue
-                conn.close()
+                try:
+                    conn.sendto(packet, ("1.1.1.1", 53)); data, _ = conn.recvfrom(4096)
+                except TimeoutError: last = f"attempt={attempt + 1} timeout"; continue
                 rid, flags, _, answers, _, _ = struct.unpack("!HHHHHH", data[:12])
                 if rid != txid or not flags & 0x8000 or answers == 0:
+                    last = f"attempt={attempt + 1} id={rid:#x} rcode={flags & 0xF} answers={answers}"
                     time.sleep(0.5)
                     continue
                 offset = 12
                 while data[offset]: offset += 1 + data[offset]
                 offset += 5
+                answer_types = []
                 for _ in range(answers):
                     if data[offset] & 0xC0 == 0xC0: offset += 2
                     else:
@@ -298,8 +311,10 @@ def write_fixtures(work: Path) -> None:
                         offset += 1
                     answer_type, _, _, length = struct.unpack("!HHIH", data[offset:offset + 10]); offset += 10
                     raw = data[offset:offset + length]; offset += length
+                    answer_types.append(answer_type)
                     if answer_type == qtype: return ipaddress.ip_address(raw)
-            raise AssertionError("missing DNS answer")
+                last = f"attempt={attempt + 1} rcode={flags & 0xF} answer_types={answer_types}"
+            raise AssertionError(f"missing DNS answer qtype={qtype}; {last}")
 
         def fake_ip_http(address, family):
             conn = socket.socket(family, socket.SOCK_STREAM); conn.settimeout(12)
@@ -308,12 +323,20 @@ def write_fixtures(work: Path) -> None:
             response = conn.recv(256); conn.close()
             assert response.startswith(b"HTTP/1.1"), response
 
-        tcp("203.0.113.2", socket.AF_INET); print("PASS ipv4-tcp")
-        udp("203.0.113.2", socket.AF_INET); print("PASS ipv4-udp")
-        tcp("2001:db8:2::2", socket.AF_INET6); print("PASS ipv6-tcp")
-        udp("2001:db8:2::2", socket.AF_INET6); print("PASS ipv6-udp")
-        ipv4_answer = dns_query(1); assert ipv4_answer in ipaddress.ip_network("198.18.0.0/16"); print("PASS dns-a", ipv4_answer)
-        ipv6_answer = dns_query(28); assert ipv6_answer in ipaddress.ip_network("fc00::/18"); print("PASS dns-aaaa", ipv6_answer)
+        origin_ipv4 = os.environ["EASYPROXY_E2E_ORIGIN_IPV4"]
+        origin_ipv6 = os.environ["EASYPROXY_E2E_ORIGIN_IPV6"]
+        tcp(origin_ipv4, socket.AF_INET); print("PASS ipv4-tcp")
+        udp(origin_ipv4, socket.AF_INET); print("PASS ipv4-udp")
+        tcp(origin_ipv6, socket.AF_INET6); print("PASS ipv6-tcp")
+        udp(origin_ipv6, socket.AF_INET6); print("PASS ipv6-udp")
+        dns_ipv4 = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); dns_ipv4.settimeout(10); dns_ipv4.bind(("0.0.0.0", 0))
+        # Validate an AAAA result through the hijacked IPv4 resolver; IPv6 transport is covered above.
+        dns_aaaa = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); dns_aaaa.settimeout(10); dns_aaaa.bind(("0.0.0.0", 0))
+        try:
+            ipv4_answer = dns_query(1, dns_ipv4); assert ipv4_answer in ipaddress.ip_network("198.18.0.0/16"); print("PASS dns-a", ipv4_answer)
+            ipv6_answer = dns_query(28, dns_aaaa); assert ipv6_answer in ipaddress.ip_network("fc00::/18"); print("PASS dns-aaaa", ipv6_answer)
+        finally:
+            dns_ipv4.close(); dns_aaaa.close()
         fake_ip_http(ipv4_answer, socket.AF_INET); print("PASS fake-ipv4-connect")
         fake_ip_http(ipv6_answer, socket.AF_INET6); print("PASS fake-ipv6-connect")
         ''',
@@ -321,7 +344,7 @@ def write_fixtures(work: Path) -> None:
     write_text(
         work / "socks_udp.py",
         r'''
-        import socket, struct
+        import os, socket, struct
 
         def receive(conn, length):
             result = b""
@@ -338,14 +361,16 @@ def write_fixtures(work: Path) -> None:
             else: raise RuntimeError(f"unsupported ATYP {address_type}")
             return host, struct.unpack("!H", receive(conn, 2))[0]
 
-        control = socket.create_connection(("192.0.2.2", 22323), 8); control.settimeout(8)
+        gateway_ipv4 = os.environ["EASYPROXY_E2E_GATEWAY_IPV4"]
+        origin_ipv4 = os.environ["EASYPROXY_E2E_ORIGIN_IPV4"]
+        control = socket.create_connection((gateway_ipv4, 22323), 8); control.settimeout(8)
         control.sendall(b"\x05\x01\x00"); assert receive(control, 2) == b"\x05\x00"
         control.sendall(b"\x05\x03\x00\x01\x00\x00\x00\x00\x00\x00")
         header = receive(control, 4); assert header[:2] == b"\x05\x00", header
         relay_host, relay_port = receive_address(control, header[3])
-        if relay_host in ("0.0.0.0", "::"): relay_host = "192.0.2.2"
+        if relay_host in ("0.0.0.0", "::"): relay_host = gateway_ipv4
         conn = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); conn.settimeout(10)
-        request = b"\x00\x00\x00\x01" + socket.inet_aton("203.0.113.2") + struct.pack("!H", 444) + b"socks-udp"
+        request = b"\x00\x00\x00\x01" + socket.inet_aton(origin_ipv4) + struct.pack("!H", 444) + b"socks-udp"
         conn.sendto(request, (relay_host, relay_port)); response, _ = conn.recvfrom(4096)
         assert response[:3] == b"\x00\x00\x00" and response.endswith(b"UDP-ECHO:socks-udp"), response
         print("PASS socks5-udp-associate")
@@ -416,28 +441,74 @@ def main() -> int:
         stage("image-inspect")
         docker("image", "inspect", args.image, capture=True)
 
-    suffix = str(os.getpid())
-    client_network = f"easyproxy-tun-client-{suffix}"
-    origin_network = f"easyproxy-tun-origin-{suffix}"
+    suffix = f"{os.getpid()}-{time.time_ns()}"
     gateway = f"easyproxy-tun-gateway-{suffix}"
     origin = f"easyproxy-tun-origin-{suffix}"
     client = f"easyproxy-tun-client-{suffix}"
     containers = [client, gateway, origin]
-    networks = [client_network, origin_network]
+    networks: list[str] = []
     work: Path | None = None
     try:
         with nullcontext(tempfile.mkdtemp(prefix="easyproxy-tun-e2e-")) as temp:
             work = Path(temp)
             (work / "data").mkdir()
-            write_fixtures(work)
+
+            stage("network-create")
+            last_network_error = "no candidate attempted"
+            # Docker rejects overlapping subnets, so scan deterministic documentation ranges.
+            for offset in range(14):
+                block = (os.getpid() + offset) % 14
+                host = block * 16
+                client_ipv4_cidr = f"192.0.2.{host}/28"
+                client_ipv4_gateway = f"192.0.2.{host + 1}"
+                gateway_client_ipv4 = f"192.0.2.{host + 2}"
+                client_ipv4 = f"192.0.2.{host + 3}"
+                origin_ipv4_cidr = f"203.0.113.{host}/28"
+                origin_ipv4_gateway = f"203.0.113.{host + 1}"
+                origin_ipv4 = f"203.0.113.{host + 2}"
+                gateway_origin_ipv4 = f"203.0.113.{host + 3}"
+                client_ipv6_cidr = f"2001:db8:1:{block:x}::/64"
+                client_ipv6_gateway = f"2001:db8:1:{block:x}::1"
+                gateway_client_ipv6 = f"2001:db8:1:{block:x}::2"
+                client_ipv6 = f"2001:db8:1:{block:x}::3"
+                origin_ipv6_cidr = f"2001:db8:2:{block:x}::/64"
+                origin_ipv6_gateway = f"2001:db8:2:{block:x}::1"
+                origin_ipv6 = f"2001:db8:2:{block:x}::2"
+                gateway_origin_ipv6 = f"2001:db8:2:{block:x}::3"
+                client_network = f"easyproxy-tun-client-{suffix}-{block}"
+                origin_network = f"easyproxy-tun-origin-{suffix}-{block}"
+
+                returncode, output = try_docker(
+                    "network", "create", "--ipv6",
+                    "--subnet", client_ipv4_cidr, "--gateway", client_ipv4_gateway,
+                    "--subnet", client_ipv6_cidr, "--gateway", client_ipv6_gateway,
+                    client_network,
+                )
+                if returncode != 0:
+                    last_network_error = output
+                    continue
+                networks.append(client_network)
+                returncode, output = try_docker(
+                    "network", "create", "--ipv6",
+                    "--subnet", origin_ipv4_cidr, "--gateway", origin_ipv4_gateway,
+                    "--subnet", origin_ipv6_cidr, "--gateway", origin_ipv6_gateway,
+                    origin_network,
+                )
+                if returncode == 0:
+                    networks.append(origin_network)
+                    break
+                last_network_error = output
+                docker("network", "rm", client_network, capture=True, check=False)
+            else:
+                raise RuntimeError(f"could not allocate isolated Docker subnets: {last_network_error[-500:]}")
+
+            print(f"E2E_NETWORK client={client_ipv4_cidr},{client_ipv6_cidr} origin={origin_ipv4_cidr},{origin_ipv6_cidr}", flush=True)
+            write_fixtures(work, client_ipv4_cidr, client_ipv6_cidr)
             stage("quic-probe-build")
             quic_probe = build_quic_probe(work)
-            stage("network-create")
-            docker("network", "create", "--ipv6", "--subnet", "192.0.2.0/24", "--gateway", "192.0.2.1", "--subnet", "2001:db8:1::/64", "--gateway", "2001:db8:1::1", client_network)
-            docker("network", "create", "--ipv6", "--subnet", "203.0.113.0/24", "--gateway", "203.0.113.1", "--subnet", "2001:db8:2::/64", "--gateway", "2001:db8:2::1", origin_network)
 
             stage("origin-start")
-            docker("run", "-d", "--name", origin, "--network", origin_network, "--ip", "203.0.113.2", "--ip6", "2001:db8:2::2", "--entrypoint", "sleep", args.image, "600")
+            docker("run", "-d", "--name", origin, "--network", origin_network, "--ip", origin_ipv4, "--ip6", origin_ipv6, "--entrypoint", "sleep", args.image, "600")
             for fixture in ("origin.py",): copy_into(origin, work / fixture, f"/tmp/{fixture}")
             copy_into(origin, quic_probe, "/tmp/quic-probe")
             docker("exec", origin, "chmod", "755", "/tmp/quic-probe")
@@ -447,8 +518,8 @@ def main() -> int:
             wait_origin(origin)
 
             stage("gateway-create")
-            docker("create", "--name", gateway, "--network", client_network, "--ip", "192.0.2.2", "--ip6", "2001:db8:1::2", "--cap-add", "NET_ADMIN", "--cap-add", "NET_RAW", "--device", "/dev/net/tun", "--sysctl", "net.ipv4.ip_forward=1", "--sysctl", "net.ipv6.conf.all.forwarding=1", "-e", "EASY_PROXY_RUN_AS_ROOT=1", "-v", f"{work / 'config.yaml'}:/etc/easyproxy/config.yaml:ro", "-v", f"{work / 'data'}:/var/lib/easyproxy/data", args.image)
-            docker("network", "connect", "--ip", "203.0.113.3", "--ip6", "2001:db8:2::3", origin_network, gateway)
+            docker("create", "--name", gateway, "--network", client_network, "--ip", gateway_client_ipv4, "--ip6", gateway_client_ipv6, "--cap-add", "NET_ADMIN", "--cap-add", "NET_RAW", "--device", "/dev/net/tun", "--sysctl", "net.ipv4.ip_forward=1", "--sysctl", "net.ipv6.conf.all.forwarding=1", "-e", "EASY_PROXY_RUN_AS_ROOT=1", "-v", f"{work / 'config.yaml'}:/etc/easyproxy/config.yaml:ro", "-v", f"{work / 'data'}:/var/lib/easyproxy/data", args.image)
+            docker("network", "connect", "--ip", gateway_origin_ipv4, "--ip6", gateway_origin_ipv6, origin_network, gateway)
             docker("start", gateway)
             stage("gateway-ready")
             wait_gateway(gateway)
@@ -460,23 +531,29 @@ def main() -> int:
                 raise RuntimeError(f"unexpected gateway status: {status}")
 
             stage("client-start")
-            docker("run", "-d", "--name", client, "--network", client_network, "--ip", "192.0.2.3", "--ip6", "2001:db8:1::3", "--cap-add", "NET_ADMIN", "--entrypoint", "sleep", args.image, "600")
+            docker("run", "-d", "--name", client, "--network", client_network, "--ip", client_ipv4, "--ip6", client_ipv6, "--cap-add", "NET_ADMIN", "--entrypoint", "sleep", args.image, "600")
             for fixture in ("client.py", "socks_udp.py"): copy_into(client, work / fixture, f"/tmp/{fixture}")
             copy_into(client, quic_probe, "/tmp/quic-probe")
             docker("exec", client, "chmod", "755", "/tmp/quic-probe")
-            docker("exec", client, "sh", "-c", "ip route replace default via 192.0.2.2 && ip -6 route replace default via 2001:db8:1::2")
+            docker("exec", client, "sh", "-c", f"ip route replace default via {gateway_client_ipv4} && ip -6 route replace default via {gateway_client_ipv6}")
             stage("client-tcp-udp-dns-fakeip")
-            docker("exec", client, "python3", "/tmp/client.py")
+            print(docker("exec", "-e", f"EASYPROXY_E2E_ORIGIN_IPV4={origin_ipv4}", "-e", f"EASYPROXY_E2E_ORIGIN_IPV6={origin_ipv6}", client, "python3", "/tmp/client.py", capture=True), flush=True)
             stage("client-quic")
-            docker("exec", client, "/tmp/quic-probe", "client", "203.0.113.2", "2001:db8:2::2")
+            print(docker("exec", client, "/tmp/quic-probe", "client", origin_ipv4, origin_ipv6, capture=True), flush=True)
             stage("client-socks-udp")
-            docker("exec", client, "python3", "/tmp/socks_udp.py")
+            print(docker("exec", "-e", f"EASYPROXY_E2E_GATEWAY_IPV4={gateway_client_ipv4}", "-e", f"EASYPROXY_E2E_ORIGIN_IPV4={origin_ipv4}", client, "python3", "/tmp/socks_udp.py", capture=True), flush=True)
             stage("gateway-log-check")
             logs = docker("logs", gateway, capture=True)
             if "panic:" in logs:
                 raise RuntimeError("gateway panicked during E2E validation")
             print("ALL_TUN_E2E_PASS")
             return 0
+    except Exception:
+        logs = docker("logs", gateway, capture=True, check=False)
+        if logs:
+            print("E2E_GATEWAY_LOG_TAIL", file=sys.stderr, flush=True)
+            print("\n".join(logs.splitlines()[-200:]), file=sys.stderr, flush=True)
+        raise
     finally:
         for container in containers:
             docker("rm", "-f", container, check=False)
