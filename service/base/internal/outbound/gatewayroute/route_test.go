@@ -120,6 +120,9 @@ func TestRouteUDPUsesIndependentNativeProtocolPreference(t *testing.T) {
 	if directive == nil || directive.ProfileID != udpProfileID {
 		t.Fatalf("UDP directive = %+v", directive)
 	}
+	if directive.Strategy != pool.StrategyAuto {
+		t.Fatalf("UDP strategy = %q, want auto", directive.Strategy)
+	}
 	if len(directive.PreferredProtocolFamilies) != 2 || directive.PreferredProtocolFamilies[0] != "hysteria2" {
 		t.Fatalf("UDP protocol preference = %v", directive.PreferredProtocolFamilies)
 	}

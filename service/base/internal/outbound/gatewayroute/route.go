@@ -151,7 +151,7 @@ func (r *routeOutbound) ListenPacket(ctx context.Context, destination M.Socksadd
 	if r.pool != nil {
 		directive := &pool.SelectionDirective{
 			ProfileID:                 udpProfileID,
-			Strategy:                  pool.NormalizeStrategy(string(r.options.DefaultStrategy)),
+			Strategy:                  pool.StrategyAuto,
 			PreferredProtocolFamilies: nativeUDPProtocolFamilies,
 		}
 		packetConn, err := r.pool.ListenPacket(pool.WithDirective(ctx, directive), destination)
