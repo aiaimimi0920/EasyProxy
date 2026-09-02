@@ -22,6 +22,7 @@ dns:
   remote_servers:
     - https://cloudflare-dns.com/dns-query
   detour: proxy-pool
+  # 可选：as_is、prefer_ipv4、prefer_ipv6、ipv4_only、ipv6_only。
   strategy: prefer_ipv4
 
 # 外部 IP 地址，用于导出配置时替换 0.0.0.0（可选）

@@ -17,6 +17,7 @@ dns:
   remote_servers:
     - https://cloudflare-dns.com/dns-query
   detour: proxy-pool
+  # Supported: as_is, prefer_ipv4, prefer_ipv6, ipv4_only, ipv6_only.
   strategy: prefer_ipv4
 
 listener:

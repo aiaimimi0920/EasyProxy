@@ -31,6 +31,8 @@ func buildDNSOptions(cfg config.DNSConfig, nodeDomains []string, hasProxy bool) 
 	switch strings.ToLower(strings.TrimSpace(cfg.Strategy)) {
 	case "", "prefer_ipv4", "prefer-ipv4":
 		strategy = C.DomainStrategyPreferIPv4
+	case "as_is", "as-is":
+		strategy = C.DomainStrategyAsIS
 	case "prefer_ipv6", "prefer-ipv6":
 		strategy = C.DomainStrategyPreferIPv6
 	case "ipv4_only", "ipv4-only":

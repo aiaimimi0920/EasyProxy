@@ -176,7 +176,7 @@ def write_fixtures(work: Path) -> None:
         dns:
           enabled: true
           remote_servers: [https://cloudflare-dns.com/dns-query]
-          strategy: prefer_ipv4
+          strategy: as_is
         listener:
           address: 0.0.0.0
           port: 22323

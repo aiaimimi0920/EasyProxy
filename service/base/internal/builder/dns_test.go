@@ -77,4 +77,30 @@ func TestBuildDNSOptionsDisablesProxyDetourWithoutNodes(t *testing.T) {
 	}
 }
 
+func TestBuildDNSOptionsSupportsAsIsStrategy(t *testing.T) {
+	cfg := config.DNSConfig{
+		Enabled:       boolPtr(true),
+		RemoteServers: []string{"https://cloudflare-dns.com/dns-query"},
+		Strategy:      "as_is",
+	}
+
+	options, err := buildDNSOptions(cfg, nil, false)
+	if err != nil {
+		t.Fatalf("build DNS options: %v", err)
+	}
+	if options.Strategy != option.DomainStrategy(C.DomainStrategyAsIS) {
+		t.Fatalf("DNS strategy = %v, want as-is", options.Strategy)
+	}
+	remote, ok := options.Servers[0].Options.(*option.RemoteHTTPSDNSServerOptions)
+	if !ok {
+		t.Fatalf("remote DNS options type = %T", options.Servers[0].Options)
+	}
+	if remote.DomainStrategy != option.DomainStrategy(C.DomainStrategyAsIS) {
+		t.Fatalf("remote DNS strategy = %v, want as-is", remote.DomainStrategy)
+	}
+	if remote.DomainResolver == nil || remote.DomainResolver.Strategy != option.DomainStrategy(C.DomainStrategyAsIS) {
+		t.Fatalf("remote DNS resolver = %#v, want as-is", remote.DomainResolver)
+	}
+}
+
 func boolPtr(value bool) *bool { return &value }
