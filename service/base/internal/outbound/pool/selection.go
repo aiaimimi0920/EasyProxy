@@ -144,6 +144,9 @@ func (p *poolOutbound) availableMembersLocked(
 		if network != "" && !common.Contains(member.outbound.Network(), network) {
 			continue
 		}
+		if !p.memberMatchesRequiredAvailableProtocol(member, directive) {
+			continue
+		}
 		if directive != nil && !p.memberMatchesFilter(member, directive) {
 			continue
 		}

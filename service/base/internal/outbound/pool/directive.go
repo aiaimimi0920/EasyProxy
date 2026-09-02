@@ -126,6 +126,7 @@ type SelectionDirective struct {
 	SessionTTL                time.Duration
 	PinnedTag                 string // manually requested member tag
 	PreferredProtocolFamilies []string
+	RequireAvailablePreferred bool // reject unproven fallback protocols when preference is mandatory
 	Filter                    NodeFilter
 	LongLived                 LongLivedPolicy
 }

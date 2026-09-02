@@ -126,6 +126,9 @@ func TestRouteUDPUsesIndependentNativeProtocolPreference(t *testing.T) {
 	if len(directive.PreferredProtocolFamilies) != 2 || directive.PreferredProtocolFamilies[0] != "hysteria2" {
 		t.Fatalf("UDP protocol preference = %v", directive.PreferredProtocolFamilies)
 	}
+	if !directive.RequireAvailablePreferred {
+		t.Fatal("UDP directive did not require an available native protocol")
+	}
 }
 
 func TestRouteUDPFallsBackDirectWhenProxyUnavailable(t *testing.T) {

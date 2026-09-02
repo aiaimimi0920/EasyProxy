@@ -2,6 +2,27 @@ package pool
 
 import "strings"
 
+func (p *poolOutbound) memberMatchesRequiredAvailableProtocol(
+	member *memberState,
+	directive *SelectionDirective,
+) bool {
+	if directive == nil || !directive.RequireAvailablePreferred {
+		return true
+	}
+	family := strings.ToLower(strings.TrimSpace(p.options.Metadata[member.tag].ProtocolFamily))
+	matched := false
+	for _, preferred := range directive.PreferredProtocolFamilies {
+		if family == strings.ToLower(strings.TrimSpace(preferred)) {
+			matched = true
+			break
+		}
+	}
+	if !matched || member.entry == nil {
+		return false
+	}
+	return member.entry.Snapshot().EffectiveAvailable
+}
+
 func (p *poolOutbound) preferProtocolCandidates(
 	candidates []*memberState,
 	directive *SelectionDirective,
