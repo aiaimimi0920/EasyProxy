@@ -18,7 +18,7 @@ func (p *poolOutbound) preferProtocolCandidates(
 	preferred := p.getCandidateBuffer()
 	for _, member := range candidates {
 		family := strings.ToLower(strings.TrimSpace(p.options.Metadata[member.tag].ProtocolFamily))
-		if _, ok := wanted[family]; ok {
+		if _, ok := wanted[family]; ok && memberEffectivelyAvailable(member) {
 			preferred = append(preferred, member)
 		}
 	}
@@ -27,4 +27,11 @@ func (p *poolOutbound) preferProtocolCandidates(
 		return candidates, nil
 	}
 	return preferred, preferred
+}
+
+func memberEffectivelyAvailable(member *memberState) bool {
+	if member == nil || member.entry == nil {
+		return true
+	}
+	return member.entry.Snapshot().EffectiveAvailable
 }
