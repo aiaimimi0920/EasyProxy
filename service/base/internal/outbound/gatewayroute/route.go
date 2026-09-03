@@ -3,6 +3,7 @@ package gatewayroute
 import (
 	"context"
 	"net"
+	"net/netip"
 	"strings"
 	"sync/atomic"
 
@@ -11,7 +12,10 @@ import (
 
 	"github.com/sagernet/sing-box/adapter"
 	sboutbound "github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/common/dialer"
+	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing/common/bufio"
 	E "github.com/sagernet/sing/common/exceptions"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
@@ -51,11 +55,12 @@ type Stats struct {
 
 type routeOutbound struct {
 	sboutbound.Adapter
-	manager adapter.OutboundManager
-	options Options
-	engine  *routerule.Engine
-	direct  adapter.Outbound
-	pool    adapter.Outbound
+	manager    adapter.OutboundManager
+	options    Options
+	engine     *routerule.Engine
+	direct     adapter.Outbound
+	pool       adapter.Outbound
+	resolveUDP func(context.Context, M.Socksaddr) (M.Socksaddr, netip.Addr, error)
 
 	directCount         atomic.Uint64
 	proxyCount          atomic.Uint64
@@ -67,6 +72,7 @@ type routeOutbound struct {
 }
 
 var _ adapter.Lifecycle = (*routeOutbound)(nil)
+var _ dialer.PacketDialerWithDestination = (*routeOutbound)(nil)
 
 // Register wires the gateway route outbound into sing-box.
 func Register(registry *sboutbound.Registry) {
@@ -85,12 +91,32 @@ func newRoute(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag st
 	if strings.TrimSpace(options.PoolTag) != "" {
 		dependencies = append(dependencies, options.PoolTag)
 	}
-	return &routeOutbound{
+	route := &routeOutbound{
 		Adapter: sboutbound.NewAdapter(Type, tag, []string{N.NetworkTCP, N.NetworkUDP}, dependencies),
 		manager: manager,
 		options: options,
 		engine:  routerule.New(options.Rules, routerule.NormalizePolicy(options.FinalPolicy), nil),
-	}, nil
+	}
+	dnsRouter := service.FromContext[adapter.DNSRouter](ctx)
+	dnsTransportManager := service.FromContext[adapter.DNSTransportManager](ctx)
+	if dnsRouter != nil && dnsTransportManager != nil && dnsTransportManager.Default() != nil {
+		dnsTransport := dnsTransportManager.Default()
+		route.resolveUDP = func(ctx context.Context, destination M.Socksaddr) (M.Socksaddr, netip.Addr, error) {
+			addresses, err := dnsRouter.Lookup(ctx, destination.Fqdn, adapter.DNSQueryOptions{
+				Transport: dnsTransport,
+				Strategy:  udpLookupStrategy(ctx),
+			})
+			if err != nil {
+				return destination, netip.Addr{}, err
+			}
+			if len(addresses) == 0 {
+				return destination, netip.Addr{}, E.New("empty UDP destination lookup for ", destination.Fqdn)
+			}
+			address := addresses[0]
+			return M.SocksaddrFrom(address, destination.Port), address, nil
+		}
+	}
+	return route, nil
 }
 
 func (r *routeOutbound) Start(stage adapter.StartStage) error {
@@ -143,10 +169,39 @@ func (r *routeOutbound) DialContext(ctx context.Context, network string, destina
 }
 
 func (r *routeOutbound) ListenPacket(ctx context.Context, destination M.Socksaddr) (net.PacketConn, error) {
+	packetConn, destinationAddress, err := r.ListenPacketWithDestination(ctx, destination)
+	if err != nil {
+		return nil, err
+	}
+	if destinationAddress.IsValid() {
+		resolvedDestination := M.SocksaddrFrom(destinationAddress, destination.Port)
+		if destination != resolvedDestination {
+			return bufio.NewNATPacketConn(bufio.NewPacketConn(packetConn), resolvedDestination, destination), nil
+		}
+	}
+	return packetConn, nil
+}
+
+func udpLookupStrategy(ctx context.Context) C.DomainStrategy {
+	if metadata := adapter.ContextFrom(ctx); metadata != nil {
+		switch metadata.IPVersion {
+		case 4:
+			return C.DomainStrategyIPv4Only
+		case 6:
+			return C.DomainStrategyIPv6Only
+		}
+	}
+	return C.DomainStrategyAsIS
+}
+
+func (r *routeOutbound) ListenPacketWithDestination(ctx context.Context, destination M.Socksaddr) (net.PacketConn, netip.Addr, error) {
 	r.recordNetwork(N.NetworkUDP, destination)
-	if r.policy(ctx, N.NetworkUDP, destination) == routerule.PolicyDirect {
+	policy := r.policy(ctx, N.NetworkUDP, destination)
+	resolvedDestination, destinationAddress := r.resolvePacketDestination(ctx, destination)
+	if policy == routerule.PolicyDirect {
 		r.directCount.Add(1)
-		return r.direct.ListenPacket(ctx, destination)
+		packetConn, err := r.direct.ListenPacket(ctx, resolvedDestination)
+		return packetConn, destinationAddress, err
 	}
 	if r.pool != nil {
 		directive := &pool.SelectionDirective{
@@ -155,21 +210,36 @@ func (r *routeOutbound) ListenPacket(ctx context.Context, destination M.Socksadd
 			PreferredProtocolFamilies: nativeUDPProtocolFamilies,
 			RequireAvailablePreferred: true,
 		}
-		packetConn, err := r.pool.ListenPacket(pool.WithDirective(ctx, directive), destination)
+		packetConn, err := r.pool.ListenPacket(pool.WithDirective(ctx, directive), resolvedDestination)
 		if err == nil {
 			r.proxyCount.Add(1)
-			return packetConn, nil
+			return packetConn, destinationAddress, nil
 		}
 		if !r.failOpen() {
-			return nil, err
+			return nil, netip.Addr{}, err
 		}
 	}
 	if !r.failOpen() {
-		return nil, E.New("no healthy UDP proxy available")
+		return nil, netip.Addr{}, E.New("no healthy UDP proxy available")
 	}
 	r.noNodeFallbackCount.Add(1)
 	r.directCount.Add(1)
-	return r.direct.ListenPacket(ctx, destination)
+	packetConn, err := r.direct.ListenPacket(ctx, resolvedDestination)
+	return packetConn, destinationAddress, err
+}
+
+func (r *routeOutbound) resolvePacketDestination(ctx context.Context, destination M.Socksaddr) (M.Socksaddr, netip.Addr) {
+	if destination.IsIP() {
+		return destination, destination.Addr
+	}
+	if !destination.IsFqdn() || r.resolveUDP == nil {
+		return destination, netip.Addr{}
+	}
+	resolvedDestination, address, err := r.resolveUDP(ctx, destination)
+	if err != nil || !address.IsValid() {
+		return destination, netip.Addr{}
+	}
+	return resolvedDestination, address
 }
 
 func (r *routeOutbound) policy(ctx context.Context, network string, destination M.Socksaddr) routerule.Policy {
