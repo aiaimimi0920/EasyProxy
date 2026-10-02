@@ -126,6 +126,8 @@ class SyncMiSubRuntimeSourcesTests(unittest.TestCase):
             "https://[2001:0db8:0:0:0:0:0:1]:443/prefix/": "https://[2001:db8::1]",
             "http://[::1]:8080/": "http://[::1]:8080",
             "https://b\u00fccher.example/": "https://xn--bcher-kva.example",
+            "https://fa\u00df.example:443/": "https://xn--fa-hia.example",
+            "https://\u03c2.example:8443/path": "https://xn--3xa.example:8443",
         }
         for base_url, expected in cases.items():
             with self.subTest(base_url=base_url):
@@ -141,7 +143,8 @@ class SyncMiSubRuntimeSourcesTests(unittest.TestCase):
                     sync_misub_runtime_sources.management_origin(value)
 
     def test_cookie_management_posts_match_real_misub_csrf_contract(self):
-        for base_url in ("https://misub.example:443/", "http://misub.example:80/prefix/"):
+        for base_url in ("https://misub.example:443/", "http://misub.example:80/prefix/",
+                         "https://fa\u00df.example:443/", "https://\u03c2.example:8443/prefix/"):
             with self.subTest(base_url=base_url):
                 session = sync_misub_runtime_sources.requests.Session()
                 recorded = []
@@ -194,7 +197,8 @@ class SyncMiSubRuntimeSourcesTests(unittest.TestCase):
                 origin = sync_misub_runtime_sources.management_origin(base_url)
                 cases = []
                 for request in writes:
-                    self.assertTrue(request.url.startswith(base_url))
+                    prepared_base = sync_misub_runtime_sources.requests.Request("GET", base_url).prepare().url
+                    self.assertTrue(request.url.startswith(prepared_base))
                     self.assertEqual(request.headers["Origin"], origin)
                     self.assertIn("misub_session=synthetic-session", request.headers["Cookie"])
                     self.assertNotIn("Authorization", request.headers)

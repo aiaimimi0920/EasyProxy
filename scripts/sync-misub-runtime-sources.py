@@ -30,15 +30,17 @@ def management_origin(base_url: str) -> str:
         parsed = urlsplit(base_url)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
             raise ValueError("HTTP(S) host required")
-        host = parsed.hostname.encode("idna").decode("ascii").lower()
-        if any(char.isspace() or char in "\\/%?#" for char in host):
+        if any(char.isspace() or char in "\\/%?#" for char in parsed.hostname):
             raise ValueError("invalid host")
+        # Use the same IDNA/URL normalization as the outgoing Requests client.
+        parsed = urlsplit(requests.Request("GET", base_url).prepare().url)
+        host = parsed.hostname.lower()
         if ":" in host:
             host = f"[{IPv6Address(host).compressed}]"
         port = parsed.port
         suffix = f":{port}" if port is not None and port != {"http": 80, "https": 443}[parsed.scheme] else ""
         return f"{parsed.scheme}://{host}{suffix}"
-    except (ValueError, UnicodeError):
+    except (ValueError, UnicodeError, requests.RequestException):
         raise RuntimeError("MiSub base URL must be a valid HTTP(S) URL") from None
 
 
