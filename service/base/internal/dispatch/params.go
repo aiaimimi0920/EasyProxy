@@ -18,12 +18,13 @@ import (
 // pointers so an unset field does not clobber a value supplied by a
 // higher-priority source during merge.
 type directiveOverlay struct {
-	Strategy  *pool.Strategy
-	Countries []string
-	Regions   []string
-	LongLived *bool
-	PinnedTag *string
-	SessionID *string
+	Strategy    *pool.Strategy
+	Countries   []string
+	Regions     []string
+	LongLived   *bool
+	PinnedTag   *string
+	RequiredTag *string
+	SessionID   *string
 	// Split controls whether the routing rule engine is consulted. When false,
 	// every destination is forced to PROXY (the "no split" / all-through-proxy
 	// mode used by crawlers). nil means "unset" so merging is well-defined.
@@ -49,6 +50,9 @@ func (o1 directiveOverlay) merge(o2 directiveOverlay) directiveOverlay {
 	}
 	if o2.PinnedTag != nil {
 		out.PinnedTag = o2.PinnedTag
+	}
+	if o2.RequiredTag != nil {
+		out.RequiredTag = o2.RequiredTag
 	}
 	if o2.SessionID != nil {
 		out.SessionID = o2.SessionID
@@ -85,6 +89,9 @@ func (o directiveOverlay) resolve(defaultStrategy pool.Strategy, sessionFallback
 	if o.PinnedTag != nil {
 		dir.PinnedTag = strings.TrimSpace(*o.PinnedTag)
 	}
+	if o.RequiredTag != nil {
+		dir.RequiredTag = strings.TrimSpace(*o.RequiredTag)
+	}
 	if strat == pool.StrategySession {
 		if o.SessionID != nil && strings.TrimSpace(*o.SessionID) != "" {
 			dir.SessionKey = strings.TrimSpace(*o.SessionID)
@@ -116,6 +123,9 @@ func (o directiveOverlay) applyTo(base pool.SelectionDirective, sessionFallback 
 	if o.PinnedTag != nil {
 		out.PinnedTag = strings.TrimSpace(*o.PinnedTag)
 	}
+	if o.RequiredTag != nil {
+		out.RequiredTag = strings.TrimSpace(*o.RequiredTag)
+	}
 	if o.SessionID != nil && strings.TrimSpace(*o.SessionID) != "" {
 		out.SessionKey = strings.TrimSpace(*o.SessionID)
 	} else if out.Strategy == pool.StrategySession && strings.TrimSpace(out.SessionKey) == "" {
@@ -137,6 +147,7 @@ func (o directiveOverlay) applyTo(base pool.SelectionDirective, sessionFallback 
 //	cc=<ISO>                          → country filter (repeatable, e.g. cc=US)
 //	long | nolong                     → long-lived filter on/off
 //	pin=<tag>                         → manual node pin
+//	pin-strict=<tag>                  → required node, fail closed instead of failover
 //	sid=<key>                         → session key
 //	split | nosplit                   → enable/disable routing rules
 //
@@ -182,6 +193,12 @@ func parseTokens(prefix string) (directiveOverlay, bool) {
 			cc := strings.ToUpper(strings.TrimSpace(tok[3:]))
 			if cc != "" {
 				o.Countries = append(o.Countries, cc)
+				matchedAny = true
+			}
+		case strings.HasPrefix(lower, "pin-strict="):
+			tag := strings.TrimSpace(tok[len("pin-strict="):])
+			if tag != "" {
+				o.RequiredTag = &tag
 				matchedAny = true
 			}
 		case strings.HasPrefix(lower, "pin="):

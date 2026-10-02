@@ -125,6 +125,7 @@ type SelectionDirective struct {
 	SessionKey                string // session stickiness key (StrategySession)
 	SessionTTL                time.Duration
 	PinnedTag                 string // manually requested member tag
+	RequiredTag               string // strict member binding: never fail over to another tag
 	PreferredProtocolFamilies []string
 	RequireAvailablePreferred bool // reject unproven fallback protocols when preference is mandatory
 	Filter                    NodeFilter
@@ -170,4 +171,16 @@ func DirectiveFrom(ctx context.Context) *SelectionDirective {
 	}
 	d, _ := ctx.Value(directiveCtxKey{}).(*SelectionDirective)
 	return d
+}
+
+// memberDialContext consumes the entry pool's strict member binding. A node may
+// itself dial a bootstrap/detour pool whose members have different tags.
+func memberDialContext(ctx context.Context) context.Context {
+	d := DirectiveFrom(ctx)
+	if d == nil || d.RequiredTag == "" {
+		return ctx
+	}
+	next := *d
+	next.RequiredTag = ""
+	return WithDirective(ctx, &next)
 }

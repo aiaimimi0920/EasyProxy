@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -204,7 +205,7 @@ func (s *Server) createProxyCompatLease(
 	for key, value := range request.Metadata {
 		trimmedKey := strings.TrimSpace(key)
 		trimmedValue := strings.TrimSpace(value)
-		if trimmedKey == "" || trimmedValue == "" {
+		if trimmedKey == "" || trimmedValue == "" || strings.HasPrefix(trimmedKey, "selectedNode") || trimmedKey == "managementUrl" || trimmedKey == "connectionRef" {
 			continue
 		}
 		lease.Metadata[trimmedKey] = trimmedValue
@@ -281,6 +282,7 @@ func (s *Server) resolveProxyCompatRuntime(r *http.Request) proxyCompatRuntime {
 	nodePassword := runtimeCfg.ProxyPassword
 	managementPort := 29888
 	mode := ""
+	supportsRequiredPin := false
 	createdAt := time.Now().Format(time.RFC3339)
 
 	if cfgSrc != nil {
@@ -294,6 +296,10 @@ func (s *Server) resolveProxyCompatRuntime(r *http.Request) proxyCompatRuntime {
 		}
 		listenerUsername = strings.TrimSpace(cfgSrc.Listener.Username)
 		listenerPassword = strings.TrimSpace(cfgSrc.Listener.Password)
+		dispatchHost, _, dispatchErr := net.SplitHostPort(cfgSrc.DispatchListen())
+		supportsRequiredPin = cfgSrc.DispatchOwnsPrimaryInbound() && dispatchErr == nil &&
+			parseCompatPort(cfgSrc.DispatchListen()) == listenerPort &&
+			normalizeCompatEndpointHost(dispatchHost, "") == normalizeCompatEndpointHost(cfgSrc.Listener.Address, "")
 		if parsedPort := parseCompatPort(cfgSrc.Management.Listen); parsedPort > 0 {
 			managementPort = parsedPort
 		}
@@ -346,6 +352,7 @@ func (s *Server) resolveProxyCompatRuntime(r *http.Request) proxyCompatRuntime {
 		SharedUsername:          listenerUsername,
 		SharedPassword:          listenerPassword,
 		AllowSharedPoolFallback: mode != "hybrid" && mode != "multi-port",
+		SupportsRequiredPin:     supportsRequiredPin && listenerUsername != "",
 		NodeProtocol:            nodeProtocol,
 		NodeUsername:            nodeUsername,
 		NodePassword:            nodePassword,

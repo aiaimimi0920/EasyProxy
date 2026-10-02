@@ -134,6 +134,9 @@ func (p *poolOutbound) availableMembersLocked(
 ) []*memberState {
 	result := buf[:0]
 	for _, member := range p.members {
+		if directive != nil && directive.RequiredTag != "" && member.tag != directive.RequiredTag {
+			continue
+		}
 		if _, skip := excluded[member.tag]; skip {
 			continue
 		}

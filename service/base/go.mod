@@ -4,6 +4,9 @@ go 1.24.1
 
 toolchain go1.24.4
 
+// Pinned v0.7.13 with an atomic Linux TUN close-on-exec fix.
+replace github.com/sagernet/sing-tun => ./third_party/sing-tun
+
 require (
 	github.com/oschwald/geoip2-golang v1.13.0
 	github.com/sagernet/sing v0.7.18

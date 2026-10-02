@@ -6,6 +6,13 @@ services:
     image: ${EASY_PROXY_SERVICE_IMAGE:-easy-proxy/easy-proxy:local}
     container_name: ${EASY_PROXY_SERVICE_CONTAINER_NAME:-easy-proxy}
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "${EASY_DOCKER_LOG_MAX_SIZE:-20m}"
+        max-file: "${EASY_DOCKER_LOG_MAX_FILE:-5}"
+    tmpfs:
+      - /tmp:size=128m,mode=1777
     cpus: 1.50
     mem_limit: 512m
     ports:

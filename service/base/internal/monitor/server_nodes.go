@@ -154,7 +154,7 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		"only_available":        onlyAvailable,
 		"prefer_available":      preferAvailable,
 	}
-	writeJSON(w, payload)
+	writeNodesJSON(w, r, payload)
 }
 
 func (s *Server) handleDebug(w http.ResponseWriter, r *http.Request) {

@@ -116,6 +116,7 @@ type proxyCompatCheckoutRequest struct {
 	GroupKey                string            `json:"groupKey,omitempty"`
 	Protocol                string            `json:"protocol,omitempty"`
 	TTLMinutes              int               `json:"ttlMinutes,omitempty"`
+	RequireDedicatedNode    bool              `json:"requireDedicatedNode,omitempty"`
 	Metadata                map[string]string `json:"metadata,omitempty"`
 }
 
@@ -234,6 +235,7 @@ type proxyCompatRuntime struct {
 	SharedUsername          string
 	SharedPassword          string
 	AllowSharedPoolFallback bool
+	SupportsRequiredPin     bool
 	NodeProtocol            string
 	NodeUsername            string
 	NodePassword            string

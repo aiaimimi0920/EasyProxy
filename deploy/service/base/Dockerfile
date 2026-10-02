@@ -14,6 +14,7 @@ ARG TARGETARCH
 WORKDIR /src/easy-proxy
 ARG GOPROXY=https://goproxy.cn,https://goproxy.io,direct
 COPY service/base/go.mod service/base/go.sum ./
+COPY service/base/third_party/sing-tun/ ./third_party/sing-tun/
 RUN go env -w GOPROXY=${GOPROXY} && go mod download
 COPY service/base/ ./
 COPY --from=frontend /tmp/frontend-dist/ ./internal/monitor/assets/

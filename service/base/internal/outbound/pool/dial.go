@@ -15,6 +15,7 @@ func (p *poolOutbound) DialContext(ctx context.Context, network string, destinat
 	excluded := make(map[string]struct{})
 	dst := destination.String()
 	directive := DirectiveFrom(ctx)
+	outboundCtx := memberDialContext(ctx)
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if ctx.Err() != nil {
@@ -33,7 +34,7 @@ func (p *poolOutbound) DialContext(ctx context.Context, network string, destinat
 		}
 
 		p.incActive(member)
-		conn, err := member.outbound.DialContext(ctx, network, destination)
+		conn, err := member.outbound.DialContext(outboundCtx, network, destination)
 		if err != nil {
 			p.decActive(member)
 			p.recordFailure(member, network, err, dst)
@@ -55,6 +56,7 @@ func (p *poolOutbound) ListenPacket(ctx context.Context, destination M.Socksaddr
 	excluded := make(map[string]struct{})
 	dst := destination.String()
 	directive := DirectiveFrom(ctx)
+	outboundCtx := memberDialContext(ctx)
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if ctx.Err() != nil {
@@ -73,7 +75,7 @@ func (p *poolOutbound) ListenPacket(ctx context.Context, destination M.Socksaddr
 		}
 
 		p.incActive(member)
-		conn, err := member.outbound.ListenPacket(ctx, destination)
+		conn, err := member.outbound.ListenPacket(outboundCtx, destination)
 		if err != nil {
 			p.decActive(member)
 			p.recordFailure(member, N.NetworkUDP, err, dst)

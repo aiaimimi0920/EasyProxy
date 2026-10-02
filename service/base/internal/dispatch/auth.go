@@ -203,6 +203,9 @@ func policyForProfile(split bool, compiled *profile.CompiledProfile, host string
 func (s *Server) resolveLegacyRequest(auth parsedProxyUsername, requestOverlay directiveOverlay, host string, sessionFallback string) (resolved, routerule.Policy) {
 	overlay := s.bound.merge(auth.Overlay).merge(requestOverlay)
 	res := overlay.resolve(s.DefaultStrategy(), sessionFallback)
+	if res.directive.RequiredTag != "" {
+		return res, routerule.PolicyProxy
+	}
 	return res, policyForSplit(res.split, s.currentEngine(), host)
 }
 
@@ -221,10 +224,16 @@ func (s *Server) resolveProfileRequest(auth parsedProxyUsername, requestOverlay 
 
 	base := directiveFromProfile(resolution)
 	if resolution.Profile == nil || !resolution.Profile.Enabled() {
+		if auth.Overlay.RequiredTag != nil || requestOverlay.RequiredTag != nil || s.bound.RequiredTag != nil {
+			return resolved{}, "", resolution, errors.New("strict pinned proxy requires an enabled profile")
+		}
 		return resolved{directive: base, split: true}, routerule.PolicyDirect, resolution, nil
 	}
 
 	overlay := s.bound.merge(auth.Overlay).merge(requestOverlay)
 	final := overlay.applyTo(base, peer.String())
+	if final.directive.RequiredTag != "" {
+		return final, routerule.PolicyProxy, resolution, nil
+	}
 	return final, policyForProfile(final.split, resolution.Profile, host), resolution, nil
 }

@@ -71,7 +71,8 @@ func (s *Server) resolveProxyCompatCandidate(r *http.Request, request proxyCompa
 		protocol := runtimeCfg.NodeProtocol
 		username := runtimeCfg.NodeUsername
 		password := runtimeCfg.NodePassword
-		if endpointPort <= 0 {
+		// A pool snapshot exposes the shared listener, not a per-node endpoint.
+		if snap.Mode == "pool" || endpointPort == runtimeCfg.SharedPort || endpointPort <= 0 {
 			if !runtimeCfg.AllowSharedPoolFallback {
 				continue
 			}
@@ -84,6 +85,13 @@ func (s *Server) resolveProxyCompatCandidate(r *http.Request, request proxyCompa
 		}
 		if s.localServerCompatEnabled() {
 			username = proxyUsernameForHost(username, request.HostID)
+		}
+		if request.RequireDedicatedNode && endpointMode == "shared-pool" {
+			if !runtimeCfg.SupportsRequiredPin || strings.TrimSpace(snap.Tag) == "" || strings.ContainsAny(snap.Tag, "+\r\n") {
+				continue
+			}
+			username += "+pin-strict=" + snap.Tag + "+nosplit"
+			endpointMode = "pinned-node"
 		}
 		servicePenalty, serviceCooling := s.compatState().serviceFeedbackAggregateForSnapshot(feedbackSubjectKeys, snap)
 		usageStats := proxyCompatUsageStats{}
@@ -127,7 +135,7 @@ func (s *Server) resolveProxyCompatCandidate(r *http.Request, request proxyCompa
 	}
 	if len(candidates) == 0 {
 		return proxyCompatCandidate{}, runtimeCfg, fmt.Errorf(
-			"%w: no EasyProxy candidates expose dedicated listener ports for the active runtime mode",
+			"%w: no EasyProxy candidates expose a supported node-bound endpoint for the active runtime mode",
 			errProxyCompatNoNodes,
 		)
 	}
