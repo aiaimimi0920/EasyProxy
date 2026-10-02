@@ -8,6 +8,10 @@ import subprocess
 import sys
 import tempfile
 import uuid
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from easyproxy_audit_state import AuditState
 
 LABEL = 'org.easyproxy.audit-state-test.owner'
 
@@ -30,7 +34,7 @@ def main():
     context = root / 'image'
     context.mkdir()
     shutil.copyfile(Path(__file__).resolve().parents[1] / 'deploy/service/base/docker-entrypoint.sh', context / 'entrypoint.sh')
-    (context / 'service.sh').write_text('#!/bin/sh\nset -eu\nprintf synthetic > /var/lib/easyproxy/runtime/synthetic\n')
+    (context / 'service.sh').write_text('#!/bin/sh\nset -eu\nprintf synthetic > /var/lib/easyproxy/runtime/synthetic\nsleep "${TEST_SLEEP:-0}"\n')
     (context / 'Dockerfile').write_text('''FROM python:3.12.14-slim-bookworm
 RUN useradd --uid 10001 --create-home easy && mkdir -p /etc/easyproxy/bootstrap
 COPY entrypoint.sh /entrypoint.sh
@@ -85,6 +89,7 @@ ENTRYPOINT ["/entrypoint.sh"]
         created.remove(cleaner)
         temporary.cleanup()
         print('PASS bounded synthetic cleanup completed without host ACL changes', flush=True)
+        validate_owned_state(image, root)
     finally:
         for container in created:
             remove_owned(container)
@@ -93,6 +98,46 @@ ENTRYPOINT ["/entrypoint.sh"]
         docker('image', 'rm', image)
         if (root / 'owner').read_text() == owner:
             shutil.rmtree(root)
+
+
+def validate_owned_state(image, root):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('maintenance', Path(__file__).with_name('maintain-misub-discovery.py'))
+    maintenance = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(maintenance)
+    args = SimpleNamespace(work_dir=str(root), image=image, audit_timeout=1)
+    for fail in (False, True):
+        observed = []
+
+        def synthetic_audit(command, timeout):
+            state = AuditState(command[command.index('--maintenance-state-owner') + 1])
+            observed.append(state)
+            directory = Path(command[command.index('--artifact-dir') + 1])
+            config = directory / 'config.yaml'
+            config.write_text('synthetic: true\n')
+            container = docker('create', '--name', state.container, '--network', 'none',
+                               '-e', 'EASY_PROXY_RUN_AS_ROOT=1', '-e', 'TEST_SLEEP=' + ('60' if fail else '0'),
+                               *state.mount_args(), '-v', str(config) + ':/var/lib/easyproxy/config/config.yaml', image)
+            docker('start', container)
+            if fail:
+                raise subprocess.TimeoutExpired('synthetic-audit', timeout)
+            assert docker('wait', container) == '0'
+            Path(command[command.index('--output-path') + 1]).write_text(json.dumps({'nodes': {'stable_available_count': 1}}))
+            return 0
+
+        with patch.object(maintenance, 'run_audit', side_effect=synthetic_audit):
+            try:
+                verdict = maintenance.audit_nodes('https://synthetic.invalid/never-requested', args)
+            except RuntimeError:
+                assert fail
+            else:
+                assert not fail and verdict == 'healthy'
+        assert len(observed) == 1
+        state = observed[0]
+        assert not state.volume_exists()
+        assert docker('container', 'ls', '-aq', '--filter', 'name=^/' + state.container + '$') == ''
+        assert not list(root.glob('misub-retirement-*'))
+        print('PASS owned-volume ' + ('timeout fails closed' if fail else 'success preserves verdict') + '; container, volume and temp files removed', flush=True)
 
 
 if __name__ == '__main__':

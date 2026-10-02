@@ -6,14 +6,42 @@ import argparse
 import copy
 import json
 import os
+import signal
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import time
-import uuid
 
 import requests
+
+try:
+    from scripts.easyproxy_audit_state import AuditState
+except ImportError:
+    from easyproxy_audit_state import AuditState
+
+
+def stage(name):
+    print(json.dumps({'maintenance_stage': name}), flush=True)
+
+
+def run_audit(command, timeout):
+    # Terminate the audit's own process group before reclaiming its Docker state.
+    with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          start_new_session=os.name == 'posix') as process:
+        try:
+            process.communicate(timeout=timeout)
+        except BaseException:
+            if os.name == 'posix':
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            else:
+                process.kill()
+            process.communicate(timeout=30)
+            raise
+        return process.returncode
 
 
 def is_managed(source):
@@ -53,23 +81,33 @@ def classify_audit(result, returncode):
 
 
 def audit_nodes(url, args):
-    with tempfile.TemporaryDirectory(prefix='misub-retirement-', dir=args.work_dir, ignore_cleanup_errors=True) as tmp:
+    stage('audit-temp-create')
+    with tempfile.TemporaryDirectory(prefix='misub-retirement-', dir=args.work_dir) as tmp:
         summary = Path(tmp) / 'summary.json'
-        audit_id = 'misub-retirement-' + uuid.uuid4().hex[:10]
+        state = AuditState()
         command = [sys.executable, str(Path(__file__).with_name('easyproxy_source_audit.py')),
-                   '--audit-id', audit_id, '--image', args.image, '--build-if-missing',
+                   '--audit-id', state.audit_id, '--maintenance-state-owner', state.owner,
+                   '--image', args.image, '--build-if-missing',
                    '--subscription', url, '--output-path', str(summary), '--artifact-dir', tmp,
                    '--scenario-timeout-seconds', str(args.audit_timeout), '--docker-network-name', 'EasyProxyMaintenance']
         try:
-            run = subprocess.run(command, capture_output=True, timeout=args.audit_timeout + 1200)
-            result = json.loads(summary.read_text(encoding='utf-8')) if summary.exists() else {}
-            return classify_audit(result, run.returncode)
+            stage('audit-state-create')
+            state.create()
+            stage('audit-run')
+            returncode = run_audit(command, args.audit_timeout + 1200)
+            stage('audit-summary-read')
+            result = json.loads(summary.read_text(encoding='utf-8'))
+            verdict = classify_audit(result, returncode)
+            if returncode != 0 and verdict == 'unknown':
+                raise RuntimeError('audit did not complete')
         except (OSError, ValueError, subprocess.TimeoutExpired):
-            return 'unknown'
+            raise RuntimeError('audit did not complete') from None
         finally:
-            # 只清理本次唯一命名的审核容器，不接触生产网关。
-            subprocess.run(['docker', 'rm', '-f', 'easyproxy-source-audit-' + audit_id],
-                           capture_output=True, check=False)
+            stage('audit-state-cleanup')
+            state.cleanup()
+            stage('audit-temp-cleanup')
+    stage('audit-complete')
+    return verdict
 
 
 def probe_source(source, session, args):
@@ -135,6 +173,7 @@ def main():
     admin = requests.Session()
     admin.headers['Origin'] = base
     password = os.environ['MISUB_ADMIN_PASSWORD']
+    stage('management-login')
     r = admin.post(base + '/api/login', json={'password': password}, timeout=30)
     r.raise_for_status()
     assert r.json().get('success') is True
@@ -142,12 +181,14 @@ def main():
     def get_data():
         r = admin.get(base + '/api/data', timeout=30); r.raise_for_status(); return r.json()
 
+    stage('management-read')
     data = get_data()
     settings = admin.get(base + '/api/settings', timeout=30); settings.raise_for_status()
     sync = settings.json().get('aggregatorSync', {})
     discovery_url = sync.get('sourceUrl')
     # 外部探测使用独立 Session，绝不转发 MiSub Cookie 或认证头。
     public = requests.Session()
+    stage('discovery-read')
     remote = public.get(discovery_url, timeout=30); remote.raise_for_status()
     remote = remote.json()
     assert isinstance(remote, dict), 'Invalid discovery export; refuse cleanup'
@@ -156,21 +197,26 @@ def main():
                        and (x.get('input') or x.get('url')) not in remote))]
     verdicts, evidence = {}, []
     for source in candidates:
+        stage('source-probe')
         verdict, checks = probe_source(source, public, args)
         verdicts[source['id']] = verdict
         row = {'id': source['id'], 'verdict': verdict, 'checks': checks}
         evidence.append(row)
         print(json.dumps(row), flush=True)
+    stage('patch-plan')
     patch = build_patch(data, verdicts, args.remove_retired_ech_profile)
     if args.apply and any(patch[k][field] for k in patch for field in patch[k]):
+        stage('concurrency-check')
         current = get_data()
         assert current['misubs'] == data['misubs'] and current['profiles'] == data['profiles'], 'Concurrent edit; refuse stale patch'
         # 删除独立 ECH 组之前必须确认 global 仍引用同一个受管 ECH 来源。
         if patch['profiles']['removed']:
             global_profile = next(p for p in data['profiles'] if p.get('customId') == 'aggregator-global')
             assert any(x.startswith('conn_ech_workers_pref_') for x in global_profile.get('manualNodes', []))
+        stage('patch-apply')
         r = admin.post(base + '/api/misubs', json={'diff': patch}, timeout=90)
         r.raise_for_status(); assert r.json().get('success') is True
+        stage('patch-verify')
         after = get_data()
         assert not set(patch['subscriptions']['removed']).intersection(x['id'] for x in after['misubs'])
         assert not set(patch['profiles']['removed']).intersection(x['id'] for x in after['profiles'])

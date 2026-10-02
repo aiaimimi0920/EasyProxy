@@ -25,5 +25,10 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.12.14'
-      - name: Reproduce cleanup failure with synthetic offline state
+      - name: Install existing test dependencies
+        # Dependencies are the repository's existing test pins; no production secrets.
+        run: python -m pip install -r requirements-ci.txt
+      - name: Check ownership guards and fail-closed maintenance
+        run: python -m pytest -q tests/test_audit_state.py tests/test_maintain_misub_discovery.py
+      - name: Reproduce old failure and validate owned-volume lifecycle
         run: python scripts/validate-audit-state-docker.py
