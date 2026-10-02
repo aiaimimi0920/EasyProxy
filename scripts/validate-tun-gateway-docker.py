@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from contextlib import nullcontext
 import json
+from ipaddress import ip_address
 import os
 from pathlib import Path
 import shutil
@@ -429,11 +430,11 @@ def wait_gateway_status(container: str) -> dict[str, object]:
 
 def assert_gateway_interfaces(gateway: str, attachments: list[tuple[str, str, str, str]]) -> None:
     addresses = json.loads(docker("exec", gateway, "ip", "-j", "address", "show", capture=True))
-    by_name = {item["ifname"]: {entry["local"] for entry in item.get("addr_info", [])}
+    by_name = {item["ifname"]: {ip_address(entry["local"]) for entry in item.get("addr_info", [])}
                for item in addresses}
     for network, ipv4, ipv6, interface in attachments:
         actual = by_name.get(interface, set())
-        if not {ipv4, ipv6}.issubset(actual):
+        if not {ip_address(ipv4), ip_address(ipv6)}.issubset(actual):
             raise RuntimeError(f"gateway network {network} expected {ipv4},{ipv6} on {interface}; actual={by_name}")
         print(f"E2E_INTERFACE network={network} interface={interface} ipv4={ipv4} ipv6={ipv6}", flush=True)
 
