@@ -149,3 +149,41 @@ def test_audit_subprocess_timeout_terminates_before_return():
     else:
         process.kill.assert_called_once()
     assert process.communicate.call_count == 2
+
+
+def test_shared_audit_mounts_owned_volume_without_legacy_container_removal(tmp_path, monkeypatch):
+    from scripts import easyproxy_source_audit as audit
+    state = resources.AuditState('b' * 32)
+    monkeypatch.setattr(sys, 'argv', ['audit', '--audit-id', state.audit_id,
+                                    '--maintenance-state-owner', state.owner, '--image', 'synthetic',
+                                    '--subscription', 'https://synthetic.invalid', '--artifact-dir', str(tmp_path),
+                                    '--docker-network-name', ''])
+    with patch.object(audit, 'ensure_docker'), patch.object(audit, 'load_policy', return_value={}), \
+            patch.object(audit, 'ensure_image', return_value='synthetic'), \
+            patch.object(audit, 'get_free_port', return_value=12345), \
+            patch.object(audit, 'get_free_port_range_start', return_value=34000), \
+            patch.object(audit, 'build_config', return_value={'synthetic': True}), \
+            patch.object(resources, 'docker', return_value=volume_info(state)), \
+            patch.object(audit, 'stop_container') as stop, \
+            patch.object(audit, 'run', side_effect=RuntimeError('synthetic launch failure')) as run:
+        with pytest.raises(RuntimeError, match='synthetic launch'):
+            audit.main()
+    command = run.call_args.args[0]
+    assert 'type=volume,source=' + state.volume + ',target=/var/lib/easyproxy' in command
+    assert resources.OWNER_LABEL + '=' + state.owner in command
+    assert command[command.index('--name') + 1] == state.container
+    assert not (tmp_path / 'data').exists()
+    assert not (tmp_path / 'config.yaml').exists()
+    stop.assert_not_called()
+
+
+def test_shared_audit_rejects_keep_state_flags(monkeypatch):
+    from scripts import easyproxy_source_audit as audit
+    state = resources.AuditState('c' * 32)
+    for flag in ('--skip-cleanup', '--keep-artifacts'):
+        monkeypatch.setattr(sys, 'argv', ['audit', '--audit-id', state.audit_id,
+                                        '--maintenance-state-owner', state.owner, flag])
+        with patch.object(audit, 'ensure_docker') as ensure:
+            with pytest.raises(ValueError, match='lifecycle'):
+                audit.main()
+        ensure.assert_not_called()
