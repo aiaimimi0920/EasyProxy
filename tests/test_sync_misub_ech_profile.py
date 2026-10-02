@@ -14,6 +14,19 @@ spec.loader.exec_module(sync_misub_ech_profile)
 
 
 class SyncMiSubEchProfileTests(unittest.TestCase):
+    def test_connector_only_targets_existing_global_without_standalone_profile(self):
+        self.assertEqual(sync_misub_ech_profile.target_profile_ids('easyproxies-ech-runtime', ['aggregator-global'], True), ['aggregator-global'])
+        with self.assertRaises(RuntimeError):
+            sync_misub_ech_profile.target_profile_ids('easyproxies-ech-runtime', [], True)
+        original = [{'id': 'aggregator_global', 'customId': 'aggregator-global', 'name': 'Aggregator Global',
+                     'subscriptions': ['custom-sub'], 'manualNodes': ['runtime-1', 'zen', 'conn_ech_workers_pref_old']}]
+        result, missing = sync_misub_ech_profile.attach_sources_to_profiles(original, ['aggregator-global'], ['conn_ech_workers_pref_1'], 'conn_ech_workers_pref')
+        self.assertEqual(missing, [])
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]['name'], 'Aggregator Global')
+        self.assertEqual(result[0]['subscriptions'], ['custom-sub'])
+        self.assertEqual(result[0]['manualNodes'], ['runtime-1', 'zen', 'conn_ech_workers_pref_1'])
+
     def test_server_ips_are_preserved_by_default(self):
         self.assertEqual(
             sync_misub_ech_profile.select_server_ips([], ["1.1.1.1", "2.2.2.2"], False),

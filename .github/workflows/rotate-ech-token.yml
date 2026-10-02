@@ -178,7 +178,7 @@ jobs:
           CONNECTOR_URL: ${{ steps.contract.outputs.connector_url }}
         run: |
           set -euo pipefail
-          python scripts/sync-misub-ech-profile.py \
+          python scripts/sync-misub-ech-profile.py --connector-only \
             --base-url "$MISUB_PUBLIC_URL" \
             --profile-id "${CONNECTOR_PROFILE_ID:-easyproxies-ech-runtime}" \
             --attach-profile-id "${RUNTIME_PROFILE_ID:-aggregator-global}" \
@@ -238,7 +238,7 @@ jobs:
           printf '%s' "$old_token" | npx --yes wrangler@4 secret put ECH_TOKEN --config "$config" || failures=1
           ECH_TOKEN="$old_token" python scripts/verify-ech-worker-deploy.py --base-url "$ECH_WORKER_PUBLIC_URL" || failures=1
           if [[ "$failures" -eq 0 ]]; then
-            ECH_TOKEN="$old_token" python scripts/sync-misub-ech-profile.py \
+            ECH_TOKEN="$old_token" python scripts/sync-misub-ech-profile.py --connector-only \
               --base-url "$MISUB_PUBLIC_URL" \
               --profile-id "${CONNECTOR_PROFILE_ID:-easyproxies-ech-runtime}" \
               --attach-profile-id "${RUNTIME_PROFILE_ID:-aggregator-global}" \

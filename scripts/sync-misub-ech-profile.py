@@ -70,6 +70,12 @@ def profile_identifiers(profile: dict[str, Any]) -> set[str]:
     return identifiers
 
 
+def target_profile_ids(profile_id: str, attach_ids: list[str], connector_only: bool) -> list[str]:
+    targets = normalize_string_array(attach_ids if connector_only else [profile_id] + attach_ids)
+    ensure(bool(targets), "Connector-only synchronization requires an existing attach profile")
+    return targets
+
+
 def attach_sources_to_profiles(
     profiles: list[dict[str, Any]],
     profile_ids: list[str],
@@ -262,6 +268,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Synchronize the MiSub ECH connector test profile with the current worker URL/token.")
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--profile-id", default="easyproxies-ech-runtime")
+    parser.add_argument("--connector-only", action="store_true", help="Update connectors in existing attach profiles without creating a standalone profile")
     parser.add_argument("--legacy-profile-id", default="easyproxies-ech-test")
     parser.add_argument("--profile-name", default="EasyProxies ECH Runtime")
     parser.add_argument(
@@ -321,6 +328,7 @@ def main() -> int:
     ensure(isinstance(misubs, list), "MiSub /api/data did not return a misubs array")
     ensure(isinstance(profiles, list), "MiSub /api/data did not return a profiles array")
 
+    targets = target_profile_ids(args.profile_id, args.attach_profile_id, args.connector_only)
     profile = find_profile(profiles, [args.profile_id, args.legacy_profile_id])
 
     existing_sources, existing_server_ips = normalize_existing_sources(misubs, args.source_id_prefix)
@@ -400,6 +408,13 @@ def main() -> int:
     if profile is None:
         updated_profiles.append(updated_profile)
 
+    if args.connector_only:
+        # 不创建或重命名独立 ECH 组，只保留现有组并更新其受管 ECH 引用。
+        updated_profiles = [
+            item for item in profiles
+            if not profile_identifiers(item).intersection(profile_ids_to_remove)
+        ]
+
     managed_source_ids = [source["id"] for source in new_sources]
     updated_profiles, missing_attach_profiles = attach_sources_to_profiles(
         updated_profiles,
@@ -417,7 +432,7 @@ def main() -> int:
     old_source_ids = [str(source.get("id", "")).strip() for source in existing_sources]
     candidate_profiles, missing_candidate_profiles = attach_sources_to_profiles(
         updated_profiles,
-        [args.profile_id] + args.attach_profile_id,
+        targets,
         old_source_ids + candidate_source_ids,
         args.source_id_prefix,
     )
@@ -440,7 +455,7 @@ def main() -> int:
             session,
             base_url,
             manifest_token,
-            [args.profile_id] + args.attach_profile_id,
+            targets,
             candidate_source_ids,
             args.worker_url,
             access_token,
@@ -470,7 +485,7 @@ def main() -> int:
             session,
             base_url,
             manifest_token,
-            [args.profile_id] + args.attach_profile_id,
+            targets,
             managed_source_ids,
             args.worker_url,
             access_token,
@@ -487,7 +502,8 @@ def main() -> int:
         ) from original_error
 
     summary = {
-        "profile_id": args.profile_id,
+        "profile_id": None if args.connector_only else args.profile_id,
+        "connector_only": args.connector_only,
         "worker_url": args.worker_url,
         "preserve_server_ips": not args.drop_server_ips,
         "removed_profile_ids": sorted(profile_ids_to_remove),

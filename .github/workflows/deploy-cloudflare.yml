@@ -702,7 +702,7 @@ jobs:
           raise SystemExit(completed.returncode)
           PY
 
-          python scripts/sync-misub-ech-profile.py \
+          python scripts/sync-misub-ech-profile.py --connector-only \
             --base-url "${MISUB_PUBLIC_URL}" \
             --profile-id "${connector_profile_id}" \
             --legacy-profile-id "easyproxies-ech-test" \

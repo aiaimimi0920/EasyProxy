@@ -1,0 +1,33 @@
+name: Maintain MiSub Discovery
+
+on:
+  schedule:
+    - cron: '30 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: easyproxy-aggregator-publication
+  cancel-in-progress: false
+
+jobs:
+  maintain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install audit dependencies
+        run: python -m pip install requests PyYAML
+      - name: Verify retired discovery sources before removal
+        env:
+          MISUB_PUBLIC_URL: ${{ vars.EASYPROXY_MISUB_PUBLIC_URL }}
+          MISUB_ADMIN_PASSWORD: ${{ secrets.MISUB_ADMIN_PASSWORD }}
+          NO_PROXY: localhost,127.0.0.1,::1
+        run: python scripts/maintain-misub-discovery.py --apply
