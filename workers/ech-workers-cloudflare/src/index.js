@@ -45,7 +45,6 @@ async function handleSession(webSocket) {
   let remoteReader;
   let isClosed = false;
   let isConnecting = false;
-  let connectionAttempts = 0;
 
   const cleanup = () => {
     if (isClosed) {
@@ -59,9 +58,7 @@ async function handleSession(webSocket) {
     try {
       remoteReader?.releaseLock();
     } catch {}
-    try {
-      remoteSocket?.close();
-    } catch {}
+    safeCloseSocket(remoteSocket);
     remoteWriter = null;
     remoteReader = null;
     remoteSocket = null;
@@ -80,17 +77,10 @@ async function handleSession(webSocket) {
         }
       }
     } catch (err) {
-      console.error("Remote to WebSocket pump error:", err);
-      if (!isClosed && connectionAttempts < 3) {
-        connectionAttempts += 1;
-        try {
-          await new Promise((resolve) => setTimeout(resolve, 1000 * connectionAttempts));
-          if (remoteSocket?.readable) {
-            remoteReader = remoteSocket.readable.getReader();
-            pumpRemoteToWebSocket();
-            return;
-          }
-        } catch {}
+      // A failed TCP stream cannot be resumed by acquiring another reader.
+      // Client disconnects are normal shutdown, not Worker invocation errors.
+      if (!isClosed) {
+        console.warn("Remote TCP stream ended:", err.message);
       }
     }
 
@@ -144,7 +134,6 @@ async function handleSession(webSocket) {
     }
 
     isConnecting = true;
-    connectionAttempts = 0;
 
     try {
       const original = parseAddress(targetAddr);
@@ -165,12 +154,20 @@ async function handleSession(webSocket) {
         }
 
         try {
-          remoteSocket = connect({
+          const socket = connect({
             hostname: attemptHost,
             port: attemptPort
           });
-          if (remoteSocket.opened) {
-            await remoteSocket.opened;
+          remoteSocket = socket;
+          // Cloudflare exposes independent opened/closed promises. Handling
+          // opened alone leaves a failed connection's closed rejection unhandled.
+          socket.closed?.catch(() => {});
+          if (socket.opened) {
+            await socket.opened;
+          }
+          if (isClosed || remoteSocket !== socket) {
+            safeCloseSocket(socket);
+            return;
           }
 
           remoteWriter = remoteSocket.writable.getWriter();
@@ -178,6 +175,9 @@ async function handleSession(webSocket) {
 
           if (firstFrameData?.byteLength > 0) {
             await remoteWriter.write(firstFrameData);
+          }
+          if (isClosed) {
+            return;
           }
 
           isConnecting = false;
@@ -191,13 +191,14 @@ async function handleSession(webSocket) {
           try {
             remoteReader?.releaseLock();
           } catch {}
-          try {
-            remoteSocket?.close();
-          } catch {}
+          safeCloseSocket(remoteSocket);
           remoteWriter = null;
           remoteReader = null;
           remoteSocket = null;
 
+          if (isClosed) {
+            return;
+          }
           if (!isCFError(err) || i === attempts.length - 1) {
             throw err;
           }
@@ -248,6 +249,12 @@ async function handleSession(webSocket) {
 
   webSocket.addEventListener("close", cleanup);
   webSocket.addEventListener("error", cleanup);
+}
+
+function safeCloseSocket(socket) {
+  try {
+    Promise.resolve(socket?.close()).catch(() => {});
+  } catch {}
 }
 
 function safeCloseWebSocket(ws) {

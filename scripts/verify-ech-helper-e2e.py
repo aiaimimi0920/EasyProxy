@@ -55,6 +55,12 @@ def read_http_response(connection: socket.socket) -> bytes:
         if b"\r\n\r\n" in response:
             break
     ensure(response.startswith(b"HTTP/1."), "Proxy did not return an HTTP response")
+    ensure(b"\r\n\r\n" in response, "Proxy returned incomplete HTTP headers")
+    status_line = bytes(response).split(b"\r\n", 1)[0]
+    parts = status_line.split()
+    ensure(len(parts) >= 2 and parts[1].isdigit(), "Proxy returned an invalid HTTP status")
+    status = int(parts[1])
+    ensure(200 <= status < 400, f"Proxy HTTP probe returned status {status}")
     return bytes(response)
 
 
@@ -67,9 +73,9 @@ def recv_exact(connection: socket.socket, size: int) -> bytes:
     return bytes(value)
 
 
-def verify_http_proxy(port: int, target_host: str) -> None:
+def verify_http_proxy(port: int, target_host: str, target_path: str = "/") -> None:
     request = (
-        f"GET http://{target_host}/ HTTP/1.1\r\n"
+        f"GET http://{target_host}{target_path} HTTP/1.1\r\n"
         f"Host: {target_host}\r\nConnection: close\r\n\r\n"
     ).encode("ascii")
     with socket.create_connection(("127.0.0.1", port), timeout=10) as connection:
@@ -78,7 +84,7 @@ def verify_http_proxy(port: int, target_host: str) -> None:
         read_http_response(connection)
 
 
-def verify_socks5_proxy(port: int, target_host: str, target_port: int) -> None:
+def verify_socks5_proxy(port: int, target_host: str, target_port: int, target_path: str = "/") -> None:
     encoded_host = target_host.encode("idna")
     ensure(len(encoded_host) <= 255, "SOCKS5 target hostname is too long")
     with socket.create_connection(("127.0.0.1", port), timeout=10) as connection:
@@ -94,7 +100,7 @@ def verify_socks5_proxy(port: int, target_host: str, target_port: int) -> None:
         reply = recv_exact(connection, 10)
         ensure(reply[:4] == b"\x05\x00\x00\x01", "SOCKS5 CONNECT failed")
         connection.sendall(
-            f"GET / HTTP/1.1\r\nHost: {target_host}\r\nConnection: close\r\n\r\n".encode("ascii")
+            f"GET {target_path} HTTP/1.1\r\nHost: {target_host}\r\nConnection: close\r\n\r\n".encode("ascii")
         )
         read_http_response(connection)
 
@@ -105,7 +111,8 @@ def main() -> int:
     parser.add_argument("--worker-url", required=True)
     parser.add_argument("--server-ip", default="")
     parser.add_argument("--proxy-ip", default="")
-    parser.add_argument("--target-host", default="example.com")
+    parser.add_argument("--target-host", default="connectivitycheck.gstatic.com")
+    parser.add_argument("--target-path", default="/generate_204")
     parser.add_argument("--target-port", type=int, default=80)
     args = parser.parse_args()
 
@@ -132,8 +139,8 @@ def main() -> int:
         process = subprocess.Popen(command, env=environment, stdout=log, stderr=subprocess.STDOUT)
         try:
             wait_for_listener(port, process)
-            verify_http_proxy(port, args.target_host)
-            verify_socks5_proxy(port, args.target_host, args.target_port)
+            verify_http_proxy(port, args.target_host, args.target_path)
+            verify_socks5_proxy(port, args.target_host, args.target_port, args.target_path)
         except Exception as exc:
             log.seek(0)
             output = log.read(16 * 1024).decode("utf-8", errors="replace")

@@ -344,6 +344,55 @@ jobs:
             --artifact-name public-effective \
             --expected-url "${EASYPROXY_AGGREGATOR_EFFECTIVE_URL}"
 
+      - name: Refresh MiSub runtime nodes from verified stable release
+        if: steps.change_gate.outputs.should_deploy == 'true'
+        shell: bash
+        env:
+          MISUB_PUBLIC_URL: ${{ vars.EASYPROXY_MISUB_PUBLIC_URL }}
+          MISUB_ADMIN_PASSWORD: ${{ secrets.MISUB_ADMIN_PASSWORD }}
+          MISUB_MANIFEST_TOKEN: ${{ secrets.MISUB_MANIFEST_TOKEN }}
+          MISUB_CRON_SECRET: ${{ secrets.MISUB_CRON_SECRET }}
+          MISUB_PROFILE_ID: ${{ vars.EASYPROXY_MISUB_MANIFEST_PROFILE_ID }}
+          AGGREGATOR_EFFECTIVE_URL: ${{ vars.EASYPROXY_AGGREGATOR_EFFECTIVE_URL }}
+          ADDITIONAL_SUBSCRIPTIONS_JSON: ${{ vars.EASYPROXY_MISUB_ADDITIONAL_SUBSCRIPTIONS_JSON }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+          import requests
+
+          for name in ("MISUB_PUBLIC_URL", "MISUB_ADMIN_PASSWORD", "MISUB_MANIFEST_TOKEN", "MISUB_CRON_SECRET", "AGGREGATOR_EFFECTIVE_URL"):
+              if not os.environ.get(name, "").strip():
+                  raise SystemExit(f"{name} is required for MiSub runtime refresh")
+          extras = json.loads(os.environ.get("ADDITIONAL_SUBSCRIPTIONS_JSON") or "[]")
+          if not isinstance(extras, list) or not all(isinstance(item, str) for item in extras):
+              raise SystemExit("ADDITIONAL_SUBSCRIPTIONS_JSON must be a string array")
+          command = [
+              sys.executable, "scripts/sync-misub-runtime-sources.py",
+              "--base-url", os.environ["MISUB_PUBLIC_URL"],
+              "--profile-id", os.environ.get("MISUB_PROFILE_ID") or "aggregator-global",
+              "--subscription-url", os.environ["AGGREGATOR_EFFECTIVE_URL"],
+          ]
+          # Extra providers belong to the MiSub profile, not the public R2 release.
+          # Audit them together without silently replacing them with Aggregator alone.
+          for url in extras:
+              if url.strip():
+                  command.extend(["--subscription-url", url.strip()])
+          subprocess.run(command, check=True)
+          response = requests.get(
+              os.environ["MISUB_PUBLIC_URL"].rstrip("/") + "/cron",
+              headers={"Authorization": "Bearer " + os.environ["MISUB_CRON_SECRET"]},
+              timeout=180,
+          )
+          response.raise_for_status()
+          if response.json().get("success") is not True:
+              raise SystemExit("MiSub Cron did not report success")
+          print("MiSub authenticated Cron completed")
+          PY
+
       - name: Upload aggregator workflow log
         if: always() && steps.change_gate.outputs.should_deploy == 'true'
         uses: actions/upload-artifact@v4

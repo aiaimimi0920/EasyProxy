@@ -50,6 +50,20 @@ Failures before step 10 never touch stable. Failures during step 10 restore the
 previous stable bytes and leave the previous manifest as the committed version.
 Candidate and immutable release objects may remain for diagnosis.
 
+After canonical stable verification, the publication workflow refreshes the
+MiSub runtime profile using the stable effective URL and the configured extra
+subscriptions. Extra providers are audited for MiSub but are not copied into
+the public R2 release. Existing connector references are retained. A failed
+MiSub refresh fails the workflow without undoing the already verified R2 release.
+The scheduled publication, Cloudflare deployment profile-sync job, and manual
+ZenProxy sync share the publication concurrency group to avoid competing writes.
+
+`MISUB_CRON_SECRET` is also persisted into MiSub settings by runtime sync. The
+workflow invokes authenticated Cron after the profile refresh; built-in
+`aggregatorSync.runOnCron` is disabled so Cron updates subscription metadata
+without independently rewriting the runtime profile. Saving a GitHub secret
+alone does not configure MiSub's database-backed Cron endpoint.
+
 If a runner is terminated before its exception handler can restore objects, the
 next publication reconciles every fixed stable key from the immutable release
 named by the still-committed stable manifest before evaluating the new

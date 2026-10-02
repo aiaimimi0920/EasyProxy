@@ -14,7 +14,7 @@ spec.loader.exec_module(sync_misub_runtime_sources)
 
 
 class SyncMiSubRuntimeSourcesTests(unittest.TestCase):
-    def test_resolve_connector_node_ids_prefers_configured_connector_ids(self):
+    def test_resolve_connector_node_ids_preserves_existing_and_configured_connectors(self):
         result = sync_misub_runtime_sources.resolve_connector_node_ids(
             settings={
                 "aggregatorSync": {
@@ -43,7 +43,7 @@ class SyncMiSubRuntimeSourcesTests(unittest.TestCase):
             ],
         )
 
-        self.assertEqual(result, ["conn_zenproxy_primary"])
+        self.assertEqual(result, ["conn_zenproxy_primary", "conn_ech_workers_pref_1"])
 
     def test_resolve_connector_node_ids_falls_back_to_existing_profile_connectors(self):
         result = sync_misub_runtime_sources.resolve_connector_node_ids(

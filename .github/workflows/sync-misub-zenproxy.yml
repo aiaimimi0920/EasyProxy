@@ -29,6 +29,10 @@ name: Sync MiSub ZenProxy Source
 permissions:
   contents: read
 
+concurrency:
+  group: easyproxy-aggregator-publication
+  cancel-in-progress: false
+
 jobs:
   update:
     runs-on: ubuntu-latest

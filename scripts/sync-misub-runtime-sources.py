@@ -82,15 +82,12 @@ def resolve_connector_node_ids(
         for source_id in configured_ids
         if is_connector_source(source_map.get(source_id))
     ]
-    if configured_connector_ids:
-        return configured_connector_ids
-
     existing_manual_nodes = normalize_string_array((existing_profile or {}).get("manualNodes"))
-    return [
+    return normalize_string_array(configured_connector_ids + [
         source_id
         for source_id in existing_manual_nodes
         if is_connector_source(source_map.get(source_id))
-    ]
+    ])
 
 
 def run_runtime_audit(
@@ -110,6 +107,8 @@ def run_runtime_audit(
             f"misub-runtime-{Path(temp_dir).name}",
             "--output-path",
             str(output_path),
+            "--artifact-dir",
+            str(Path(temp_dir) / "artifacts"),
             "--docker-network-name",
             docker_network_name,
             "--scenario-timeout-seconds",
@@ -287,6 +286,13 @@ def main() -> int:
         "misubs": updated_sources,
         "profiles": updated_profiles,
     }
+    current_response = session.get(base_url + "api/data", timeout=30)
+    current_response.raise_for_status()
+    current = current_response.json()
+    ensure(
+        current.get("misubs") == misubs and current.get("profiles") == profiles,
+        "MiSub sources changed during the audit; refusing to overwrite concurrent edits",
+    )
     update_response = retry(
         "MiSub runtime profile update",
         10,
@@ -294,6 +300,21 @@ def main() -> int:
         lambda: session.post(base_url + "api/misubs", json=update_payload, timeout=60),
     )
     update_response.raise_for_status()
+    ensure(update_response.json().get("success") is True, "MiSub did not confirm the runtime profile update")
+
+    cron_secret = os.environ.get("MISUB_CRON_SECRET", "").strip()
+    if cron_secret:
+        # The publication workflow owns audited runtime nodes. Cron may update
+        # subscription metadata, but must not rewrite this profile independently.
+        latest_settings = session.get(base_url + "api/settings", timeout=30)
+        latest_settings.raise_for_status()
+        cron_settings = {
+            "cronSecret": cron_secret,
+            "aggregatorSync": {**(latest_settings.json().get("aggregatorSync") or {}), "runOnCron": False},
+        }
+        cron_config = session.post(base_url + "api/settings", json=cron_settings, timeout=30)
+        cron_config.raise_for_status()
+        ensure(cron_config.json().get("success") is True, "MiSub Cron configuration was not saved")
 
     manifest_response = retry(
         "MiSub runtime manifest",
@@ -315,13 +336,29 @@ def main() -> int:
         all(str(source.get("kind", "")).strip() in allowed_manifest_kinds for source in manifest_sources),
         "MiSub runtime manifest returned unsupported source kinds",
     )
+    actual_runtime = {
+        source.get("id"): source.get("input") or source.get("url")
+        for source in manifest_sources
+        if source.get("id") in runtime_source_ids
+    }
+    ensure(
+        actual_runtime == {source["id"]: source["input"] for source in runtime_sources},
+        "MiSub runtime manifest did not reflect the newly saved proxy nodes",
+    )
+    active_connector_ids = {
+        source.get("id") for source in updated_sources
+        if source.get("id") in connector_node_ids and source.get("enabled", True)
+    }
+    ensure(
+        active_connector_ids.issubset({source.get("id") for source in manifest_sources}),
+        "MiSub runtime manifest lost an existing connector",
+    )
 
     summary = {
         "profile_id": args.profile_id,
-        "subscription_urls": subscription_urls,
+        "subscription_count": len(subscription_urls),
         "source_count": len(runtime_sources),
         "stable_uri_count": len(stable_uris),
-        "stable_uris": stable_uris[:20],
         "manifest_connector_count": sum(
             1 for source in manifest_sources if str(source.get("kind", "")).strip() == "connector"
         ),

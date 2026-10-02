@@ -89,7 +89,7 @@ jobs:
 
       - name: Run ECH Worker authentication tests
         shell: pwsh
-        run: node --test workers/ech-workers-cloudflare/src/auth.test.mjs
+        run: node --test workers/ech-workers-cloudflare/src/auth.test.mjs workers/ech-workers-cloudflare/src/session.test.mjs
 
       - name: Run ECH helper tests
         shell: pwsh
@@ -604,6 +604,9 @@ jobs:
   sync-misub-ech-profile:
     name: Sync MiSub ECH connector profile
     runs-on: ubuntu-latest
+    concurrency:
+      group: easyproxy-aggregator-publication
+      cancel-in-progress: false
     needs:
       - deploy-misub-pages
       - deploy-ech-workers-cloudflare
@@ -635,6 +638,7 @@ jobs:
           MISUB_ADDITIONAL_SUBSCRIPTIONS_JSON: ${{ vars.EASYPROXY_MISUB_ADDITIONAL_SUBSCRIPTIONS_JSON }}
           MISUB_ADMIN_PASSWORD: ${{ secrets.MISUB_ADMIN_PASSWORD }}
           MISUB_MANIFEST_TOKEN: ${{ secrets.MISUB_MANIFEST_TOKEN }}
+          MISUB_CRON_SECRET: ${{ secrets.MISUB_CRON_SECRET }}
           MISUB_CONNECTOR_PROFILE_ID: ${{ vars.EASYPROXY_MISUB_CONNECTOR_PROFILE_ID }}
           MISUB_MANIFEST_PROFILE_ID: ${{ vars.EASYPROXY_MISUB_MANIFEST_PROFILE_ID }}
           ECH_WORKER_PUBLIC_URL: ${{ vars.EASYPROXY_ECH_WORKER_PUBLIC_URL }}
