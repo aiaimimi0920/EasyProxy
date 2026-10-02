@@ -39,7 +39,13 @@ def classify_audit(result, returncode):
     if nodes.get('stable_available_uris') or nodes.get('stable_available_count', 0) > 0:
         return 'healthy'
     # 只接受已加载节点、完成网络探测后的明确失败，不接受容器启动/构建失败。
-    if (returncode != 0 and nodes.get('total_nodes', 0) > 0
+    attempts = (result.get('pool_probe') or {}).get('attempts') or []
+    network_failures = attempts and all(
+        item.get('exit_code') == 7 and item.get('stderr') in
+        ('URLError', 'TimeoutError', 'ConnectionResetError', 'RemoteDisconnected')
+        for item in attempts
+    )
+    if (returncode != 0 and network_failures and nodes.get('total_nodes', 0) > 0
             and result.get('error') == 'proxy lease output failed across all shared probe targets'
             and nodes.get('available_nodes', 0) == 0):
         return 'unavailable'

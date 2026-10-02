@@ -44,7 +44,10 @@ def test_response_200_is_not_node_availability_and_challenges_are_unknown():
 def test_runtime_failure_must_not_be_infrastructure_failure():
     assert maintenance.classify_audit({'error': 'docker failed'}, 1) == 'unknown'
     assert maintenance.classify_audit({'nodes': {'stable_available_uris': ['ss://test']}}, 0) == 'healthy'
-    assert maintenance.classify_audit({'nodes': {'total_nodes': 3, 'available_nodes': 0}, 'error': 'proxy lease output failed across all shared probe targets'}, 1) == 'unavailable'
+    failed = {'nodes': {'total_nodes': 3, 'available_nodes': 0}, 'error': 'proxy lease output failed across all shared probe targets'}
+    assert maintenance.classify_audit(failed, 1) == 'unknown'
+    failed['pool_probe'] = {'attempts': [{'exit_code': 7, 'stderr': 'URLError'}]}
+    assert maintenance.classify_audit(failed, 1) == 'unavailable'
 
 
 def test_delete_requires_two_failures_and_any_healthy_result_preserves():
