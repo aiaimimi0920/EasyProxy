@@ -169,3 +169,7 @@ jobs:
       - name: Validate the native TUN data plane
         shell: bash
         run: python3 scripts/validate-tun-gateway-docker.py --image easyproxy-native-tun:e2e
+
+      - name: Validate the native TUN data plane with reversed network attachment order
+        shell: bash
+        run: python3 scripts/validate-tun-gateway-docker.py --image easyproxy-native-tun:e2e --gateway-network-order origin-first

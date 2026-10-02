@@ -210,7 +210,7 @@ def write_fixtures(work: Path, client_ipv4_cidr: str, client_ipv6_cidr: str) -> 
           mode: tun
           listen: 0.0.0.0:15001
           ingress:
-            interfaces: [eth0]
+            interfaces: [lan0]
             trusted_cidrs: [__CLIENT_IPV4_CIDR__, "__CLIENT_IPV6_CIDR__"]
           capture: {tcp: disabled, udp: disabled, preserve_original_destination: true}
           routing: {final_policy: PROXY, no_available_proxy_policy: DIRECT}
@@ -425,10 +425,71 @@ def wait_gateway_status(container: str) -> dict[str, object]:
     state = docker("inspect", "-f", "{{.State.Status}}/{{.State.ExitCode}}", container, capture=True, check=False)
     raise RuntimeError(f"gateway management API did not become ready; container={state}; last={raw.splitlines()[-1:]}")
 
+
+
+def assert_gateway_interfaces(gateway: str, attachments: list[tuple[str, str, str, str]]) -> None:
+    addresses = json.loads(docker("exec", gateway, "ip", "-j", "address", "show", capture=True))
+    by_name = {item["ifname"]: {entry["local"] for entry in item.get("addr_info", [])}
+               for item in addresses}
+    for network, ipv4, ipv6, interface in attachments:
+        actual = by_name.get(interface, set())
+        if not {ipv4, ipv6}.issubset(actual):
+            raise RuntimeError(f"gateway network {network} expected {ipv4},{ipv6} on {interface}; actual={by_name}")
+        print(f"E2E_INTERFACE network={network} interface={interface} ipv4={ipv4} ipv6={ipv6}", flush=True)
+
+
+def install_packet_counters(gateway: str, client_ipv4: str, origin_ipv4: str) -> None:
+    # These accept-only chains observe the fixture namespace; they do not mark,
+    # redirect, accept early, or drop packets in the production gateway chains.
+    table = "easyproxy_e2e_diag"
+    docker("exec", gateway, "nft", "add", "table", "inet", table)
+    for chain, hook, priority in (("before", "prerouting", "-151"),
+                                  ("after", "prerouting", "-149"),
+                                  ("outgoing", "output", "-151")):
+        docker("exec", gateway, "nft", "add", "chain", "inet", table, chain,
+               "{", "type", "filter", "hook", hook, "priority", priority + ";", "policy", "accept;", "}")
+    addresses = json.loads(docker("exec", gateway, "ip", "-j", "address", "show", capture=True))
+    for interface in addresses:
+        docker("exec", gateway, "nft", "add", "rule", "inet", table, "before",
+               "iifname", interface["ifname"], "ip", "saddr", client_ipv4,
+               "ip", "daddr", origin_ipv4, "tcp", "dport", "18080", "counter")
+    docker("exec", gateway, "nft", "add", "rule", "inet", table, "after",
+           "ip", "saddr", client_ipv4, "ip", "daddr", origin_ipv4,
+           "tcp", "dport", "18080", "meta", "mark", "0x1", "counter")
+    docker("exec", gateway, "nft", "add", "rule", "inet", table, "outgoing",
+           "ip", "daddr", origin_ipv4, "tcp", "dport", "18080", "counter")
+    docker("exec", gateway, "nft", "add", "rule", "inet", table, "before",
+           "ip", "saddr", origin_ipv4, "tcp", "sport", "18080", "counter")
+
+
+def dump_network_diagnostics(containers: list[str]) -> None:
+    # Best effort, so diagnostics never replace the original exception.
+    commands = (
+        ("ip", "-j", "address", "show"),
+        ("ip", "-4", "route", "show", "table", "all"),
+        ("ip", "-6", "route", "show", "table", "all"),
+        ("ip", "-4", "rule", "show"),
+        ("ip", "-6", "rule", "show"),
+        ("ip", "neigh", "show"),
+        ("nft", "-a", "list", "table", "inet", "easyproxy_gateway"),
+        ("nft", "-a", "list", "table", "inet", "easyproxy_e2e_diag"),
+    )
+    for container in containers:
+        for command in commands:
+            if command[0] == "nft" and "tun-gateway-" not in container:
+                continue
+            try:
+                code, output = try_docker("exec", container, *command)
+                print(f"E2E_DIAG {container} {' '.join(command)} exit={code}\n{output}", flush=True)
+            except Exception as error:
+                print(f"E2E_DIAG {container} diagnostic failed: {type(error).__name__}", flush=True)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--image", default="easyproxy-native-tun:e2e")
     parser.add_argument("--build", action="store_true")
+    parser.add_argument("--gateway-network-order", choices=("client-first", "origin-first"), default="client-first")
     args = parser.parse_args()
     if shutil.which("docker") is None or shutil.which("go") is None:
         raise RuntimeError("docker and go are required")
@@ -518,9 +579,20 @@ def main() -> int:
             wait_origin(origin)
 
             stage("gateway-create")
-            docker("create", "--name", gateway, "--network", client_network, "--ip", gateway_client_ipv4, "--ip6", gateway_client_ipv6, "--cap-add", "NET_ADMIN", "--cap-add", "NET_RAW", "--device", "/dev/net/tun", "--sysctl", "net.ipv4.ip_forward=1", "--sysctl", "net.ipv6.conf.all.forwarding=1", "-e", "EASY_PROXY_RUN_AS_ROOT=1", "-v", f"{work / 'config.yaml'}:/etc/easyproxy/config.yaml:ro", "-v", f"{work / 'data'}:/var/lib/easyproxy/data", args.image)
-            docker("network", "connect", "--ip", gateway_origin_ipv4, "--ip6", gateway_origin_ipv6, origin_network, gateway)
+            attachments = [
+                (client_network, gateway_client_ipv4, gateway_client_ipv6, "lan0"),
+                (origin_network, gateway_origin_ipv4, gateway_origin_ipv6, "wan0"),
+            ]
+            if args.gateway_network_order == "origin-first":
+                attachments.reverse()
+            first, second = attachments
+            first_network = f"name={first[0]},ip={first[1]},ip6={first[2]},driver-opt=com.docker.network.endpoint.ifname={first[3]}"
+            docker("create", "--name", gateway, "--network", first_network, "--cap-add", "NET_ADMIN", "--cap-add", "NET_RAW", "--device", "/dev/net/tun", "--sysctl", "net.ipv4.ip_forward=1", "--sysctl", "net.ipv6.conf.all.forwarding=1", "-e", "EASY_PROXY_RUN_AS_ROOT=1", "-v", f"{work / 'config.yaml'}:/etc/easyproxy/config.yaml:ro", "-v", f"{work / 'data'}:/var/lib/easyproxy/data", args.image)
+            docker("network", "connect", "--ip", second[1], "--ip6", second[2],
+                   "--driver-opt", f"com.docker.network.endpoint.ifname={second[3]}", second[0], gateway)
             docker("start", gateway)
+            stage("gateway-interfaces")
+            assert_gateway_interfaces(gateway, attachments)
             stage("gateway-ready")
             wait_gateway(gateway)
 
@@ -536,8 +608,12 @@ def main() -> int:
             copy_into(client, quic_probe, "/tmp/quic-probe")
             docker("exec", client, "chmod", "755", "/tmp/quic-probe")
             docker("exec", client, "sh", "-c", f"ip route replace default via {gateway_client_ipv4} && ip -6 route replace default via {gateway_client_ipv6}")
+            stage("network-diagnostics")
+            install_packet_counters(gateway, client_ipv4, origin_ipv4)
+            dump_network_diagnostics(containers)
             stage("client-tcp-udp-dns-fakeip")
             print(docker("exec", "-e", f"EASYPROXY_E2E_ORIGIN_IPV4={origin_ipv4}", "-e", f"EASYPROXY_E2E_ORIGIN_IPV6={origin_ipv6}", client, "python3", "/tmp/client.py", capture=True), flush=True)
+            dump_network_diagnostics(containers)
             stage("client-quic")
             print(docker("exec", client, "/tmp/quic-probe", "client", origin_ipv4, origin_ipv6, capture=True), flush=True)
             stage("client-socks-udp")
@@ -549,6 +625,7 @@ def main() -> int:
             print("ALL_TUN_E2E_PASS")
             return 0
     except Exception:
+        dump_network_diagnostics(containers)
         logs = docker("logs", gateway, capture=True, check=False)
         if logs:
             print("E2E_GATEWAY_LOG_TAIL", file=sys.stderr, flush=True)
