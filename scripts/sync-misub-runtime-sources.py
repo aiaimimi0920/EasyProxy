@@ -98,7 +98,10 @@ def run_runtime_audit(
     image: str,
     scenario_timeout_seconds: int,
 ) -> dict[str, Any]:
-    with tempfile.TemporaryDirectory(prefix="easyproxy-misub-audit-") as temp_dir:
+    # Docker may leave root-owned database files in the bind mount on Linux.
+    # Best-effort diagnostic cleanup must not discard a successful audit result;
+    # the audit subprocess still removes its secret config and stops its container.
+    with tempfile.TemporaryDirectory(prefix="easyproxy-misub-audit-", ignore_cleanup_errors=True) as temp_dir:
         output_path = Path(temp_dir) / "summary.json"
         command = [
             sys.executable,

@@ -1,5 +1,6 @@
 import importlib.util
 import unittest
+from unittest.mock import Mock, patch
 from pathlib import Path
 
 
@@ -14,6 +15,25 @@ spec.loader.exec_module(sync_misub_runtime_sources)
 
 
 class SyncMiSubRuntimeSourcesTests(unittest.TestCase):
+    def test_runtime_audit_cleanup_is_best_effort_but_result_is_required(self):
+        with patch.object(sync_misub_runtime_sources.tempfile, 'TemporaryDirectory') as directory, \
+             patch.object(sync_misub_runtime_sources.subprocess, 'run') as run, \
+             patch.object(Path, 'read_text', return_value='{"nodes":{"stable_available_uris":[]}}'):
+            directory.return_value.__enter__.return_value = '/test-audit'
+            run.return_value = Mock(returncode=0)
+            result = sync_misub_runtime_sources.run_runtime_audit(
+                audit_script=Path('audit.py'), subscriptions=[], docker_network_name='audit',
+                image='test-image', scenario_timeout_seconds=60,
+            )
+            directory.assert_called_once_with(prefix='easyproxy-misub-audit-', ignore_cleanup_errors=True)
+            self.assertEqual(result, {'nodes': {'stable_available_uris': []}})
+            run.return_value = Mock(returncode=1, stderr='probe failed', stdout='')
+            with self.assertRaisesRegex(RuntimeError, 'probe failed'):
+                sync_misub_runtime_sources.run_runtime_audit(
+                    audit_script=Path('audit.py'), subscriptions=[], docker_network_name='audit',
+                    image='test-image', scenario_timeout_seconds=60,
+                )
+
     def test_resolve_connector_node_ids_preserves_existing_and_configured_connectors(self):
         result = sync_misub_runtime_sources.resolve_connector_node_ids(
             settings={
