@@ -188,8 +188,14 @@ def main() -> int:
         if owned_state:
             docker_args.extend(owned_state.mount_args())
         else:
-            docker_args.extend(['-v', f'{data_dir.resolve()}:/var/lib/easyproxy'])
-        docker_args.extend(['-v', f'{config_path.resolve()}:/var/lib/easyproxy/config/config.yaml'])
+            docker_args.extend([
+                "-v",
+                f"{data_dir.resolve()}:/var/lib/easyproxy",
+            ])
+        docker_args.extend([
+            "-v",
+            f"{config_path.resolve()}:/var/lib/easyproxy/config/config.yaml",
+        ])
         if args.docker_network_name.strip():
             docker_args.extend(["--network", args.docker_network_name.strip()])
         for dns_server in dns_servers:
