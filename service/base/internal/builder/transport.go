@@ -1,6 +1,7 @@
 package builder
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -42,8 +43,14 @@ func buildV2RayTransport(query url.Values) (*option.V2RayTransportOptions, error
 		}
 	case C.V2RayTransportTypeHTTP:
 		options.HTTPOptions.Path = query.Get("path")
-		if host := query.Get("host"); host != "" {
-			options.HTTPOptions.Host = badoption.Listable[string]{host}
+		options.HTTPOptions.Method = query.Get("method")
+		if hosts := query["host"]; len(hosts) > 0 {
+			options.HTTPOptions.Host = badoption.Listable[string](hosts)
+		}
+		if headers := query.Get("httpHeaders"); headers != "" {
+			if err := json.Unmarshal([]byte(headers), &options.HTTPOptions.Headers); err != nil {
+				return nil, fmt.Errorf("invalid HTTP transport headers: %w", err)
+			}
 		}
 	case C.V2RayTransportTypeGRPC:
 		options.GRPCOptions.ServiceName = query.Get("serviceName")

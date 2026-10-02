@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"sort"
@@ -21,6 +22,7 @@ type clashProxy struct {
 	Server            string                 `yaml:"server"`
 	Port              int                    `yaml:"port"`
 	UUID              string                 `yaml:"uuid"`
+	Username          string                 `yaml:"username"`
 	Password          string                 `yaml:"password"`
 	Cipher            string                 `yaml:"cipher"`
 	AlterId           int                    `yaml:"alterId"`
@@ -32,6 +34,7 @@ type clashProxy struct {
 	Flow              string                 `yaml:"flow"`
 	UDP               bool                   `yaml:"udp"`
 	WSOpts            *clashWSOptions        `yaml:"ws-opts"`
+	HTTPOpts          *clashHTTPOptions      `yaml:"http-opts"`
 	GrpcOpts          *clashGrpcOptions      `yaml:"grpc-opts"`
 	RealityOpts       *clashRealityOptions   `yaml:"reality-opts"`
 	ClientFingerprint string                 `yaml:"client-fingerprint"`
@@ -48,6 +51,12 @@ type clashProxy struct {
 type clashWSOptions struct {
 	Path    string            `yaml:"path"`
 	Headers map[string]string `yaml:"headers"`
+}
+
+type clashHTTPOptions struct {
+	Method  string              `yaml:"method"`
+	Path    []string            `yaml:"path"`
+	Headers map[string][]string `yaml:"headers"`
 }
 
 type clashGrpcOptions struct {
@@ -83,6 +92,8 @@ func parseClashYAML(content string) ([]NodeConfig, error) {
 // convertClashProxyToURI converts a Clash proxy config to a standard URI
 func convertClashProxyToURI(p clashProxy) string {
 	switch strings.ToLower(p.Type) {
+	case "http":
+		return buildClashHTTPURI(p)
 	case "vmess":
 		return buildVMessURI(p)
 	case "vless":
@@ -97,6 +108,50 @@ func convertClashProxyToURI(p clashProxy) string {
 		return buildAnyTLSURI(p)
 	default:
 		return ""
+	}
+}
+
+func buildClashHTTPURI(p clashProxy) string {
+	serverName := p.ServerName
+	if serverName == "" {
+		serverName = p.SNI
+	}
+	uri, err := buildHTTPURIFromSingbox(p.Name, map[string]any{
+		"server": p.Server, "server_port": p.Port,
+		"username": p.Username, "password": p.Password,
+		"tls": map[string]any{"enabled": p.TLS, "server_name": serverName,
+			"insecure": p.SkipCertVerify, "alpn": p.ALPN},
+	})
+	if err != nil {
+		return ""
+	}
+	return uri
+}
+
+func applyClashHTTPOptions(params url.Values, p clashProxy) {
+	if params.Get("type") != "http" || p.HTTPOpts == nil {
+		return
+	}
+	// Clash chooses one candidate path; sing-box accepts one outbound path.
+	if len(p.HTTPOpts.Path) > 0 {
+		params.Set("path", p.HTTPOpts.Path[0])
+	}
+	if p.HTTPOpts.Method != "" {
+		params.Set("method", p.HTTPOpts.Method)
+	}
+	headers := make(map[string][]string)
+	for name, values := range p.HTTPOpts.Headers {
+		if strings.EqualFold(name, "Host") {
+			for _, host := range values {
+				params.Add("host", host)
+			}
+		} else {
+			headers[name] = values
+		}
+	}
+	if len(headers) > 0 {
+		encoded, _ := json.Marshal(headers)
+		params.Set("httpHeaders", string(encoded))
 	}
 }
 
@@ -142,6 +197,10 @@ func buildVMessURI(p clashProxy) string {
 	}
 	if p.ClientFingerprint != "" {
 		params.Set("fp", p.ClientFingerprint)
+	}
+	applyClashHTTPOptions(params, p)
+	if p.SkipCertVerify {
+		params.Set("allowInsecure", "1")
 	}
 
 	query := ""
