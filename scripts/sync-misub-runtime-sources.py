@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import argparse
 import json
+from ipaddress import IPv6Address
 import os
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import requests
 
@@ -17,6 +19,27 @@ import requests
 def ensure(condition: bool, message: str) -> None:
     if not condition:
         raise RuntimeError(message)
+
+
+
+def management_origin(base_url: str) -> str:
+    """Serialize the configured HTTP(S) origin, never its credentials or URL path."""
+    try:
+        if any(ord(char) < 32 or ord(char) == 127 for char in base_url):
+            raise ValueError("control character")
+        parsed = urlsplit(base_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("HTTP(S) host required")
+        host = parsed.hostname.encode("idna").decode("ascii").lower()
+        if any(char.isspace() or char in "\\/%?#" for char in host):
+            raise ValueError("invalid host")
+        if ":" in host:
+            host = f"[{IPv6Address(host).compressed}]"
+        port = parsed.port
+        suffix = f":{port}" if port is not None and port != {"http": 80, "https": 443}[parsed.scheme] else ""
+        return f"{parsed.scheme}://{host}{suffix}"
+    except (ValueError, UnicodeError):
+        raise RuntimeError("MiSub base URL must be a valid HTTP(S) URL") from None
 
 
 def retry(label: str, attempts: int, delay_seconds: float, func):
@@ -191,6 +214,7 @@ def main() -> int:
 
     base_url = args.base_url.rstrip("/") + "/"
     session = requests.Session()
+    management_headers = {"Origin": management_origin(base_url)}
 
     def login_request():
         response = session.post(
@@ -309,7 +333,7 @@ def main() -> int:
         "MiSub runtime profile update",
         10,
         5,
-        lambda: session.post(base_url + "api/misubs", json=update_payload, timeout=60),
+        lambda: session.post(base_url + "api/misubs", json=update_payload, headers=management_headers, timeout=60),
     )
     update_response.raise_for_status()
     ensure(update_response.json().get("success") is True, "MiSub did not confirm the runtime profile update")
@@ -324,7 +348,7 @@ def main() -> int:
             "cronSecret": cron_secret,
             "aggregatorSync": {**(latest_settings.json().get("aggregatorSync") or {}), "runOnCron": False},
         }
-        cron_config = session.post(base_url + "api/settings", json=cron_settings, timeout=30)
+        cron_config = session.post(base_url + "api/settings", json=cron_settings, headers=management_headers, timeout=30)
         cron_config.raise_for_status()
         ensure(cron_config.json().get("success") is True, "MiSub Cron configuration was not saved")
 
