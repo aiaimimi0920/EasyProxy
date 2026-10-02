@@ -1,0 +1,48 @@
+name: Security Scan
+
+'on':
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '23 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: Security / ${{ matrix.scope }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        scope:
+          - source
+          - secrets
+          - requirements-ci.txt
+          - upstreams/aggregator/requirements.txt
+          - upstreams/aggregator/manager/requirements.txt
+    steps:
+      - name: Checkout exact source and recursive submodules
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: Set up scanner Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Install pinned Trivy
+        uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514 # v0.2.6
+        with:
+          version: v0.70.0
+          cache: false
+      - name: Test reporting and fail-closed behavior
+        run: python -m unittest discover -s tests -p test_security_scan.py -v
+      - name: Scan without executing project code
+        env:
+          SCAN_SCOPE: ${{ matrix.scope }}
+        run: python scripts/security-scan.py "$SCAN_SCOPE"
