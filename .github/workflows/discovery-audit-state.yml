@@ -1,0 +1,29 @@
+name: Discovery Audit State
+
+'on':
+  push:
+    branches: [fix/discovery-audit-state]
+  pull_request:
+    paths:
+      - '.github/workflows/discovery-audit-state.yml'
+      - 'scripts/*audit*'
+      - 'scripts/maintain-misub-discovery.py'
+      - 'tests/*audit*'
+      - 'deploy/service/base/docker-entrypoint.sh'
+
+permissions:
+  contents: read
+
+jobs:
+  isolation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12.14'
+      - name: Reproduce cleanup failure with synthetic offline state
+        run: python scripts/validate-audit-state-docker.py
