@@ -19,7 +19,8 @@ class SyncMiSubRuntimeSourcesTests(unittest.TestCase):
         with patch.object(sync_misub_runtime_sources.tempfile, 'TemporaryDirectory') as directory, \
              patch.object(sync_misub_runtime_sources.subprocess, 'run') as run, \
              patch.object(Path, 'read_text', return_value='{"nodes":{"stable_available_uris":[]}}'):
-            directory.return_value.__enter__.return_value = '/test-audit'
+            directory.return_value.name = '/test-audit'
+            directory.return_value.cleanup.side_effect = PermissionError('Docker-owned directory')
             run.return_value = Mock(returncode=0)
             result = sync_misub_runtime_sources.run_runtime_audit(
                 audit_script=Path('audit.py'), subscriptions=[], docker_network_name='audit',
@@ -27,6 +28,7 @@ class SyncMiSubRuntimeSourcesTests(unittest.TestCase):
             )
             directory.assert_called_once_with(prefix='easyproxy-misub-audit-', ignore_cleanup_errors=True)
             self.assertEqual(result, {'nodes': {'stable_available_uris': []}})
+            directory.return_value.cleanup.assert_called_once()
             run.return_value = Mock(returncode=1, stderr='probe failed', stdout='')
             with self.assertRaisesRegex(RuntimeError, 'probe failed'):
                 sync_misub_runtime_sources.run_runtime_audit(

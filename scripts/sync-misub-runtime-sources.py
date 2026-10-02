@@ -101,7 +101,9 @@ def run_runtime_audit(
     # Docker may leave root-owned database files in the bind mount on Linux.
     # Best-effort diagnostic cleanup must not discard a successful audit result;
     # the audit subprocess still removes its secret config and stops its container.
-    with tempfile.TemporaryDirectory(prefix="easyproxy-misub-audit-", ignore_cleanup_errors=True) as temp_dir:
+    temporary = tempfile.TemporaryDirectory(prefix="easyproxy-misub-audit-", ignore_cleanup_errors=True)
+    temp_dir = temporary.name
+    try:
         output_path = Path(temp_dir) / "summary.json"
         command = [
             sys.executable,
@@ -129,6 +131,13 @@ def run_runtime_audit(
             raise RuntimeError(f"runtime audit failed: {stderr}")
 
         return json.loads(output_path.read_text(encoding="utf-8"))
+    finally:
+        try:
+            temporary.cleanup()
+        except OSError:
+            # Python 3.12 can still raise while resetting root-owned directory
+            # permissions, before its ignore_cleanup_errors handler is reached.
+            print("Warning: audit diagnostics retained because Docker-owned files could not be cleaned up", file=sys.stderr)
 
 
 def build_runtime_source(uri: str, source_id: str, source_group: str, note: str, generated_at: str) -> dict[str, Any]:
