@@ -4,6 +4,7 @@
 import json
 from pathlib import Path
 import re
+import secrets
 import subprocess
 import sys
 import tempfile
@@ -136,7 +137,7 @@ def scan(scope):
             # globally allowed test/Markdown path. Never emit the token/report.
             canary = directory / "canary"
             canary.mkdir()
-            token = "ghp_" + "8A7b6C5d4E3f2G1h0I9j8K7l6M5n4O3p2Q1r"
+            token = "ghp_" + secrets.token_hex(18)
             (canary / "test.md").write_text(token, encoding="utf-8")
             run_quiet(command + [str(canary)])
             probe = json.loads(output.read_text(encoding="utf-8"))
