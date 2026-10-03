@@ -101,6 +101,49 @@ def classify_audit(result, returncode):
     return 'unknown'
 
 
+def read_audit_verdict(summary, returncode):
+    # All values emitted here are fixed enums, booleans or the numeric process status.
+    diagnostic = {
+        'maintenance_stage': 'audit-summary-diagnostic',
+        'returncode': returncode if type(returncode) is int else None,
+        'summary_state': 'read-error',
+        'nodes_object': False,
+        'pool_probe_object': False,
+        'stable_evidence_present': False,
+        'error_present': False,
+        'verdict': 'not-evaluated',
+    }
+    try:
+        try:
+            content = summary.read_text(encoding='utf-8')
+        except FileNotFoundError:
+            diagnostic['summary_state'] = 'missing'
+            raise
+        except UnicodeDecodeError:
+            diagnostic['summary_state'] = 'invalid-encoding'
+            raise
+        diagnostic['summary_state'] = 'invalid-json'
+        result = json.loads(content)
+        diagnostic['summary_state'] = 'invalid-shape'
+        if not isinstance(result, dict):
+            raise RuntimeError('audit did not complete')
+        nodes = result.get('nodes')
+        diagnostic['nodes_object'] = isinstance(nodes, dict)
+        diagnostic['pool_probe_object'] = isinstance(result.get('pool_probe'), dict)
+        diagnostic['stable_evidence_present'] = isinstance(nodes, dict) and any(
+            key in nodes for key in ('stable_available_uris', 'stable_available_count'))
+        diagnostic['error_present'] = 'error' in result
+        try:
+            verdict = classify_audit(result, returncode)
+        except (AttributeError, TypeError, ValueError):
+            raise RuntimeError('audit did not complete') from None
+        diagnostic['summary_state'] = 'parsed'
+        diagnostic['verdict'] = verdict if verdict in ('healthy', 'unavailable', 'unknown') else 'not-evaluated'
+        return verdict
+    finally:
+        print(json.dumps(diagnostic), flush=True)
+
+
 def audit_nodes(url, args):
     stage('audit-temp-create')
     state = AuditState()
@@ -119,8 +162,7 @@ def audit_nodes(url, args):
         stage('audit-run')
         returncode = run_audit(command, args.audit_timeout + 1200)
         stage('audit-summary-read')
-        result = json.loads(summary.read_text(encoding='utf-8'))
-        verdict = classify_audit(result, returncode)
+        verdict = read_audit_verdict(summary, returncode)
         if not ((returncode == 0 and verdict == 'healthy')
                 or (returncode == 2 and verdict == 'unavailable')):
             raise RuntimeError('audit did not complete')
@@ -135,8 +177,10 @@ def audit_nodes(url, args):
         if not termination_unconfirmed:
             stage('audit-state-cleanup')
             state.cleanup()
+            stage('audit-state-cleanup-complete')
             stage('audit-temp-cleanup')
             shutil.rmtree(tmp)
+            stage('audit-temp-cleanup-complete')
     stage('audit-complete')
     return verdict
 
