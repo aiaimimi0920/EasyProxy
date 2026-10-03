@@ -7,6 +7,7 @@ import copy
 import json
 import os
 import signal
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -25,29 +26,43 @@ def stage(name):
     print(json.dumps({'maintenance_stage': name}), flush=True)
 
 
+class AuditTerminationUnconfirmed(RuntimeError):
+    """The audit may still be using its files and Docker resources."""
+
+
 def run_audit(command, timeout):
     if sys.platform != 'linux':
         raise RuntimeError('maintenance audit requires Linux process groups')
     # No Popen context manager: its __exit__ would wait without a deadline.
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                start_new_session=True)
+    termination_confirmed = False
     try:
         try:
             process.communicate(timeout=timeout)
+            termination_confirmed = True
         except BaseException:
             try:
                 os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
+            except BaseException:
+                raise AuditTerminationUnconfirmed('audit termination was not confirmed') from None
             try:
                 process.communicate(timeout=30)
-            except subprocess.TimeoutExpired:
-                raise RuntimeError('audit process group termination was not confirmed') from None
+                termination_confirmed = True
+            except BaseException:
+                raise AuditTerminationUnconfirmed('audit termination was not confirmed') from None
             raise
         return process.returncode
     finally:
-        process.stdout.close()
-        process.stderr.close()
+        try:
+            process.stdout.close()
+            process.stderr.close()
+        finally:
+            # Even a pipe-close error must not erase the unsafe-to-clean state.
+            if not termination_confirmed:
+                raise AuditTerminationUnconfirmed('audit termination was not confirmed') from None
 
 
 def is_managed(source):
@@ -88,31 +103,40 @@ def classify_audit(result, returncode):
 
 def audit_nodes(url, args):
     stage('audit-temp-create')
-    with tempfile.TemporaryDirectory(prefix='misub-retirement-', dir=args.work_dir) as tmp:
+    state = AuditState()
+    # Explicit lifetime: TemporaryDirectory's finalizer must not remove live files.
+    tmp = tempfile.mkdtemp(prefix=state.audit_id + '-', dir=args.work_dir)
+    termination_unconfirmed = False
+    try:
         summary = Path(tmp) / 'summary.json'
-        state = AuditState()
         command = [sys.executable, str(Path(__file__).with_name('easyproxy_source_audit.py')),
                    '--audit-id', state.audit_id, '--maintenance-state-owner', state.owner,
                    '--image', args.image, '--build-if-missing',
                    '--subscription', url, '--output-path', str(summary), '--artifact-dir', tmp,
                    '--scenario-timeout-seconds', str(args.audit_timeout), '--docker-network-name', 'EasyProxyMaintenance']
-        try:
-            stage('audit-state-create')
-            state.create()
-            stage('audit-run')
-            returncode = run_audit(command, args.audit_timeout + 1200)
-            stage('audit-summary-read')
-            result = json.loads(summary.read_text(encoding='utf-8'))
-            verdict = classify_audit(result, returncode)
-            if not ((returncode == 0 and verdict == 'healthy')
-                    or (returncode == 2 and verdict == 'unavailable')):
-                raise RuntimeError('audit did not complete')
-        except (OSError, ValueError, subprocess.TimeoutExpired):
-            raise RuntimeError('audit did not complete') from None
-        finally:
+        stage('audit-state-create')
+        state.create()
+        stage('audit-run')
+        returncode = run_audit(command, args.audit_timeout + 1200)
+        stage('audit-summary-read')
+        result = json.loads(summary.read_text(encoding='utf-8'))
+        verdict = classify_audit(result, returncode)
+        if not ((returncode == 0 and verdict == 'healthy')
+                or (returncode == 2 and verdict == 'unavailable')):
+            raise RuntimeError('audit did not complete')
+    except AuditTerminationUnconfirmed:
+        termination_unconfirmed = True
+        print(json.dumps({'maintenance_stage': 'audit-termination-unconfirmed-resources-retained',
+                          'audit_owner': state.owner}), flush=True)
+        raise
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        raise RuntimeError('audit did not complete') from None
+    finally:
+        if not termination_unconfirmed:
             stage('audit-state-cleanup')
             state.cleanup()
             stage('audit-temp-cleanup')
+            shutil.rmtree(tmp)
     stage('audit-complete')
     return verdict
 

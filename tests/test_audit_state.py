@@ -108,7 +108,10 @@ def test_audit_exception_never_returns_a_deletion_verdict(tmp_path, failure, cap
         with pytest.raises(RuntimeError):
             maintenance.audit_nodes('https://sensitive.invalid/token', SimpleNamespace(work_dir=tmp_path, image='synthetic', audit_timeout=1))
     state.cleanup.assert_called_once()
-    assert not list(tmp_path.iterdir())
+    if failure == 'cleanup':
+        assert list(tmp_path.iterdir())  # Failed resource cleanup must preserve its files.
+    else:
+        assert not list(tmp_path.iterdir())
     assert 'sensitive' not in capsys.readouterr().out
 
 
@@ -145,7 +148,7 @@ def test_audit_subprocess_timeout_terminates_before_return(kill_wait_timeout):
             patch.object(maintenance.signal, 'SIGKILL', 9, create=True), \
             patch.object(maintenance.subprocess, 'Popen', return_value=process), \
             patch.object(maintenance.os, 'killpg', create=True) as killpg:
-        with pytest.raises(RuntimeError if kill_wait_timeout else subprocess.TimeoutExpired):
+        with pytest.raises(maintenance.AuditTerminationUnconfirmed if kill_wait_timeout else subprocess.TimeoutExpired):
             maintenance.run_audit(['synthetic'], 1)
     killpg.assert_called_once_with(process.pid, 9)
     assert process.communicate.call_count == 2
@@ -285,3 +288,60 @@ def test_expected_negative_exit_requires_successful_finally(tmp_path, monkeypatc
     summary = json.loads((tmp_path / 'summary.json').read_text())
     assert summary['error'] == 'proxy lease output failed across all shared probe targets'
     assert maintenance.classify_audit(summary, 1 if cleanup_error else 2) == ('unknown' if cleanup_error else 'unavailable')
+
+
+@pytest.mark.parametrize('failure_mode', ['wait-timeout', 'kill-error', 'pipe-error'])
+def test_unconfirmed_termination_retains_resources_and_blocks_all_deletions(tmp_path, monkeypatch, capsys, failure_mode):
+    import gc
+    monkeypatch.setenv('MISUB_ADMIN_PASSWORD', 'synthetic-secret')
+    monkeypatch.setattr(sys, 'argv', ['maintenance', '--apply', '--base-url', 'https://synthetic.invalid',
+                                    '--work-dir', str(tmp_path)])
+    admin, public = Mock(), Mock()
+    admin.headers = {}
+    admin.post.return_value.json.return_value = {'success': True}
+    data = {'misubs': [{'id': name, 'kind': 'subscription', 'enabled': False,
+                       'options': {'managed_by': 'aggregator_sync'}} for name in ('first', 'second')], 'profiles': []}
+    data_response, settings_response = Mock(), Mock()
+    data_response.json.return_value = data
+    settings_response.json.return_value = {'aggregatorSync': {'sourceUrl': 'https://synthetic.invalid/discovery'}}
+    admin.get.side_effect = lambda url, **kwargs: settings_response if url.endswith('/settings') else data_response
+    public.get.return_value.json.return_value = {}
+    state = Mock(owner='f' * 32, audit_id='misub-retirement-' + 'f' * 32)
+    process = Mock(pid=123456)
+    process.communicate.side_effect = [subprocess.TimeoutExpired('synthetic', 1), subprocess.TimeoutExpired('synthetic', 30)]
+    if failure_mode == 'pipe-error':
+        process.stdout.close.side_effect = OSError('synthetic close error')
+    retained = []
+
+    def start_process(command, **kwargs):
+        directory = Path(command[command.index('--artifact-dir') + 1])
+        (directory / 'config.yaml').write_text('synthetic state still in use')
+        retained.append(directory)
+        return process
+
+    def probe(source, session, args):
+        if source['id'] == 'first':
+            return 'unavailable', ['unavailable', 'unavailable']
+        return maintenance.audit_nodes('https://synthetic.invalid', args), []
+
+    with patch.object(maintenance.sys, 'platform', 'linux'), \
+            patch.object(maintenance.signal, 'SIGKILL', 9, create=True), \
+            patch.object(maintenance.requests, 'Session', side_effect=[admin, public]), \
+            patch.object(maintenance, 'AuditState', return_value=state), \
+            patch.object(maintenance, 'probe_source', side_effect=probe), \
+            patch.object(maintenance.subprocess, 'Popen', side_effect=start_process), \
+            patch.object(maintenance.os, 'killpg', create=True, side_effect=OSError('synthetic kill error') if failure_mode == 'kill-error' else None), \
+            patch.object(maintenance.shutil, 'rmtree') as rmtree:
+        with pytest.raises(maintenance.AuditTerminationUnconfirmed):
+            maintenance.main()
+        gc.collect()  # No TemporaryDirectory finalizer may delete the retained tree.
+        rmtree.assert_not_called()
+    state.cleanup.assert_not_called()
+    assert len(retained) == 1 and (retained[0] / 'config.yaml').read_text() == 'synthetic state still in use'
+    assert [call.args[0] for call in admin.post.call_args_list] == ['https://synthetic.invalid/api/login']
+    process.wait.assert_not_called()
+    output = capsys.readouterr().out
+    assert 'audit-termination-unconfirmed-resources-retained' in output
+    assert state.owner in output
+    assert all(marker not in output for marker in ('audit-complete', 'audit-state-cleanup', 'audit-temp-cleanup', 'patch-apply'))
+    assert 'synthetic-secret' not in output
