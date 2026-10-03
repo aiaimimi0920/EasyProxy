@@ -1,0 +1,34 @@
+name: Discovery Audit State
+
+'on':
+  pull_request:
+    paths:
+      - '.github/workflows/discovery-audit-state.yml'
+      - 'scripts/*audit*'
+      - 'scripts/maintain-misub-discovery.py'
+      - 'tests/*audit*'
+      - 'tests/test_maintain_misub_discovery.py'
+      - 'deploy/service/base/docker-entrypoint.sh'
+
+permissions:
+  contents: read
+
+jobs:
+  isolation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12.14'
+      - name: Install existing test dependencies
+        # Dependencies are the repository's existing test pins; no production secrets.
+        run: python -m pip install -r requirements-ci.txt
+      - name: Check ownership guards and fail-closed maintenance
+        run: python -m pytest -q tests/test_audit_state.py tests/test_maintain_misub_discovery.py
+      - name: Reproduce old failure and validate owned-volume lifecycle
+        run: python scripts/validate-audit-state-docker.py

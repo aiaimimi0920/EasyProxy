@@ -47,7 +47,8 @@ def test_runtime_failure_must_not_be_infrastructure_failure():
     failed = {'nodes': {'total_nodes': 3, 'available_nodes': 0}, 'error': 'proxy lease output failed across all shared probe targets'}
     assert maintenance.classify_audit(failed, 1) == 'unknown'
     failed['pool_probe'] = {'attempts': [{'exit_code': 7, 'stderr': 'URLError'}]}
-    assert maintenance.classify_audit(failed, 1) == 'unavailable'
+    assert maintenance.classify_audit(failed, 1) == 'unknown'
+    assert maintenance.classify_audit(failed, 2) == 'unavailable'
 
 
 def test_delete_requires_two_failures_and_any_healthy_result_preserves():

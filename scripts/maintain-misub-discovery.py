@@ -6,14 +6,63 @@ import argparse
 import copy
 import json
 import os
+import signal
+import shutil
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import time
-import uuid
 
 import requests
+
+try:
+    from scripts.easyproxy_audit_state import AuditState
+except ImportError:
+    from easyproxy_audit_state import AuditState
+
+
+def stage(name):
+    print(json.dumps({'maintenance_stage': name}), flush=True)
+
+
+class AuditTerminationUnconfirmed(RuntimeError):
+    """The audit may still be using its files and Docker resources."""
+
+
+def run_audit(command, timeout):
+    if sys.platform != 'linux':
+        raise RuntimeError('maintenance audit requires Linux process groups')
+    # No Popen context manager: its __exit__ would wait without a deadline.
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               start_new_session=True)
+    termination_confirmed = False
+    try:
+        try:
+            process.communicate(timeout=timeout)
+            termination_confirmed = True
+        except BaseException:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except BaseException:
+                raise AuditTerminationUnconfirmed('audit termination was not confirmed') from None
+            try:
+                process.communicate(timeout=30)
+                termination_confirmed = True
+            except BaseException:
+                raise AuditTerminationUnconfirmed('audit termination was not confirmed') from None
+            raise
+        return process.returncode
+    finally:
+        try:
+            process.stdout.close()
+            process.stderr.close()
+        finally:
+            # Even a pipe-close error must not erase the unsafe-to-clean state.
+            if not termination_confirmed:
+                raise AuditTerminationUnconfirmed('audit termination was not confirmed') from None
 
 
 def is_managed(source):
@@ -37,7 +86,7 @@ def classify_response(response):
 def classify_audit(result, returncode):
     nodes = result.get('nodes') or {}
     if nodes.get('stable_available_uris') or nodes.get('stable_available_count', 0) > 0:
-        return 'healthy'
+        return 'healthy' if returncode == 0 and not result.get('error') else 'unknown'
     # 只接受已加载节点、完成网络探测后的明确失败，不接受容器启动/构建失败。
     attempts = (result.get('pool_probe') or {}).get('attempts') or []
     network_failures = attempts and all(
@@ -45,7 +94,7 @@ def classify_audit(result, returncode):
         ('URLError', 'TimeoutError', 'ConnectionResetError', 'RemoteDisconnected')
         for item in attempts
     )
-    if (returncode != 0 and network_failures and nodes.get('total_nodes', 0) > 0
+    if (returncode == 2 and network_failures and nodes.get('total_nodes', 0) > 0
             and result.get('error') == 'proxy lease output failed across all shared probe targets'
             and nodes.get('available_nodes', 0) == 0):
         return 'unavailable'
@@ -53,23 +102,43 @@ def classify_audit(result, returncode):
 
 
 def audit_nodes(url, args):
-    with tempfile.TemporaryDirectory(prefix='misub-retirement-', dir=args.work_dir, ignore_cleanup_errors=True) as tmp:
+    stage('audit-temp-create')
+    state = AuditState()
+    # Explicit lifetime: TemporaryDirectory's finalizer must not remove live files.
+    tmp = tempfile.mkdtemp(prefix=state.audit_id + '-', dir=args.work_dir)
+    termination_unconfirmed = False
+    try:
         summary = Path(tmp) / 'summary.json'
-        audit_id = 'misub-retirement-' + uuid.uuid4().hex[:10]
         command = [sys.executable, str(Path(__file__).with_name('easyproxy_source_audit.py')),
-                   '--audit-id', audit_id, '--image', args.image, '--build-if-missing',
+                   '--audit-id', state.audit_id, '--maintenance-state-owner', state.owner,
+                   '--image', args.image, '--build-if-missing',
                    '--subscription', url, '--output-path', str(summary), '--artifact-dir', tmp,
                    '--scenario-timeout-seconds', str(args.audit_timeout), '--docker-network-name', 'EasyProxyMaintenance']
-        try:
-            run = subprocess.run(command, capture_output=True, timeout=args.audit_timeout + 1200)
-            result = json.loads(summary.read_text(encoding='utf-8')) if summary.exists() else {}
-            return classify_audit(result, run.returncode)
-        except (OSError, ValueError, subprocess.TimeoutExpired):
-            return 'unknown'
-        finally:
-            # 只清理本次唯一命名的审核容器，不接触生产网关。
-            subprocess.run(['docker', 'rm', '-f', 'easyproxy-source-audit-' + audit_id],
-                           capture_output=True, check=False)
+        stage('audit-state-create')
+        state.create()
+        stage('audit-run')
+        returncode = run_audit(command, args.audit_timeout + 1200)
+        stage('audit-summary-read')
+        result = json.loads(summary.read_text(encoding='utf-8'))
+        verdict = classify_audit(result, returncode)
+        if not ((returncode == 0 and verdict == 'healthy')
+                or (returncode == 2 and verdict == 'unavailable')):
+            raise RuntimeError('audit did not complete')
+    except AuditTerminationUnconfirmed:
+        termination_unconfirmed = True
+        print(json.dumps({'maintenance_stage': 'audit-termination-unconfirmed-resources-retained',
+                          'audit_owner': state.owner}), flush=True)
+        raise
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        raise RuntimeError('audit did not complete') from None
+    finally:
+        if not termination_unconfirmed:
+            stage('audit-state-cleanup')
+            state.cleanup()
+            stage('audit-temp-cleanup')
+            shutil.rmtree(tmp)
+    stage('audit-complete')
+    return verdict
 
 
 def probe_source(source, session, args):
@@ -131,10 +200,13 @@ def main():
     parser.add_argument('--only-disabled', action='store_true')
     parser.add_argument('--remove-retired-ech-profile', action='store_true')
     args = parser.parse_args()
+    if sys.platform != 'linux':
+        raise RuntimeError('discovery maintenance requires Linux')
     base = args.base_url.rstrip('/')
     admin = requests.Session()
     admin.headers['Origin'] = base
     password = os.environ['MISUB_ADMIN_PASSWORD']
+    stage('management-login')
     r = admin.post(base + '/api/login', json={'password': password}, timeout=30)
     r.raise_for_status()
     assert r.json().get('success') is True
@@ -142,12 +214,14 @@ def main():
     def get_data():
         r = admin.get(base + '/api/data', timeout=30); r.raise_for_status(); return r.json()
 
+    stage('management-read')
     data = get_data()
     settings = admin.get(base + '/api/settings', timeout=30); settings.raise_for_status()
     sync = settings.json().get('aggregatorSync', {})
     discovery_url = sync.get('sourceUrl')
     # 外部探测使用独立 Session，绝不转发 MiSub Cookie 或认证头。
     public = requests.Session()
+    stage('discovery-read')
     remote = public.get(discovery_url, timeout=30); remote.raise_for_status()
     remote = remote.json()
     assert isinstance(remote, dict), 'Invalid discovery export; refuse cleanup'
@@ -156,21 +230,26 @@ def main():
                        and (x.get('input') or x.get('url')) not in remote))]
     verdicts, evidence = {}, []
     for source in candidates:
+        stage('source-probe')
         verdict, checks = probe_source(source, public, args)
         verdicts[source['id']] = verdict
         row = {'id': source['id'], 'verdict': verdict, 'checks': checks}
         evidence.append(row)
         print(json.dumps(row), flush=True)
+    stage('patch-plan')
     patch = build_patch(data, verdicts, args.remove_retired_ech_profile)
     if args.apply and any(patch[k][field] for k in patch for field in patch[k]):
+        stage('concurrency-check')
         current = get_data()
         assert current['misubs'] == data['misubs'] and current['profiles'] == data['profiles'], 'Concurrent edit; refuse stale patch'
         # 删除独立 ECH 组之前必须确认 global 仍引用同一个受管 ECH 来源。
         if patch['profiles']['removed']:
             global_profile = next(p for p in data['profiles'] if p.get('customId') == 'aggregator-global')
             assert any(x.startswith('conn_ech_workers_pref_') for x in global_profile.get('manualNodes', []))
+        stage('patch-apply')
         r = admin.post(base + '/api/misubs', json={'diff': patch}, timeout=90)
         r.raise_for_status(); assert r.json().get('success') is True
+        stage('patch-verify')
         after = get_data()
         assert not set(patch['subscriptions']['removed']).intersection(x['id'] for x in after['misubs'])
         assert not set(patch['profiles']['removed']).intersection(x['id'] for x in after['profiles'])

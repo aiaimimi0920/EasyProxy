@@ -16,6 +16,11 @@ import requests
 import yaml
 
 try:
+    from .easyproxy_audit_state import AuditState
+except ImportError:
+    from easyproxy_audit_state import AuditState
+
+try:
     from .easyproxy_source_audit_probe import (
         checkout_proxy_lease,
         collect_container_networks,
@@ -78,6 +83,10 @@ except ImportError:
         write_json_file,
     )
 
+class AuditProbeUnavailable(RuntimeError):
+    """Expected probe failure; maintenance uses exit 2 only after finally succeeds."""
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run a shared EasyProxy-backed availability audit for subscriptions, proxies, and manifest sources.")
     parser.add_argument("--audit-id", default=f"audit-{time.strftime('%Y%m%d-%H%M%S')}")
@@ -102,10 +111,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--require-stable-node-proxies", type=int, default=1)
     parser.add_argument("--keep-artifacts", action="store_true")
     parser.add_argument("--skip-cleanup", action="store_true")
+    parser.add_argument("--maintenance-state-owner", default="")
     return parser.parse_args()
 
 def main() -> int:
     args = parse_args()
+    owned_state = AuditState(args.maintenance_state_owner) if args.maintenance_state_owner else None
+    if owned_state and (args.audit_id != owned_state.audit_id or args.skip_cleanup or args.keep_artifacts):
+        raise ValueError('invalid maintenance audit lifecycle')
     ensure_docker()
     policy = load_policy()
 
@@ -131,7 +144,8 @@ def main() -> int:
     artifact_dir.mkdir(parents=True, exist_ok=True)
     config_path = artifact_dir / "config.yaml"
     data_dir = artifact_dir / "data"
-    data_dir.mkdir(parents=True, exist_ok=True)
+    if not owned_state:
+        data_dir.mkdir(parents=True, exist_ok=True)
 
     effective_image = ensure_image(args.image, args.build_if_missing, args.audit_id)
     multi_port_base = get_free_port_range_start(34000 + random.randint(0, 20) * 100, 81)
@@ -155,7 +169,8 @@ def main() -> int:
     management_port = get_free_port()
     pool_port = get_free_port()
     container_name = f"easyproxy-source-audit-{args.audit_id}".lower().replace("_", "-")
-    stop_container(container_name)
+    if not owned_state:
+        stop_container(container_name)
 
     try:
         if args.docker_network_name.strip():
@@ -173,11 +188,18 @@ def main() -> int:
             f"{pool_port}:22323",
             "--env",
             "EASY_PROXY_RUN_AS_ROOT=1",
-            "-v",
-            f"{data_dir.resolve()}:/var/lib/easyproxy",
+        ]
+        if owned_state:
+            docker_args.extend(owned_state.mount_args())
+        else:
+            docker_args.extend([
+                "-v",
+                f"{data_dir.resolve()}:/var/lib/easyproxy",
+            ])
+        docker_args.extend([
             "-v",
             f"{config_path.resolve()}:/var/lib/easyproxy/config/config.yaml",
-        ]
+        ])
         if args.docker_network_name.strip():
             docker_args.extend(["--network", args.docker_network_name.strip()])
         for dns_server in dns_servers:
@@ -346,7 +368,7 @@ def main() -> int:
             time.sleep(8)
 
         if not compat_probe["ok"]:
-            raise RuntimeError("proxy lease output failed across all shared probe targets")
+            raise AuditProbeUnavailable("proxy lease output failed across all shared probe targets")
         if len(stable_uris) < minimum_available_nodes:
             raise RuntimeError(
                 f"stable direct proxy count {len(stable_uris)} is lower than required minimum available nodes {minimum_available_nodes}"
@@ -402,6 +424,7 @@ def main() -> int:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0
     except Exception as exc:
+        expected_negative = owned_state is not None and isinstance(exc, AuditProbeUnavailable)
         debug_payload = {
             "audit_id": args.audit_id,
             "validated_image": effective_image,
@@ -433,17 +456,22 @@ def main() -> int:
         try:
             write_json_file(summary_path, debug_payload)
         except Exception:
-            pass
+            expected_negative = False
         logs_path = artifact_dir / "docker.log"
         try:
             logs = run(["docker", "logs", container_name], capture=True, check=False)
             logs_path.write_text((logs.stdout or "") + (logs.stderr or ""), encoding="utf-8")
+            if logs.returncode != 0:
+                expected_negative = False
         except Exception:
-            pass
+            expected_negative = False
+        if expected_negative:
+            # The finally block must finish before this exit code reaches the parent.
+            return 2
         raise
     finally:
         config_path.unlink(missing_ok=True)
-        if not args.skip_cleanup:
+        if not args.skip_cleanup and not owned_state:
             stop_container(container_name)
         if not args.keep_artifacts:
             # The secret-bearing config is always removed; other diagnostics may remain.
