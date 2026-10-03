@@ -26,22 +26,28 @@ def stage(name):
 
 
 def run_audit(command, timeout):
-    # Terminate the audit's own process group before reclaiming its Docker state.
-    with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                          start_new_session=os.name == 'posix') as process:
+    if sys.platform != 'linux':
+        raise RuntimeError('maintenance audit requires Linux process groups')
+    # No Popen context manager: its __exit__ would wait without a deadline.
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               start_new_session=True)
+    try:
         try:
             process.communicate(timeout=timeout)
         except BaseException:
-            if os.name == 'posix':
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-            else:
-                process.kill()
-            process.communicate(timeout=30)
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            try:
+                process.communicate(timeout=30)
+            except subprocess.TimeoutExpired:
+                raise RuntimeError('audit process group termination was not confirmed') from None
             raise
         return process.returncode
+    finally:
+        process.stdout.close()
+        process.stderr.close()
 
 
 def is_managed(source):
@@ -65,7 +71,7 @@ def classify_response(response):
 def classify_audit(result, returncode):
     nodes = result.get('nodes') or {}
     if nodes.get('stable_available_uris') or nodes.get('stable_available_count', 0) > 0:
-        return 'healthy'
+        return 'healthy' if returncode == 0 and not result.get('error') else 'unknown'
     # 只接受已加载节点、完成网络探测后的明确失败，不接受容器启动/构建失败。
     attempts = (result.get('pool_probe') or {}).get('attempts') or []
     network_failures = attempts and all(
@@ -73,7 +79,7 @@ def classify_audit(result, returncode):
         ('URLError', 'TimeoutError', 'ConnectionResetError', 'RemoteDisconnected')
         for item in attempts
     )
-    if (returncode != 0 and network_failures and nodes.get('total_nodes', 0) > 0
+    if (returncode == 2 and network_failures and nodes.get('total_nodes', 0) > 0
             and result.get('error') == 'proxy lease output failed across all shared probe targets'
             and nodes.get('available_nodes', 0) == 0):
         return 'unavailable'
@@ -98,7 +104,8 @@ def audit_nodes(url, args):
             stage('audit-summary-read')
             result = json.loads(summary.read_text(encoding='utf-8'))
             verdict = classify_audit(result, returncode)
-            if returncode != 0 and verdict == 'unknown':
+            if not ((returncode == 0 and verdict == 'healthy')
+                    or (returncode == 2 and verdict == 'unavailable')):
                 raise RuntimeError('audit did not complete')
         except (OSError, ValueError, subprocess.TimeoutExpired):
             raise RuntimeError('audit did not complete') from None
@@ -169,6 +176,8 @@ def main():
     parser.add_argument('--only-disabled', action='store_true')
     parser.add_argument('--remove-retired-ech-profile', action='store_true')
     args = parser.parse_args()
+    if sys.platform != 'linux':
+        raise RuntimeError('discovery maintenance requires Linux')
     base = args.base_url.rstrip('/')
     admin = requests.Session()
     admin.headers['Origin'] = base

@@ -5,6 +5,7 @@ import subprocess
 import sys
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
+from contextlib import ExitStack
 
 import pytest
 
@@ -124,7 +125,8 @@ def test_later_cleanup_failure_prevents_all_pending_deletions(monkeypatch, capsy
     settings_response.json.return_value = {'aggregatorSync': {'sourceUrl': 'https://synthetic.invalid/discovery'}}
     admin.get.side_effect = [data_response, settings_response]
     public.get.return_value.json.return_value = {}
-    with patch.object(maintenance.requests, 'Session', side_effect=[admin, public]), \
+    with patch.object(maintenance.sys, 'platform', 'linux'), \
+            patch.object(maintenance.requests, 'Session', side_effect=[admin, public]), \
             patch.object(maintenance, 'probe_source', side_effect=[('unavailable', []), RuntimeError('cleanup failed')]):
         with pytest.raises(RuntimeError, match='cleanup failed'):
             maintenance.main()
@@ -133,22 +135,36 @@ def test_later_cleanup_failure_prevents_all_pending_deletions(monkeypatch, capsy
     assert 'patch-apply' not in output and 'synthetic-secret' not in output
 
 
-def test_audit_subprocess_timeout_terminates_before_return():
+@pytest.mark.parametrize('kill_wait_timeout', [False, True])
+def test_audit_subprocess_timeout_terminates_before_return(kill_wait_timeout):
     process = Mock()
-    process.communicate.side_effect = [subprocess.TimeoutExpired('synthetic', 1), (b'', b'')]
+    process.communicate.side_effect = [subprocess.TimeoutExpired('synthetic', 1),
+                                      subprocess.TimeoutExpired('synthetic', 30) if kill_wait_timeout else (b'', b'')]
     process.pid = 123456
-    context = Mock()
-    context.__enter__ = Mock(return_value=process)
-    context.__exit__ = Mock(return_value=False)
-    with patch.object(maintenance.subprocess, 'Popen', return_value=context), \
+    with patch.object(maintenance.sys, 'platform', 'linux'), \
+            patch.object(maintenance.signal, 'SIGKILL', 9, create=True), \
+            patch.object(maintenance.subprocess, 'Popen', return_value=process), \
             patch.object(maintenance.os, 'killpg', create=True) as killpg:
-        with pytest.raises(subprocess.TimeoutExpired):
+        with pytest.raises(RuntimeError if kill_wait_timeout else subprocess.TimeoutExpired):
             maintenance.run_audit(['synthetic'], 1)
-    if maintenance.os.name == 'posix':
-        killpg.assert_called_once_with(process.pid, maintenance.signal.SIGKILL)
-    else:
-        process.kill.assert_called_once()
+    killpg.assert_called_once_with(process.pid, 9)
     assert process.communicate.call_count == 2
+    process.wait.assert_not_called()
+    process.stdout.close.assert_called_once()
+    process.stderr.close.assert_called_once()
+
+
+def test_non_linux_maintenance_fails_before_requests_or_process_launch(monkeypatch):
+    monkeypatch.setattr(sys, 'argv', ['maintenance', '--apply'])
+    with patch.object(maintenance.sys, 'platform', 'win32'), \
+            patch.object(maintenance.requests, 'Session') as session, \
+            patch.object(maintenance.subprocess, 'Popen') as popen:
+        with pytest.raises(RuntimeError, match='requires Linux'):
+            maintenance.main()
+        with pytest.raises(RuntimeError, match='requires Linux'):
+            maintenance.run_audit(['synthetic'], 1)
+    session.assert_not_called()
+    popen.assert_not_called()
 
 
 def test_shared_audit_mounts_owned_volume_without_legacy_container_removal(tmp_path, monkeypatch):
@@ -187,3 +203,85 @@ def test_shared_audit_rejects_keep_state_flags(monkeypatch):
             with pytest.raises(ValueError, match='lifecycle'):
                 audit.main()
         ensure.assert_not_called()
+
+
+@pytest.mark.parametrize('summary', [
+    {'nodes': {'stable_available_count': 1}, 'error': 'container did not join expected docker network'},
+    {'nodes': {'stable_available_uris': ['ss://synthetic']}},
+    {'nodes': {'total_nodes': 1, 'available_nodes': 0},
+     'pool_probe': {'attempts': [{'exit_code': 7, 'stderr': 'URLError'}]},
+     'error': 'proxy lease output failed across all shared probe targets'},
+])
+def test_nonzero_exit_blocks_all_pending_deletions_even_with_completed_summary(tmp_path, monkeypatch, summary):
+    monkeypatch.setenv('MISUB_ADMIN_PASSWORD', 'synthetic-secret')
+    monkeypatch.setattr(sys, 'argv', ['maintenance', '--apply', '--base-url', 'https://synthetic.invalid',
+                                    '--work-dir', str(tmp_path)])
+    admin, public = Mock(), Mock()
+    admin.headers = {}
+    admin.post.return_value.json.return_value = {'success': True}
+    data = {'misubs': [{'id': name, 'kind': 'subscription', 'enabled': False,
+                       'options': {'managed_by': 'aggregator_sync'}} for name in ('first', 'second')], 'profiles': []}
+    data_response, settings_response = Mock(), Mock()
+    data_response.json.return_value = data
+    settings_response.json.return_value = {'aggregatorSync': {'sourceUrl': 'https://synthetic.invalid/discovery'}}
+    admin.get.side_effect = lambda url, **kwargs: settings_response if url.endswith('/settings') else data_response
+    public.get.return_value.json.return_value = {}
+    state = Mock(owner='d' * 32, audit_id='synthetic')
+
+    def audit(command, timeout):
+        Path(command[command.index('--output-path') + 1]).write_text(json.dumps(summary))
+        return 1  # Infrastructure error, including an exception after writing the summary.
+
+    def probe(source, session, args):
+        if source['id'] == 'first':
+            return 'unavailable', ['unavailable', 'unavailable']
+        return maintenance.audit_nodes('https://synthetic.invalid', args), []
+
+    with patch.object(maintenance.sys, 'platform', 'linux'), \
+            patch.object(maintenance.requests, 'Session', side_effect=[admin, public]), \
+            patch.object(maintenance, 'AuditState', return_value=state), \
+            patch.object(maintenance, 'run_audit', side_effect=audit), \
+            patch.object(maintenance, 'probe_source', side_effect=probe):
+        with pytest.raises(RuntimeError, match='did not complete'):
+            maintenance.main()
+    state.cleanup.assert_called_once()
+    assert [call.args[0] for call in admin.post.call_args_list] == ['https://synthetic.invalid/api/login']
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize('owned_mode,cleanup_error', [(True, False), (True, True), (False, False)])
+def test_expected_negative_exit_requires_successful_finally(tmp_path, monkeypatch, owned_mode, cleanup_error):
+    from scripts import easyproxy_source_audit as audit
+    state = resources.AuditState('e' * 32)
+    argv = ['audit', '--audit-id', state.audit_id, '--image', 'synthetic', '--subscription', 'https://synthetic.invalid',
+            '--artifact-dir', str(tmp_path), '--docker-network-name', '', '--scenario-timeout-seconds', '1']
+    if owned_mode:
+        argv.extend(['--maintenance-state-owner', state.owner])
+    monkeypatch.setattr(sys, 'argv', argv)
+    with ExitStack() as stack:
+        for name, value in {'ensure_docker': None, 'load_policy': {}, 'ensure_image': 'synthetic',
+                            'get_free_port': 12345, 'get_free_port_range_start': 34000,
+                            'build_config': {'synthetic': True}, 'wait_management_ready': {},
+                            'wait_scenario_state': {}, 'collect_container_networks': [],
+                            'fetch_nodes_and_source_sync': ({'total_nodes': 1, 'available_nodes': 0}, {}),
+                            'collect_direct_probe_candidates': [], 'discover_directly_usable_nodes': ([], []),
+                            'probe_http_proxy': {'ok': False, 'attempts': [{'exit_code': 7, 'stderr': 'URLError'}]},
+                            'stop_container': None}.items():
+            stack.enter_context(patch.object(audit, name, return_value=value))
+        stack.enter_context(patch.object(audit.requests, 'get', return_value=Mock(json=lambda: {})))
+        stack.enter_context(patch.object(audit.time, 'time', side_effect=[0, 0, 2]))
+        stack.enter_context(patch.object(audit.time, 'sleep'))
+        stack.enter_context(patch.object(audit, 'run', return_value=SimpleNamespace(returncode=0, stdout='', stderr='')))
+        stack.enter_context(patch.object(resources, 'docker', return_value=volume_info(state)))
+        if cleanup_error:
+            stack.enter_context(patch.object(Path, 'unlink', side_effect=PermissionError('synthetic cleanup failure')))
+            with pytest.raises(PermissionError):
+                audit.main()
+        elif owned_mode:
+            assert audit.main() == 2
+        else:
+            with pytest.raises(audit.AuditProbeUnavailable):
+                audit.main()  # Existing non-maintenance CLI still maps exceptions to exit 1.
+    summary = json.loads((tmp_path / 'summary.json').read_text())
+    assert summary['error'] == 'proxy lease output failed across all shared probe targets'
+    assert maintenance.classify_audit(summary, 1 if cleanup_error else 2) == ('unknown' if cleanup_error else 'unavailable')

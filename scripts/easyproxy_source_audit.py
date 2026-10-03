@@ -83,6 +83,10 @@ except ImportError:
         write_json_file,
     )
 
+class AuditProbeUnavailable(RuntimeError):
+    """Expected probe failure; maintenance uses exit 2 only after finally succeeds."""
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run a shared EasyProxy-backed availability audit for subscriptions, proxies, and manifest sources.")
     parser.add_argument("--audit-id", default=f"audit-{time.strftime('%Y%m%d-%H%M%S')}")
@@ -364,7 +368,7 @@ def main() -> int:
             time.sleep(8)
 
         if not compat_probe["ok"]:
-            raise RuntimeError("proxy lease output failed across all shared probe targets")
+            raise AuditProbeUnavailable("proxy lease output failed across all shared probe targets")
         if len(stable_uris) < minimum_available_nodes:
             raise RuntimeError(
                 f"stable direct proxy count {len(stable_uris)} is lower than required minimum available nodes {minimum_available_nodes}"
@@ -420,6 +424,7 @@ def main() -> int:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0
     except Exception as exc:
+        expected_negative = owned_state is not None and isinstance(exc, AuditProbeUnavailable)
         debug_payload = {
             "audit_id": args.audit_id,
             "validated_image": effective_image,
@@ -451,13 +456,18 @@ def main() -> int:
         try:
             write_json_file(summary_path, debug_payload)
         except Exception:
-            pass
+            expected_negative = False
         logs_path = artifact_dir / "docker.log"
         try:
             logs = run(["docker", "logs", container_name], capture=True, check=False)
             logs_path.write_text((logs.stdout or "") + (logs.stderr or ""), encoding="utf-8")
+            if logs.returncode != 0:
+                expected_negative = False
         except Exception:
-            pass
+            expected_negative = False
+        if expected_negative:
+            # The finally block must finish before this exit code reaches the parent.
+            return 2
         raise
     finally:
         config_path.unlink(missing_ok=True)

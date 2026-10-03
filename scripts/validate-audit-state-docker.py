@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -105,6 +106,7 @@ def validate_owned_state(image, root):
     spec = importlib.util.spec_from_file_location('maintenance', Path(__file__).with_name('maintain-misub-discovery.py'))
     maintenance = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(maintenance)
+    validate_real_process_timeout(maintenance, root)
     args = SimpleNamespace(work_dir=str(root), image=image, audit_timeout=1)
     for fail in (False, True):
         observed = []
@@ -138,6 +140,45 @@ def validate_owned_state(image, root):
         assert docker('container', 'ls', '-aq', '--filter', 'name=^/' + state.container + '$') == ''
         assert not list(root.glob('misub-retirement-*'))
         print('PASS owned-volume ' + ('timeout fails closed' if fail else 'success preserves verdict') + '; container, volume and temp files removed', flush=True)
+
+
+def validate_real_process_timeout(maintenance, root):
+    record = root / 'synthetic-processes.json'
+    descendant = 'import time; marker=' + repr(str(root)) + '; time.sleep(60)'
+    command = ('import subprocess,sys,os,json,time,pathlib; '
+               'child=subprocess.Popen([sys.executable,"-c",' + repr(descendant) + ']); '
+               'pathlib.Path(' + repr(str(record)) + ').write_text(json.dumps('
+               '{"parent":os.getpid(),"child":child.pid,"group":os.getpgrp()})); time.sleep(60)')
+    started = time.monotonic()
+    try:
+        try:
+            maintenance.run_audit([sys.executable, '-c', command], 2)
+        except subprocess.TimeoutExpired:
+            pass
+        else:
+            raise AssertionError('real synthetic process did not time out')
+        assert time.monotonic() - started < 10
+        pids = json.loads(record.read_text())
+        assert pids['group'] == pids['parent']
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            if all(not Path('/proc', str(pids[key])).exists() for key in ('parent', 'child')):
+                break
+            time.sleep(0.05)
+        assert all(not Path('/proc', str(pids[key])).exists() for key in ('parent', 'child'))
+        print('PASS real Linux audit timeout terminated parent and descendant; both PIDs disappeared', flush=True)
+    finally:
+        if record.exists():
+            pids = json.loads(record.read_text())
+            for key in ('parent', 'child'):
+                pid = pids[key]
+                try:
+                    cmdline = Path('/proc', str(pid), 'cmdline').read_bytes()
+                    if str(root).encode() in cmdline and os.getpgid(pid) == pids['group']:
+                        os.killpg(pids['group'], 9)
+                        break
+                except (FileNotFoundError, ProcessLookupError):
+                    pass
 
 
 if __name__ == '__main__':
