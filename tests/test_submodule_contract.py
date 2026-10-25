@@ -55,7 +55,7 @@ class SubmoduleContractTests(unittest.TestCase):
             "https://github.com/wzdnzd/proxy-manager.git",
         )
 
-    def test_every_actions_checkout_is_recursive(self) -> None:
+    def test_actions_checkout_is_recursive_except_pinned_sba_dispatcher(self) -> None:
         checkout_count = 0
         recursive_count = 0
         workflows = [
@@ -64,6 +64,13 @@ class SubmoduleContractTests(unittest.TestCase):
         ]
         for workflow in workflows:
             content = workflow.read_text(encoding="utf-8")
+            if workflow.name == "sba-aggregator-refresh.yml":
+                # 调度器不执行 main 的业务源码；批准 SHA 的 gitlinks 由 SBA 独立检出。
+                self.assertEqual(len(re.findall(r"uses:\s*actions/checkout@", content)), 1)
+                self.assertIn("submodules: false", content)
+                self.assertIn("persist-credentials: false", content)
+                self.assertIn("python -B -s .sba/schedule.py", content)
+                continue
             checkout_count += len(re.findall(r"uses:\s*actions/checkout@", content))
             recursive_count += len(re.findall(r"submodules:\s*recursive", content))
 

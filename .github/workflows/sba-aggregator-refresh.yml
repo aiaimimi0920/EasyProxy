@@ -1,0 +1,48 @@
+name: SBA Aggregator Refresh
+
+'on':
+  schedule:
+    - cron: '25 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    if: ${{ vars.EASYPROXY_SBA_REFRESH_REGISTRY != '' }}
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        environment: ${{ fromJSON(vars.EASYPROXY_SBA_REFRESH_REGISTRY || '{"environments":[]}').environments }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: ${{ matrix.environment }}
+    concurrency:
+      group: easyproxy-sba-refresh-${{ matrix.environment }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout dispatcher only
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          submodules: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Refresh committed production release
+        shell: bash
+        env:
+          EASYPROXY_SBA_ENVIRONMENT: ${{ matrix.environment }}
+          EASYPROXY_SBA_OWNER: ${{ vars.EASYPROXY_SBA_OWNER }}
+          EASYPROXY_SBA_CONFIG: ${{ vars.EASYPROXY_SBA_CONFIG }}
+          EASYPROXY_R2_ACCESS_KEY_ID: ${{ secrets.EASYPROXY_R2_ACCESS_KEY_ID }}
+          EASYPROXY_R2_SECRET_ACCESS_KEY: ${{ secrets.EASYPROXY_R2_SECRET_ACCESS_KEY }}
+          EASYPROXY_MISUB_ADMIN_PASSWORD: ${{ secrets.EASYPROXY_MISUB_ADMIN_PASSWORD }}
+          EASYPROXY_MANIFEST_TOKEN: ${{ secrets.EASYPROXY_MANIFEST_TOKEN }}
+          EASYPROXY_ECH_TOKEN: ${{ secrets.EASYPROXY_ECH_TOKEN }}
+          EASYPROXY_AGGREGATOR_SHARED_TOKEN: ${{ secrets.EASYPROXY_AGGREGATOR_SHARED_TOKEN }}
+          EASYPROXY_AGGREGATOR_ISSUE91_SUB_URL_B64: ${{ secrets.EASYPROXY_AGGREGATOR_ISSUE91_SUB_URL_B64 }}
+        run: python -B -s .sba/schedule.py

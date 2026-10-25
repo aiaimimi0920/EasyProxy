@@ -1,0 +1,2 @@
+# 精确哈希校验的 Linux 依赖锁在所有 checkout 中保持同一字节序列。
+.sba/requirements-linux.lock text eol=lf

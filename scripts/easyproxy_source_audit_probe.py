@@ -23,7 +23,7 @@ import urllib.error
 import urllib.request
 
 proxy_url, target_url, timeout = sys.argv[1:4]
-context = ssl._create_unverified_context()
+context = ssl.create_default_context()
 opener = urllib.request.build_opener(
     urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url}),
     urllib.request.HTTPSHandler(context=context),
@@ -186,8 +186,8 @@ def probe_http_proxy(proxy_url: str, policy: dict[str, Any], *, network_containe
                     raise RuntimeError("curl is required for proxy probing")
                 command = [
                     curl_name,
-                    "-s",
-                    "-k",
+                    "-q",
+                    "-sS",
                     "-o",
                     os.devnull,
                     "-w",

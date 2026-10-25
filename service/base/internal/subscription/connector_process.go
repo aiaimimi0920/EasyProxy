@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -94,13 +95,28 @@ func (i *connectorInstance) isRunning() bool {
 }
 
 func (m *connectorRuntimeManager) pipeLogs(name string, stream string, reader interface{ Read([]byte) (int, error) }) {
-	scanner := bufio.NewScanner(reader)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
+	// Bound memory and output per line, but keep draining oversized records so
+	// a verbose helper cannot block forever on its stdout/stderr pipe.
+	buffer := bufio.NewReaderSize(reader, 64*1024)
+	discarding := false
+	for {
+		chunk, err := buffer.ReadSlice('\n')
+		if !discarding {
+			line := strings.TrimSpace(string(chunk))
+			if errors.Is(err, bufio.ErrBufferFull) {
+				line += " [truncated]"
+			}
+			if line != "" {
+				m.logger.Infof("[connector:%s:%s] %s", name, stream, line)
+			}
 		}
-		m.logger.Infof("[connector:%s:%s] %s", name, stream, line)
+		discarding = errors.Is(err, bufio.ErrBufferFull)
+		if err != nil && !discarding {
+			if !errors.Is(err, io.EOF) {
+				m.logger.Warnf("[connector:%s:%s] log read failed: %v", name, stream, err)
+			}
+			return
+		}
 	}
 }
 

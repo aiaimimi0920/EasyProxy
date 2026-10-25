@@ -101,13 +101,18 @@ func runCloudBackup(args []string, stdout, stderr io.Writer) error {
 }
 
 func createCloudBackup(ctx context.Context, cloud protectedCloud, manifestPath, baseURL, output string, allowDirect bool) error {
+	_, err := createCloudBackupCaptured(ctx, cloud, manifestPath, baseURL, output, allowDirect)
+	return err
+}
+
+func createCloudBackupCaptured(ctx context.Context, cloud protectedCloud, manifestPath, baseURL, output string, allowDirect bool) (cloudflare.D1Snapshot, error) {
 	passphrase, err := requiredSecret(cloud.Topology.Secrets.MiSubBackupSecret)
 	if err != nil {
-		return err
+		return cloudflare.D1Snapshot{}, err
 	}
 	temporaryDir, err := os.MkdirTemp("", "easyproxy-misub-backup-*")
 	if err != nil {
-		return err
+		return cloudflare.D1Snapshot{}, err
 	}
 	defer os.RemoveAll(temporaryDir)
 	databasePath := filepath.Join(temporaryDir, backup.DatabaseFile)
@@ -118,35 +123,44 @@ func createCloudBackup(ctx context.Context, cloud protectedCloud, manifestPath, 
 	stable := false
 	for attempt := 1; attempt <= 3; attempt++ {
 		_ = os.Remove(databasePath)
+		beforeImage, err := cloud.D1.CapturePreservation(ctx, cloud.State.D1.Name)
+		if err != nil {
+			return cloudflare.D1Snapshot{}, err
+		}
 		before, err := cloud.D1.Snapshot(ctx, cloud.State.D1.Name)
 		if err != nil {
-			return err
+			return cloudflare.D1Snapshot{}, err
 		}
 		if err := cloud.D1.Export(ctx, cloud.State.D1.Name, databasePath); err != nil {
-			return err
+			return cloudflare.D1Snapshot{}, err
 		}
 		logical, err = exportLogicalBackup(ctx, cloud, baseURL, before, allowDirect)
 		if err != nil {
-			return err
+			return cloudflare.D1Snapshot{}, err
 		}
 		after, err := cloud.D1.Snapshot(ctx, cloud.State.D1.Name)
 		if err != nil {
-			return err
+			return cloudflare.D1Snapshot{}, err
 		}
-		if cloudflare.EqualSnapshot(before, after) {
+		afterImage, err := cloud.D1.CapturePreservation(ctx, cloud.State.D1.Name)
+		if err != nil {
+			return cloudflare.D1Snapshot{}, err
+		}
+		if cloudflare.EqualSnapshot(before, after) && beforeImage.Digest() == afterImage.Digest() {
 			snapshot = after
+			snapshot.PreservationSHA256 = afterImage.Digest()
 			stable = true
 			break
 		}
 	}
 	if !stable {
-		return errors.New("D1 changed during three backup attempts; no backup was published")
+		return cloudflare.D1Snapshot{}, errors.New("D1 changed during three backup attempts; no backup was published")
 	}
 	if err := verifyLogicalIdentity(logical, cloud.State); err != nil {
-		return err
+		return cloudflare.D1Snapshot{}, err
 	}
 	if err := os.WriteFile(logicalPath, append(logical.Raw, '\n'), 0o600); err != nil {
-		return err
+		return cloudflare.D1Snapshot{}, err
 	}
 	metadata := backup.Metadata{
 		DeploymentName: cloud.Topology.DeploymentName, ApplicationVersion: logical.ApplicationVersion,
@@ -154,10 +168,12 @@ func createCloudBackup(ctx context.Context, cloud protectedCloud, manifestPath, 
 		DatabaseID: cloud.State.D1.ID, DatabaseBinding: cloud.State.D1Binding,
 		Counts: logical.Counts, LogicalDataSHA256: logical.LogicalDataSHA256,
 		DatabaseRowsSHA256: snapshot.SHA256, TableRows: snapshot.Rows,
+		PreservationSHA256: snapshot.PreservationSHA256,
 	}
-	return backup.CreateEncrypted(output, passphrase, backup.Input{
+	err = backup.CreateEncrypted(output, passphrase, backup.Input{
 		DatabasePath: databasePath, LogicalPath: logicalPath, ManifestPath: manifestPath, Metadata: metadata,
 	})
+	return snapshot, err
 }
 
 func exportLogicalBackup(ctx context.Context, cloud protectedCloud, baseURL string, snapshot cloudflare.D1Snapshot, allowDirect bool) (misub.Export, error) {

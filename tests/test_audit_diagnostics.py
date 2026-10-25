@@ -1,5 +1,6 @@
 import importlib.util
 import json
+from contextlib import ExitStack
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -21,7 +22,9 @@ def record(capsys):
     assert len(rows) == 1
     row = rows[0]
     assert set(row) == {'maintenance_stage', 'returncode', 'summary_state', 'nodes_object',
-                        'pool_probe_object', 'stable_evidence_present', 'error_present', 'verdict'}
+                        'pool_probe_object', 'stable_evidence_present', 'error_present', 'verdict',
+                        'failure_stage', 'total_nodes', 'available_nodes', 'stable_available_count',
+                        'pool_attempt_count'}
     return row
 
 
@@ -73,6 +76,55 @@ def test_non_numeric_status_cannot_inject_diagnostic_text(tmp_path, capsys):
     summary.write_text('{}')
     assert maintenance.read_audit_verdict(summary, SENTINEL) == 'unknown'
     assert record(capsys)['returncode'] is None
+
+
+def test_bootstrap_failure_is_distinguishable_without_exposing_error(tmp_path, capsys):
+    summary = tmp_path / 'summary.json'
+    summary.write_text(json.dumps({
+        'failure_stage': 'management-ready', 'error': SENTINEL,
+        'nodes': {'total_nodes': 0, 'available_nodes': 0, 'stable_available_count': 0},
+        'pool_probe': {'attempts': []}}), encoding='utf-8')
+    assert maintenance.read_audit_verdict(summary, 1) == 'unknown'
+    row = record(capsys)
+    assert row['failure_stage'] == 'management-ready'
+    assert (row['total_nodes'], row['available_nodes'], row['stable_available_count'], row['pool_attempt_count']) == (0, 0, 0, 0)
+
+
+@pytest.mark.parametrize('bad', [SENTINEL, True, -1, 10000001, {}, []])
+def test_untrusted_stage_and_counts_are_not_logged(tmp_path, capsys, bad):
+    summary = tmp_path / 'summary.json'
+    summary.write_text(json.dumps({
+        'failure_stage': bad, 'error': SENTINEL,
+        'nodes': {'total_nodes': bad, 'available_nodes': bad},
+        'pool_probe': {'attempts': SENTINEL}}), encoding='utf-8')
+    with pytest.raises(RuntimeError, match='audit did not complete'):
+        maintenance.read_audit_verdict(summary, 1)
+    row = record(capsys)
+    assert row['failure_stage'] == 'unknown'
+    assert row['total_nodes'] is None and row['available_nodes'] is None
+    assert row['pool_attempt_count'] is None
+
+
+def test_audit_records_actual_management_failure_stage(tmp_path, monkeypatch, capsys):
+    from scripts import easyproxy_source_audit as audit
+    monkeypatch.setattr(audit.sys, 'argv', [
+        'audit', '--image', 'synthetic', '--subscription', 'https://synthetic.invalid',
+        '--artifact-dir', str(tmp_path), '--docker-network-name', ''])
+    with ExitStack() as stack:
+        for name, value in {'ensure_docker': None, 'load_policy': {}, 'ensure_image': 'synthetic',
+                            'get_free_port': 12345, 'get_free_port_range_start': 34000,
+                            'build_config': {}, 'collect_container_networks': [],
+                            'stop_container': None}.items():
+            stack.enter_context(patch.object(audit, name, return_value=value))
+        stack.enter_context(patch.object(audit, 'run', return_value=SimpleNamespace(returncode=0, stdout='', stderr='')))
+        stack.enter_context(patch.object(audit, 'wait_management_ready', side_effect=RuntimeError(SENTINEL)))
+        with pytest.raises(RuntimeError):
+            audit.main()
+    summary = tmp_path / 'summary.json'
+    assert json.loads(summary.read_text(encoding='utf-8'))['failure_stage'] == 'management-ready'
+    assert maintenance.read_audit_verdict(summary, 1) == 'unknown'
+    row = record(capsys)
+    assert row['failure_stage'] == 'management-ready' and row['total_nodes'] == 0
 
 
 @pytest.mark.parametrize('cleanup_failure', [False, True])

@@ -25,6 +25,7 @@ def test_source_audit_config_has_management_password():
 
     assert config["management"]["listen"] == "0.0.0.0:29888"
     assert config["management"]["password"] == "audit-secret"
+    assert config["geoip"] == {"enabled": False, "database_path": "", "auto_update_enabled": False}
     assert config["pool"]["detour_source_refs"] == [
         "manifest:conn_zenproxy_primary"
     ]

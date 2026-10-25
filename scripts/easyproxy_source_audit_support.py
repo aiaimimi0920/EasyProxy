@@ -183,6 +183,8 @@ def build_config(
         "mode": "hybrid",
         "log_level": "info",
         "skip_cert_verify": False,
+        # 订阅可用性审计不测试地域路由，也不下载浮动的 GeoIP 数据库。
+        "geoip": {"enabled": False, "database_path": "", "auto_update_enabled": False},
         "database_path": "/var/lib/easyproxy/data/data.db",
         "listener": {
             "address": "0.0.0.0",

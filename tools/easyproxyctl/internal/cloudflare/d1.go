@@ -16,9 +16,10 @@ import (
 var snapshotTables = []string{"cron_executions", "profiles", "schema_migrations", "settings", "subscriptions"}
 
 type D1Snapshot struct {
-	SHA256        string         `json:"sha256"`
-	SchemaVersion int            `json:"schema_version"`
-	Rows          map[string]int `json:"rows"`
+	SHA256             string         `json:"sha256"`
+	SchemaVersion      int            `json:"schema_version"`
+	Rows               map[string]int `json:"rows"`
+	PreservationSHA256 string         `json:"preservation_sha256,omitempty"`
 }
 
 type D1 struct {

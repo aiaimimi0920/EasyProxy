@@ -320,11 +320,16 @@ func (m *Manager) RefreshNow() error {
 		return fmt.Errorf("没有配置可刷新的来源")
 	}
 
+	// Capture and enqueue under the same lock used by refresh completion. A
+	// fast refresh must not replace refreshDone before this caller observes it.
+	m.mu.RLock()
+	doneCh := m.refreshDone
 	select {
 	case m.manualRefresh <- struct{}{}:
 	default:
 		// Already a refresh pending
 	}
+	m.mu.RUnlock()
 
 	// Wait for refresh to complete or timeout
 	if timeout <= 0 {
@@ -333,11 +338,6 @@ func (m *Manager) RefreshNow() error {
 
 	ctx, cancel := context.WithTimeout(m.ctx, manualRefreshWaitTimeout(timeout, healthCheckTimeout, drainTimeout))
 	defer cancel()
-
-	// Snapshot the current done channel before waiting
-	m.mu.RLock()
-	doneCh := m.refreshDone
-	m.mu.RUnlock()
 
 	select {
 	case <-ctx.Done():

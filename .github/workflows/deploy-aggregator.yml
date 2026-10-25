@@ -149,6 +149,7 @@ jobs:
               scripts/materialize-aggregator-release.py \
               scripts/promote-aggregator-release.py \
               scripts/verify-aggregator-publish.py \
+              scripts/publish-aggregator-v2ray.py \
               .github/workflows/deploy-aggregator.yml
           )
 
@@ -244,7 +245,15 @@ jobs:
           set -euo pipefail
           python -u subscribe/process.py --overwrite -s subscribe/config/config.actions.runtime.json
 
-      - name: Verify candidate core artifacts
+      - name: Generate V2Ray-compatible candidate subscription
+        if: steps.change_gate.outputs.should_deploy == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/publish-aggregator-v2ray.py \
+            --runtime-config upstreams/aggregator/subscribe/config/config.actions.runtime.json
+
+      - name: Verify generated candidate artifacts
         if: steps.change_gate.outputs.should_deploy == 'true'
         shell: bash
         env:
@@ -257,7 +266,8 @@ jobs:
           fi
           python scripts/verify-aggregator-publish.py \
             --base-url "${EASYPROXY_AGGREGATOR_PUBLIC_BASE_URL}" \
-            --runtime-config upstreams/aggregator/subscribe/config/config.actions.runtime.json
+            --runtime-config upstreams/aggregator/subscribe/config/config.actions.runtime.json \
+            --before-effective-audit
 
       - name: Audit shared effective aggregator nodes
         if: steps.change_gate.outputs.should_deploy == 'true'

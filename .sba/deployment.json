@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 2,
+  "target": "cloudflare-suite",
+  "accountPath": ["accountId"],
+  "accountMode": "single",
+  "accounts": [
+    { "key": "runtime", "label": "Cloudflare 运行账号", "path": ["accountId"], "secret": "EASYPROXY_CLOUDFLARE_API_TOKEN" }
+  ],
+  "github": { "repositoryPath": ["repository"], "secret": "EASYPROXY_GITHUB_TOKEN" },
+  "applicationSecrets": [
+    "EASYPROXY_R2_ACCESS_KEY_ID", "EASYPROXY_R2_SECRET_ACCESS_KEY",
+    "EASYPROXY_MISUB_ADMIN_PASSWORD", "EASYPROXY_MISUB_COOKIE_SECRET",
+    "EASYPROXY_MANIFEST_TOKEN", "EASYPROXY_ECH_TOKEN", "EASYPROXY_BACKUP_PASSPHRASE",
+    "EASYPROXY_AGGREGATOR_SHARED_TOKEN", "EASYPROXY_AGGREGATOR_ISSUE91_SUB_URL_B64"
+  ],
+  "defaults": {},
+  "fields": [
+    { "path": ["pagesName"], "label": "MiSub Pages 项目", "type": "text", "required": true, "template": "ep-{instance}-misub" },
+    { "path": ["workerName"], "label": "ECH 与订阅产物 Worker", "type": "text", "required": true, "template": "ep-{instance}-edge" },
+    { "path": ["workersSubdomain"], "label": "Workers 账号子域", "type": "text", "required": true, "template": "{subdomain:runtime}" },
+    { "path": ["refreshTarget"], "label": "Aggregator 周期刷新", "type": "text", "required": true, "template": ".github/workflows/sba-aggregator-refresh.yml@{instance}" },
+    { "path": ["workerOrigin"], "label": "ECH 与订阅入口", "type": "text", "required": true, "template": "https://ep-{instance}-edge.{subdomain:runtime}.workers.dev" },
+    { "path": ["pagesOrigin"], "label": "MiSub 管理入口", "type": "text", "required": true, "template": "https://ep-{instance}-misub.pages.dev" }
+  ],
+  "resources": [
+    { "key": "database", "label": "MiSub 数据库", "kind": "d1", "idPath": ["databaseId"], "namePath": ["databaseName"], "account": "runtime", "nativeAccount": "runtime", "nameTemplate": "ep-{instance}-misub" },
+    { "key": "artifacts", "label": "私有订阅产物与备份", "kind": "r2", "idPath": ["bucketName"], "namePath": null, "account": "runtime", "nativeAccount": "runtime", "nameTemplate": "ep-{instance}-store" }
+  ],
+  "targets": [
+    { "kind": "worker", "path": ["workerName"], "account": "runtime" },
+    { "kind": "pages", "path": ["pagesName"], "account": "runtime" },
+    { "kind": "github-actions", "path": ["refreshTarget"], "account": null },
+    { "kind": "domain", "path": ["workerOrigin"], "account": "runtime" },
+    { "kind": "domain", "path": ["pagesOrigin"], "account": "runtime" }
+  ]
+}

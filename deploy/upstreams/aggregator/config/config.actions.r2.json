@@ -116,7 +116,6 @@
             "targets": {
                 "clash": "public-clash",
                 "singbox": "public-singbox",
-                "v2ray": "public-v2ray",
                 "mixed": "public-mixed"
             },
             "regularize": {

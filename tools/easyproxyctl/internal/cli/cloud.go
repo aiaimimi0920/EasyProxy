@@ -17,7 +17,7 @@ import (
 
 func runCloud(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("cloud subcommand is required: bootstrap, update, verify, backup, or restore")
+		return errors.New("cloud subcommand is required: bootstrap, update, verify, backup, restore, or migrate")
 	}
 	switch args[0] {
 	case "bootstrap", "update", "verify":
@@ -26,6 +26,8 @@ func runCloud(args []string, stdout, stderr io.Writer) error {
 		return runCloudBackup(args[1:], stdout, stderr)
 	case "restore":
 		return runCloudRestore(args[1:], stdout, stderr)
+	case "migrate":
+		return runCloudMigrate(args[1:], stdout, stderr)
 	default:
 		return fmt.Errorf("unknown cloud subcommand %q", args[0])
 	}

@@ -67,10 +67,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Verify published aggregator artifacts are readable and well-formed.")
     parser.add_argument("--base-url", required=True, help="Public base URL serving the aggregator artifacts.")
     parser.add_argument("--runtime-config", required=True, help="Materialized runtime config JSON.")
-    parser.add_argument(
+    phase = parser.add_mutually_exclusive_group()
+    phase.add_argument(
         "--require-all",
         action="store_true",
         help="Require every configured optional artifact instead of allowing a bootstrap-time absence.",
+    )
+    phase.add_argument(
+        "--before-effective-audit",
+        action="store_true",
+        help="Require all upstream-generated artifacts, deferring only the not-yet-generated effective outputs.",
     )
     args = parser.parse_args()
 
@@ -96,18 +102,28 @@ def main() -> int:
         key = items[item_name].get("key", "").strip()
         if not key:
             raise RuntimeError(f"Storage item {item_name} does not define a key")
-        fetch_and_validate(args.base_url, key, validator)
+        try:
+            fetch_and_validate(args.base_url, key, validator)
+        except Exception as exc:
+            raise RuntimeError(f"{item_name}: {exc}") from exc
 
     for item_name, validator in optional.items():
         if item_name not in items:
             continue
+        if args.before_effective_audit and item_name in ("public-effective", "public-effective-json"):
+            continue
         key = items[item_name].get("key", "").strip()
         if not key:
+            if args.require_all or args.before_effective_audit:
+                raise RuntimeError(f"Storage item {item_name} does not define a key")
             continue
-        if args.require_all:
-            fetch_and_validate(args.base_url, key, validator)
-        else:
-            fetch_and_check_optional(args.base_url, key, validator)
+        try:
+            if args.require_all or args.before_effective_audit:
+                fetch_and_validate(args.base_url, key, validator)
+            else:
+                fetch_and_check_optional(args.base_url, key, validator)
+        except Exception as exc:
+            raise RuntimeError(f"{item_name}: {exc}") from exc
 
     return 0
 

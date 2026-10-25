@@ -17,8 +17,12 @@ import yaml
 
 try:
     from .easyproxy_audit_state import AuditState
+    from .easyproxy_audit_image import inspect_image
+    from .easyproxy_audit_lifecycle import AuditContainer
 except ImportError:
     from easyproxy_audit_state import AuditState
+    from easyproxy_audit_image import inspect_image
+    from easyproxy_audit_lifecycle import AuditContainer
 
 try:
     from .easyproxy_source_audit_probe import (
@@ -92,6 +96,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--audit-id", default=f"audit-{time.strftime('%Y%m%d-%H%M%S')}")
     parser.add_argument("--image", default="")
     parser.add_argument("--build-if-missing", action="store_true")
+    parser.add_argument("--expected-image-id", default="")
+    parser.add_argument("--expected-source-sha", default="")
     parser.add_argument("--config-path", default="")
     parser.add_argument("--manifest-url", default="")
     parser.add_argument("--subscription", action="append", default=[])
@@ -141,13 +147,18 @@ def main() -> int:
     minimum_available_nodes = args.minimum_available_nodes if args.minimum_available_nodes >= 0 else int(policy.get("minimum_available_nodes", 1))
 
     artifact_dir = Path(args.artifact_dir) if args.artifact_dir.strip() else REPO_ROOT / "tmp" / "easy-proxy-source-audit" / args.audit_id
-    artifact_dir.mkdir(parents=True, exist_ok=True)
+    artifact_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     config_path = artifact_dir / "config.yaml"
     data_dir = artifact_dir / "data"
     if not owned_state:
         data_dir.mkdir(parents=True, exist_ok=True)
 
-    effective_image = ensure_image(args.image, args.build_if_missing, args.audit_id)
+    image_identity = None
+    if args.expected_image_id or args.expected_source_sha:
+        if args.build_if_missing or args.image != args.expected_image_id or args.skip_cleanup or owned_state:
+            raise ValueError("EASYPROXY_AUDIT_IMAGE_IDENTITY")
+        image_identity = inspect_image(args.expected_image_id, args.expected_source_sha)
+    effective_image = args.expected_image_id or ensure_image(args.image, args.build_if_missing, args.audit_id)
     multi_port_base = get_free_port_range_start(34000 + random.randint(0, 20) * 100, 81)
     management_password = secrets.token_urlsafe(32)
     config_payload = build_config(
@@ -169,7 +180,16 @@ def main() -> int:
     management_port = get_free_port()
     pool_port = get_free_port()
     container_name = f"easyproxy-source-audit-{args.audit_id}".lower().replace("_", "-")
-    if not owned_state:
+    lifecycle = (AuditContainer(container_name, effective_image, args.expected_source_sha, args.audit_id,
+                                artifact_dir / "container-cleanup-attempt.json") if image_identity else None)
+    cleanup_attempted = False
+    if lifecycle:
+        try:
+            lifecycle.assert_startable()
+        except BaseException:
+            config_path.unlink(missing_ok=True)
+            raise
+    elif not owned_state:
         stop_container(container_name)
 
     try:
@@ -204,14 +224,27 @@ def main() -> int:
             docker_args.extend(["--network", args.docker_network_name.strip()])
         for dns_server in dns_servers:
             docker_args.extend(["--dns", dns_server])
+        if image_identity is not None:
+            docker_args.extend(["--pull", "never"])
+            docker_args.extend(lifecycle.label_args())
         docker_args.append(effective_image)
         run(docker_args, capture=False, check=True)
-    except Exception:
-        config_path.unlink(missing_ok=True)
+    except BaseException:
+        try:
+            if lifecycle:
+                cleanup_attempted = True
+                lifecycle.cleanup()
+        finally:
+            config_path.unlink(missing_ok=True)
         raise
 
     summary_path = Path(args.output_path) if args.output_path.strip() else artifact_dir / "summary.json"
+    failure_stage = "management-ready"
     try:
+        if image_identity is not None:
+            failure_stage = "image-identity"
+            lifecycle.verify()
+            failure_stage = "management-ready"
         base_url = f"http://127.0.0.1:{management_port}"
         wait_management_ready(
             base_url,
@@ -219,6 +252,7 @@ def main() -> int:
             management_password,
             container_name=container_name,
         )
+        failure_stage = "scenario-ready"
         wait_scenario_state(
             base_url,
             scenario_timeout,
@@ -240,9 +274,11 @@ def main() -> int:
         container_networks = collect_container_networks(container_name)
 
         while time.time() < probe_deadline:
+            failure_stage = "node-discovery"
             last_nodes, last_source_sync = fetch_nodes_and_source_sync(base_url, management_password)
             all_nodes = list(last_nodes.get("nodes") or [])
             candidate_nodes = collect_direct_probe_candidates(all_nodes, default_scheme="http")
+            failure_stage = "direct-probe"
             stable_uris, stable_results = discover_directly_usable_nodes(
                 candidate_nodes,
                 policy,
@@ -259,6 +295,7 @@ def main() -> int:
                 if source_ref not in stable_source_refs
             ]
 
+            failure_stage = "pool-probe"
             last_pool_probe = probe_http_proxy("http://127.0.0.1:22323", policy, network_container=container_name)
             try:
                 best_proxy_response = requests.get(
@@ -292,6 +329,7 @@ def main() -> int:
                     })
                     break
 
+            failure_stage = "lease-probe"
             compat_probe = {"ok": False, "attempts": []}
             if stable_results:
                 lease_attempts = max(1, min(len(stable_results), 12))
@@ -367,6 +405,7 @@ def main() -> int:
                 break
             time.sleep(8)
 
+        failure_stage = "validation"
         if not compat_probe["ok"]:
             raise AuditProbeUnavailable("proxy lease output failed across all shared probe targets")
         if len(stable_uris) < minimum_available_nodes:
@@ -386,9 +425,13 @@ def main() -> int:
                 f"container did not join expected docker network {args.docker_network_name.strip()} (actual: {container_networks})"
             )
 
+        if image_identity is not None:
+            failure_stage = "image-identity"
+            lifecycle.verify()
         payload = {
             "audit_id": args.audit_id,
             "validated_image": effective_image,
+            "image_identity": image_identity,
             "artifact_dir": str(artifact_dir),
             "config_path": str(config_path),
             "docker_networks": container_networks,
@@ -420,6 +463,12 @@ def main() -> int:
             "compat_probe": compat_probe,
             "source_sync": last_source_sync or {},
         }
+        if lifecycle:
+            failure_stage = "container-cleanup"
+            cleanup_attempted = True
+            lifecycle.cleanup()
+            payload["container_cleanup_confirmed"] = True
+        failure_stage = "summary-write"
         write_json_file(summary_path, payload)
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0
@@ -452,6 +501,8 @@ def main() -> int:
             "compat_probe": compat_probe if 'compat_probe' in locals() else {},
             "source_sync": last_source_sync if 'last_source_sync' in locals() else {},
             "error": str(exc),
+            "failure_stage": failure_stage,
+            "container_cleanup_confirmed": False,
         }
         try:
             write_json_file(summary_path, debug_payload)
@@ -470,9 +521,14 @@ def main() -> int:
             return 2
         raise
     finally:
-        config_path.unlink(missing_ok=True)
-        if not args.skip_cleanup and not owned_state:
-            stop_container(container_name)
+        try:
+            if lifecycle and not cleanup_attempted:
+                cleanup_attempted = True
+                lifecycle.cleanup()
+            elif lifecycle is None and not args.skip_cleanup and not owned_state:
+                stop_container(container_name)
+        finally:
+            config_path.unlink(missing_ok=True)
         if not args.keep_artifacts:
             # The secret-bearing config is always removed; other diagnostics may remain.
             pass

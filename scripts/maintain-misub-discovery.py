@@ -18,8 +18,10 @@ import requests
 
 try:
     from scripts.easyproxy_audit_state import AuditState
+    from scripts.easyproxy_audit_diagnostics import safe_audit_details
 except ImportError:
     from easyproxy_audit_state import AuditState
+    from easyproxy_audit_diagnostics import safe_audit_details
 
 
 def stage(name):
@@ -112,6 +114,7 @@ def read_audit_verdict(summary, returncode):
         'stable_evidence_present': False,
         'error_present': False,
         'verdict': 'not-evaluated',
+        **safe_audit_details({}),
     }
     try:
         try:
@@ -127,6 +130,7 @@ def read_audit_verdict(summary, returncode):
         diagnostic['summary_state'] = 'invalid-shape'
         if not isinstance(result, dict):
             raise RuntimeError('audit did not complete')
+        diagnostic.update(safe_audit_details(result))
         nodes = result.get('nodes')
         diagnostic['nodes_object'] = isinstance(nodes, dict)
         diagnostic['pool_probe_object'] = isinstance(result.get('pool_probe'), dict)

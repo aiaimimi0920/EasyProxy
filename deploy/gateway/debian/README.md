@@ -52,6 +52,21 @@ Keep `gateway.enabled: false` until the explicit proxy at
 `192.168.15.201:22323` and the management API at `192.168.15.201:29888` pass
 their health checks.
 
+## Container log retention
+
+The Compose template uses Docker `json-file` rotation with a default of five
+20 MB files per container. Override `EASY_DOCKER_LOG_MAX_SIZE` and
+`EASY_DOCKER_LOG_MAX_FILE` in the deployment environment when a different
+retention budget is required. This bounds container stdout/stderr, not SQLite
+or other application data.
+
+Editing the template or restarting an existing container does not change its
+logging configuration. Apply it only during an approved container replacement,
+with the old image, configuration, data and required historical logs retained
+for rollback. Do not truncate the live Docker log file. Confirm the new
+`HostConfig.LogConfig` with `docker inspect` and recheck the management API,
+explicit proxy and TUN after the replacement.
+
 ## Synology VMM Disk Note
 
 On the tested Synology VMM vhost-scsi configuration, Debian's ext4 journal can

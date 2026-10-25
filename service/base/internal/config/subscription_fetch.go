@@ -122,7 +122,24 @@ func fetchSubscriptionNodesRemote(subURL string, timeout time.Duration, client *
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	resp, err := fetchSubscriptionResponse(ctx, subURL, client)
+	// 某些来源按客户端类型返回内容：浏览器得到 HTML，Clash 得到订阅。
+	// 保留已有首选请求，仅对 HTTP 200 且无节点的结果追加一次内容协商。
+	for _, userAgent := range []string{subscriptionBrowserUserAgent, "clash.meta"} {
+		nodes, err := fetchSubscriptionNodesForUserAgent(ctx, subURL, client, userAgent)
+		if err != nil {
+			return nil, err
+		}
+		if len(nodes) > 0 {
+			return nodes, nil
+		}
+	}
+	return nil, fmt.Errorf("subscription contained no usable nodes")
+}
+
+const subscriptionBrowserUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+
+func fetchSubscriptionNodesForUserAgent(ctx context.Context, subURL string, client *http.Client, userAgent string) ([]NodeConfig, error) {
+	resp, err := fetchSubscriptionResponse(ctx, subURL, client, userAgent)
 	if err != nil {
 		return nil, fmt.Errorf("fetch subscription: %w", err)
 	}
@@ -140,21 +157,11 @@ func fetchSubscriptionNodesRemote(subURL string, timeout time.Duration, client *
 		return nil, fmt.Errorf("subscription response exceeds %d bytes", maxSubscriptionBodyBytes)
 	}
 
-	content := string(body)
-
-	// Try to detect and parse different formats
-	nodes, err := ParseSubscriptionContent(content)
-	if err != nil {
-		return nil, err
-	}
-	if len(nodes) == 0 {
-		return nil, fmt.Errorf("subscription contained no usable nodes")
-	}
-	return nodes, nil
+	return ParseSubscriptionContent(string(body))
 }
 
-func fetchSubscriptionResponse(ctx context.Context, subURL string, client *http.Client) (*http.Response, error) {
-	req, err := newSubscriptionFetchRequest(ctx, subURL)
+func fetchSubscriptionResponse(ctx context.Context, subURL string, client *http.Client, userAgent string) (*http.Response, error) {
+	req, err := newSubscriptionFetchRequest(ctx, subURL, userAgent)
 	if err != nil {
 		return nil, err
 	}
@@ -167,7 +174,7 @@ func fetchSubscriptionResponse(ctx context.Context, subURL string, client *http.
 		return nil, err
 	}
 
-	req, err = newSubscriptionFetchRequest(ctx, subURL)
+	req, err = newSubscriptionFetchRequest(ctx, subURL, userAgent)
 	if err != nil {
 		return nil, err
 	}
@@ -178,14 +185,14 @@ func fetchSubscriptionResponse(ctx context.Context, subURL string, client *http.
 	return resp, nil
 }
 
-func newSubscriptionFetchRequest(ctx context.Context, subURL string) (*http.Request, error) {
+func newSubscriptionFetchRequest(ctx context.Context, subURL string, userAgent string) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", subURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 
 	// Set common headers to avoid being blocked.
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("Accept", "*/*")
 	return req, nil
 }

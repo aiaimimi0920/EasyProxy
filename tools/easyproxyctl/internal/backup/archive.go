@@ -37,6 +37,7 @@ type Metadata struct {
 	Counts                map[string]int  `json:"counts"`
 	LogicalDataSHA256     string          `json:"logical_data_sha256"`
 	DatabaseRowsSHA256    string          `json:"database_rows_sha256"`
+	PreservationSHA256    string          `json:"preservation_sha256,omitempty"`
 	TableRows             map[string]int  `json:"table_rows"`
 	Files                 map[string]File `json:"files"`
 }
@@ -278,6 +279,9 @@ func ExtractEncrypted(inputPath, outputDir, passphrase string) (Extracted, error
 }
 
 func validateMetadata(value Metadata) error {
+	if value.PreservationSHA256 != "" && !validDigest(value.PreservationSHA256) {
+		return errors.New("backup metadata has an invalid preservation checksum")
+	}
 	if value.SchemaVersion != SchemaVersion || value.DeploymentName == "" || value.DatabaseName == "" || value.DatabaseID == "" || value.DatabaseBinding != "MISUB_DB" {
 		return errors.New("backup metadata is incomplete")
 	}

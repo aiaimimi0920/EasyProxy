@@ -50,6 +50,13 @@ replace either host bind mount. Before an update, back up both
 `runtime/config.yaml` and `runtime/data`; restore both if a migration or health
 check fails.
 
+Container stdout/stderr uses `json-file` rotation: five 20 MB files by default,
+configurable with `EASY_DOCKER_LOG_MAX_SIZE` and `EASY_DOCKER_LOG_MAX_FILE`.
+These options take effect only when creating a replacement container, not on
+`docker restart`. Preserve required historical logs before an approved update;
+do not truncate live log files or remove persistent application data to apply
+this limit. The Debian gateway template uses the same defaults.
+
 ## Update
 
 Pull the candidate before stopping the current container. Then stop it so the

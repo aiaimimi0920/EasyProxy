@@ -16,7 +16,7 @@ For release ID `<run-id>` and a canonical key such as `subs/effective.txt`:
 
 | Layer | Key | Contract |
 | --- | --- | --- |
-| Run candidate | `candidate/<run-id>/subs/effective.txt` | Upstream process writes only here. |
+| Run candidate | `candidate/<run-id>/subs/effective.txt` | Native process and first-party publishers write only here. |
 | Candidate alias | `candidate/subs/effective.txt` | Latest fully validated candidate. |
 | Immutable release | `releases/<run-id>/subs/effective.txt` | Content-addressed by the release manifest hash; never reused. |
 | Stable | `subs/effective.txt` | Compatibility path for MiSub and EasyProxy. |
@@ -37,18 +37,36 @@ The workflow performs these steps in order:
 1. materialize source credentials without committing them;
 2. rewrite every Aggregator storage key into `candidate/<run-id>/...`;
 3. run the upstream crawler and converters;
-4. validate candidate formats and publicly read the core artifacts;
-5. run the shared EasyProxy connectivity audit against candidate Clash output;
-6. produce `public-effective` and `public-effective-json` from audited nodes;
-7. require all configured public candidate artifacts;
-8. enforce absolute node/source minimums and relative decline limits;
-9. publish and verify immutable release objects;
-10. snapshot the previous stable objects, update stable, and write the stable
+4. generate the V2Ray-compatible candidate from this run's mixed subscription;
+5. validate all configured generated artifacts, including V2Ray, before
+   the expensive connectivity audit (`--before-effective-audit`); only the two
+   not-yet-generated effective outputs are deferred;
+6. run the shared EasyProxy connectivity audit against candidate Clash output;
+7. produce `public-effective` and `public-effective-json` from audited nodes;
+8. require all configured public candidate artifacts;
+9. enforce absolute node/source minimums and relative decline limits;
+10. publish and verify immutable release objects;
+11. snapshot the previous stable objects, update stable, and write the stable
     manifest last.
 
-Failures before step 10 never touch stable. Failures during step 10 restore the
+Failures before step 11 never touch stable. Failures during step 11 restore the
 previous stable bytes and leave the previous manifest as the committed version.
 Candidate and immutable release objects may remain for diagnosis.
+
+### V2Ray 兼容产物
+
+仓库固定版本的 subconverter 在 `target=v2ray` 下仅导出 VMess；当候选只有
+SS、VLESS 或 Trojan 时会成功退出却生成空文件。`list` 开关不改变这个协议范围。
+根发布流程现在由 `scripts/publish-aggregator-v2ray.py` 从**本次 run** 的 mixed
+候选生成兼容订阅，保留 `vmess/vless/trojan/ss/ssr`，与既有 verifier 合同一致。
+模板不再同时让 native `v2ray` target 写同一对象；独立上游仓库不需修改。
+
+生成器要求源和目标处于同一 bucket、同一隔离 candidate run，且 key 不同；拒绝
+stable、release、跨 run、空内容、超限内容及非法 Base64/URI 行。如果没有兼容
+协议，仍然失败，不以旧 stable 填充，也不放宽 `--require-all`。
+
+此产物是 mixed 的协议兼容子集，**不是逐条连通性验证过的 effective 子集**。
+节点网络可用性仍由后续共享审计和 effective 产物单独表达。
 
 After canonical stable verification, the publication workflow refreshes the
 MiSub runtime profile using the stable effective URL and the configured extra

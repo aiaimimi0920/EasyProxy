@@ -115,6 +115,21 @@ the maintainer's endpoints.
 The safe object layout, promotion order, and recovery paths are documented in
 [`aggregator-publication.md`](aggregator-publication.md).
 
+## SpringBok 套件刷新
+
+标准套件使用 `.github/workflows/sba-aggregator-refresh.yml`，不复用上面的旧手动
+workflow 名称或 repository secrets。SpringBok 在独立实例 GitHub Environment 中
+配置以下七项秘密：`EASYPROXY_R2_ACCESS_KEY_ID`、`EASYPROXY_R2_SECRET_ACCESS_KEY`、
+`EASYPROXY_MISUB_ADMIN_PASSWORD`、`EASYPROXY_MANIFEST_TOKEN`、`EASYPROXY_ECH_TOKEN`、
+`EASYPROXY_AGGREGATOR_SHARED_TOKEN`、`EASYPROXY_AGGREGATOR_ISSUE91_SUB_URL_B64`。
+不要把这些值复制进公开变量、日志或仓库。
+
+Environment 的 `EASYPROXY_SBA_OWNER` 与 `EASYPROXY_SBA_CONFIG` 是公开身份和配置；
+repository variable `EASYPROXY_SBA_REFRESH_REGISTRY` 仅索引 production environments。
+批准源码 SHA 仍从各实例私有 R2 控制记录读取，不由默认分支或 dispatch 输入覆盖。
+两个可选私有种子明确停用时使用 `sba-disabled-source-v1`，不是伪造 token 或 URL。
+完整十一项部署秘密与生命周期边界见 [标准套件合同](../.sba/lifecycle.md)。
+
 ## Local scripts
 
 Local scripts resolve the environment variable references stored in

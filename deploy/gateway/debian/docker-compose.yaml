@@ -3,6 +3,11 @@ services:
     image: ${EASY_PROXY_IMAGE:?Set EASY_PROXY_IMAGE to a version tag or digest}
     container_name: easy-proxy-gateway
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "${EASY_DOCKER_LOG_MAX_SIZE:-20m}"
+        max-file: "${EASY_DOCKER_LOG_MAX_FILE:-5}"
     network_mode: host
     cap_add:
       - NET_ADMIN
