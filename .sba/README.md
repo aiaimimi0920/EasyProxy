@@ -2,10 +2,39 @@
 
 ## 当前状态（2026-10-26）
 
-五动作入口、实例周期刷新、manifest v3 与 deployment v2 已实现；当前 1.0.2 为定向恢复候选。
-首次部署和随后一次 pristine repair 均返回 `unknown`；没有重放或清锁，旧服务保持。
+五动作入口、实例周期刷新、manifest v3 与 deployment v2 已实现；当前 1.0.3 为 Pages 定向恢复候选。
+首次部署、pristine repair 和后续 GitHub repair 均返回 `unknown`；没有重放或清锁，旧服务保持。
 应用尚未通过 SpringBok 正式上线，不能把本地测试、构建或平台上线当作应用上线。
 当前完整合同及边界见 [生命周期与调度](lifecycle.md)。旧手动部署及工作流保持不动。
+
+### EP-SBA-13：Pages 空变量响应与准确部分发布恢复（负责人：主 AI）
+
+1.0.2 的单次正式恢复 `dc-c982bc121b8548d78474848a8065b296` / run `40280908267`
+已补齐 GitHub 配置、发布 Worker，并创建 Pages 项目，随后返回 `EASYPROXY_SBA_PAGES_UNKNOWN`。
+只读核对证明 Pages 尚无任何 deployment、生产配置正确；provider 将空 preview `env_vars`
+返回为 `null`。官方 Cloudflare OpenAPI 将该字段声明为 nullable，真实响应离线回放在同点复现。
+窄修只在预期变量表为空时接受 `null`；错误类型、额外绑定和生产必需变量仍严格拒绝。
+
+用户已另行明确批准此准确 Pages UNKNOWN 的一次受限恢复，不复用已消费的 GitHub 修复批准。
+独立操作 `continue-pages-initial-deployment` 固定该父 task/run、版本、请求和结果摘要。
+写入前核终态、准确 control 字节、七个原对象及全部阶段正文、D1 schema/history/零业务行、
+完整 GitHub 环境/策略/变量/secret 名单/registry、Worker 设置/公开版本/真实模块摘要，以及
+准确 Pages project ID/配置/无部署。任一漂移即停止；全桶只读清单不接受额外或重复对象。
+
+全部检查通过后先 create-only 保存新移交证据，再单次 CAS 移交仍非空 writer；旧 Permit
+失效，两个历史 operation 的阶段和所有 UNKNOWN 回执保留。D1 和 GitHub 仅再核验、不重写。
+为统一新版本的来源证明，Worker 只发布一次相同业务 bundle 的新版本元数据，不重设子域；
+Pages 复用原项目、单次更新新版本配置、上传资产并首次发布，不重建项目、不删除任何资源。
+随后仍须完整候选审计、promotion、受限 MiSub 同步和独立公开读回，成功后才提交版本。
+任何 marker/CAS/后续响应不确定均停止，不自动重试、清锁、删除或回滚。
+
+本机定向测试已通过：`pages-repair-38.xml` 117 项、`pages-protocol-41.xml` 53 项；
+其中包含真实 HTTP multipart、真实既有 Functions 产物和全部关键拒绝反例，不连接真实云账号。
+产品只读前置 `pages-readonly-preflight-39.safe.json` 七项全部通过，未创建 marker、移交 writer
+或执行云写入。冻结 index 的全量原生 Linux 回归 `linux-native-pages-recovery-42.xml`
+为 **780 passed、0 skip**；CLI Go 82 项、0 skip 与 go vet 通过，真实 sealer、CLI 和迁移
+materializer 已重建。真实 SpringBok parser 接受 1.0.3 的三个独立 repairs，scoped Gitleaks
+未发现泄漏。准确 CI、正式单次恢复及独立业务验收仍待完成，不能据此声称线上恢复成功。
 
 ### EP-SBA-12：GitHub 创建响应与准确中断点定向恢复（负责人：主 AI）
 

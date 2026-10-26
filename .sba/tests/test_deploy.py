@@ -137,6 +137,52 @@ def test_attested_recovery_never_initializes_d1_again_and_commits_only_after_rem
     assert state(store)["active"] == request.candidate and state(store)["writer"] is None
 
 
+@pytest.mark.parametrize("failure", [None, "edge", "pages", "sync"])
+def test_pages_recovery_does_not_replay_d1_or_github_and_passes_resume_to_publication(prepared, monkeypatch, failure):
+    from pages_repair import PagesResume
+    from repair_context import PAGES_CONTEXT, PAGES_PARENT_RELEASE
+    import hashlib
+    request, root, tools, image, sealer, output, credentials, store, record = prepared
+    recovery = replace(request, action="repair", previous=PAGES_PARENT_RELEASE, context=PAGES_CONTEXT)
+    handles = []
+    def begin(owner, current, source, values):
+        assert current is recovery and source == root and values is credentials
+        permit = owner.begin("deploy", request.candidate)
+        resume = PagesResume(permit.operation_id, hashlib.sha256(permit.state_bytes).hexdigest())
+        handles.append(resume)
+        return permit, resume
+    monkeypatch.setattr(orchestration, "begin_pages_recovery", begin)
+    monkeypatch.setattr(orchestration, "initialize_d1", lambda *_a, **_k: pytest.fail("no DDL"))
+    monkeypatch.setattr(orchestration, "configure_environment", lambda *_a, **_k: pytest.fail("no GitHub write"))
+    def d1(*_):
+        record["order"].append("d1-readonly")
+        return {"checks": {"d1-initialized": True, "schema-verified": True}}
+    def github(*_):
+        record["order"].append("github-readonly")
+        return {"checks": dict.fromkeys(("github-environment-configured", "github-environment-verified", "github-workflow-verified"), True),
+                "refreshEnabled": True}
+    monkeypatch.setattr(orchestration, "verify_initialized", d1)
+    monkeypatch.setattr(orchestration, "verify_configured", github)
+    for symbol in ("publish_ech", "publish_pages"):
+        original = getattr(orchestration, symbol)
+        def publish(*args, _original=original, **kwargs):
+            assert kwargs.pop("resume") is handles[0]
+            return _original(*args, **kwargs)
+        monkeypatch.setattr(orchestration, symbol, publish)
+    record["fail"] = failure
+    if failure:
+        with pytest.raises(RuntimeError, match="EASYPROXY_SBA_" + failure.upper() + "_UNKNOWN"):
+            orchestration.deploy_suite(request, root, tools, image, sealer, BODIES, output,
+                                        credentials=credentials, recovery_request=recovery)
+        assert state(store)["writer"] is not None and state(store)["active"] is None
+        assert record["order"] == ["d1-readonly", "github-readonly", *ORDER[2:ORDER.index(failure) + 1]]
+    else:
+        assert orchestration.deploy_suite(request, root, tools, image, sealer, BODIES, output,
+                    credentials=credentials, recovery_request=recovery)["checks"]["service-ready"] is True
+        assert state(store)["active"] == request.candidate and state(store)["writer"] is None
+        assert record["order"] == ["d1-readonly", "github-readonly", *ORDER[2:]]
+
+
 @pytest.mark.parametrize("stage", ORDER)
 def test_each_unknown_stage_keeps_writer_and_never_runs_later_stages(prepared, stage):
     record, store = prepared[-1], prepared[-2]

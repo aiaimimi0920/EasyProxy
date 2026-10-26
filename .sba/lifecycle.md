@@ -2,8 +2,8 @@
 
 ## 当前状态（2026-10-26）
 
-五动作应用入口、实例周期刷新、manifest v3 与 deployment v2 已实现；1.0.2 包含准确中断点恢复
-候选。首次任务和一次 pristine repair 返回 UNKNOWN，未重放、未清锁。应用尚未通过
+五动作应用入口、实例周期刷新、manifest v3 与 deployment v2 已实现；1.0.3 包含准确 Pages 中断恢复
+候选。首次任务、pristine repair 和 GitHub repair 返回 UNKNOWN，未重放、未清锁。应用尚未通过
 SpringBok 正式部署，不能把本地合同测试、构建或平台 SUITE-03 上线当作应用上线。
 旧手动部署和旧工作流仍保留，不被本套件隐式接管。
 
@@ -106,6 +106,28 @@ R2 writer 不会锁住外部管理员；部署期间必须排除 out-of-band 修
 也不为维持它另建长期服务。产物仍须至少有真实可消费节点并通过相同审计，停用不绕过验收。
 
 ## 验证与证据
+
+### 准确 Pages 中断恢复（EP-SBA-13）
+
+1.0.2 的准确 GitHub 恢复任务在创建 Pages 项目后返回 `EASYPROXY_SBA_PAGES_UNKNOWN`。
+只读和真实响应离线重放确定：空 preview `env_vars=null` 被过严校验误拒；production 配置正确，
+Pages 尚无部署。1.0.3 仅为预期空变量表接受 provider 的 nullable 响应，不放宽必需项。
+
+新的独立 repair 绑定该准确父 task/run/request/result 摘要。用户已另行批准；原批准不复用。
+前置逐项核原 control 字节和七个对象、D1 初始化/零行、完整 GitHub、Worker 设置/公开版本/
+模块摘要及准确 Pages 项目/配置/零部署，随后再核 control 和对象集合。任一漂移即拒绝写入。
+通过后只 create-only 新移交证据及一次 CAS，writer 始终非空；旧 Permit 失效，原证据不动。
+不重做 D1/GitHub；相同 Worker 业务 bundle 只更新到新版本、子域不重设；Pages 复用现有项目
+完成新版本配置和首次部署。新 UNKNOWN 后停止，不重放、清锁、自动回滚或删除。
+
+`pages-before-33.xml` 两项预期红测保留；窄修后 `pages-full-35.xml` 50 项通过。
+恢复编排/持锁/HTTP 合同 `pages-repair-38.xml` 117 项、provider 拒绝反例
+`pages-protocol-41.xml` 53 项通过。`pages-readonly-preflight-39.safe.json` 七项真实只读前置
+通过，control 和全部原对象保持，没有 marker 或 writer 移交。这些不代表线上恢复成功。
+冻结 index 的原生 Linux 全量验证 `linux-native-pages-recovery-42.xml`：780 passed、0 skip；
+CLI Go 82 项、0 skip 和 go vet 通过，真实 sealer、CLI、迁移 materializer 已重建。
+SpringBok 实际 parser 接受 1.0.3 的三个独立 repair，scoped secrets scan 未发现泄漏。
+后续仍须准确 CI、正式单次恢复、独立 verify 及最终源码的本地消费/代理出口验收。
 
 测试临时目录、日志、XML 和构建产物在 `linshi/easyproxy-sba-linux-20261026/`。
 最近真实 Linux 构建生成 99 个 Pages 资产及当前 ECH/Functions bundle；production/preview
