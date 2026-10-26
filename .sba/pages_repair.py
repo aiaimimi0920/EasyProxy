@@ -10,6 +10,7 @@ from coordination import Coordinator, Permit, ETAG, STATE_KEY, _encode
 from github_api import GitHubAPI
 from github_repair import verify_initialized, EXECUTOR_SHA, ENVIRONMENT_ID
 from repair_context import GITHUB_CONTEXT, PAGES_CONTEXT, PAGES_PARENT_RELEASE, ASSETS_CONTEXT, ASSETS_PARENT_RELEASE
+from repair_context import GENERATION_CONTEXT
 from request import ApplicationRequest
 from worker_api import WorkerAPI, public_release
 
@@ -54,7 +55,7 @@ class PagesResume:
 
 def parent_completed(token: str, *, context=None):
     context = PAGES_CONTEXT if context is None else context
-    require(context in (PAGES_CONTEXT, ASSETS_CONTEXT))
+    require(context in (PAGES_CONTEXT, ASSETS_CONTEXT, GENERATION_CONTEXT))
     session = secure_session()
     try:
         url = "https://api.github.com/repos/aiaimimi0920/SpringBok/actions/runs/" + str(context["parentRunId"])

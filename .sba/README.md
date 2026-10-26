@@ -2,10 +2,45 @@
 
 ## 当前状态（2026-10-26）
 
-五动作入口、实例周期刷新、manifest v3 与 deployment v2 已实现；当前 1.0.4 为 Pages 资产响应恢复候选。
-首次部署和前三次独立 repair 均返回 `unknown`；没有重放或清锁，旧服务保持。
+五动作入口、实例周期刷新、manifest v3 与 deployment v2 已实现；1.0.4 的准确单次恢复已执行，
+在发布前的 generation 阶段返回 `unknown`。只读核实原控制记录、十个对象及云资源未变化，
+未创建移交标记或移交 writer；现有 Worker/Pages 仍为 1.0.3，Pages 仍无 deployment。
+首次部署和四次独立 repair 均未完成；没有自动重放或清锁，旧服务保持。
 应用尚未通过 SpringBok 正式上线，不能把本地测试、构建或平台上线当作应用上线。
 当前完整合同及边界见 [生命周期与调度](lifecycle.md)。旧手动部署及工作流保持不动。
+
+### EP-SBA-15：发布前生成 UNKNOWN 的只读核对和有限诊断（负责人：主 AI）
+
+1.0.4 任务 `dc-a541706c25ec4b25a446013a86acab17` / run `40311072936` 的真实应用回执为
+`EASYPROXY_SBA_GENERATION_UNKNOWN`，不是 Actions 成功即应用成功。发生后已停止云写入，
+未独立 verify、未做本地消费验收，也没有删除旧服务。完整只读前置 `assets-readonly-preflight-70.safe.json`
+证明 control/ETag、十个原对象、D1、GitHub、1.0.3 Worker 与无部署的 Pages 均保持；
+该 generation 在恢复移交和发布之前执行，不能误称 Pages 已发布成功。
+
+准确 main `c1dee04af9b0157551f316586d1a9a881e3f13ac` 在无云写凭据的本地隔离容器生成五份
+必需产物并校验通过；同源码的既有无部署凭据 hosted 预检 run `40312826379` 则在 generation
+阶段失败。两份证据仅确定存在环境相关的生成失败，尚不能确定采集源、网络或产物的具体根因。
+不以本地成功覆盖原 UNKNOWN，不擅自更换来源、降低校验或自动重试。
+
+PR #20 已发布有限诊断改进：生成来源、runtime、配置、采集、读回、产物、转换、校验
+使用有限的固定阶段码；只读预检可记录目标源码抛出的有限安全诊断常量，拒绝任意异常正文、
+伪装错误类型或不在白名单的字段。旧目标无需新增 diagnostics 依赖，不回退借用 driver 实现。
+诊断本身不改变采集、输出验证、调用次数或失败停写语义。
+
+只读 hosted run `40317489160` 将原准确 1.0.4 的失败缩小到 `subs/clash.yaml` 的
+YAML/节点结构校验；后续同源码只读 run `40318129093` 全部通过，公开采集结果并非固定输入。
+禁网合成试验使用批准 SHA 对应的真实 subconverter，证明纯数字密码会输出 `!<str> 123456`，
+现有 PyYAML `SafeLoader` 拒绝该合法转换器标签并复现 `ARTIFACT_FORMAT`。该兼容缺陷已证实，
+但旧 hosted 失败没有导出具体标签，不能声称已直接证明它恰好由这一标签触发。
+
+1.0.5 使用独立 `ClashSafeLoader`，仅为准确 `str` 标签构造标量字符串；不全局注册构造器，
+不接受其他标签、Python 对象标签或序列/映射型 `str`，保留原产物字节与全部其他校验。
+新增操作 `continue-generation-initial-deployment` 仅绑定准确 1.0.4 UNKNOWN 的 task/run/
+请求/结果摘要，并另核原 1.0.3 Pages 父任务终态。`previous` 为 1.0.4，而现场 writer、Worker/
+Pages 核对和 `PagesResume` 仍严格绑定真实 1.0.3。复用原十对象/所有资源的只读漂移检查，
+先 create-only 保存含最新失败与原祖先的移交证据，再单次 CAS 移交非空 writer；不删除、不
+重放 D1/GitHub，保留所有 UNKNOWN。任何新 UNKNOWN 均停止云写入，不自动再次恢复。
+用户已批准“先发布只读诊断，再按此受限方案继续恢复”；新任务尚未提交，1.0.5 未上线。
 
 ### EP-SBA-14：Pages 资产 API 合同与新准确任务恢复（负责人：主 AI）
 

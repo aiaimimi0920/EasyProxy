@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import application
 import pages_repair as repair
 from coordination import Coordinator, CoordinationError, StoreUnknown, StoreConflict, STATE_KEY
-from repair_context import PAGES_CONTEXT, PAGES_PARENT_RELEASE, ASSETS_CONTEXT
+from repair_context import PAGES_CONTEXT, PAGES_PARENT_RELEASE, ASSETS_CONTEXT, GENERATION_CONTEXT
 from request import RequestError, SECRETS
 from test_coordination import MemoryStore, state
 from test_pristine_repair import request_fixture
@@ -132,7 +132,7 @@ def test_semantically_equal_noncanonical_control_is_rejected(partial):
 
 def test_manifest_has_a_third_separate_error_scope_with_existing_secrets_only():
     manifest = json.loads((Path(__file__).resolve().parents[1] / "manifest.json").read_bytes())
-    assert manifest["version"] == "1.0.4" and len(manifest["repairs"]) == 4
+    assert manifest["version"] == "1.0.5" and len(manifest["repairs"]) == 5
     scope = next(row for row in manifest["repairs"] if row["id"] == PAGES_CONTEXT["repairId"])
     assert scope["fromErrorCodes"] == [PAGES_CONTEXT["errorCode"]] and set(scope["secretNames"]) == SECRETS
 
@@ -153,9 +153,8 @@ def test_application_passes_only_the_exact_pages_recovery_request(tmp_path, monk
 
 
 @pytest.mark.parametrize("mutation", [None, "status", "conclusion", "run_attempt", "head_sha", "path", "display_title", "event", "http", "json"])
-@pytest.mark.parametrize("assets", [False, True])
-def test_parent_is_terminal_first_attempt_with_exact_executor_and_request(monkeypatch, mutation, assets):
-    context = ASSETS_CONTEXT if assets else PAGES_CONTEXT
+@pytest.mark.parametrize("context", [PAGES_CONTEXT, ASSETS_CONTEXT, GENERATION_CONTEXT])
+def test_parent_is_terminal_first_attempt_with_exact_executor_and_request(monkeypatch, mutation, context):
     row = {"id": context["parentRunId"], "run_attempt": 1, "status": "completed", "conclusion": "success",
            "head_sha": repair.EXECUTOR_SHA, "event": "workflow_dispatch", "path": ".github/workflows/sba-execute-linux.yml",
            "display_title": "sba:" + context["parentTaskId"] + ":" + context["requestDigest"]}

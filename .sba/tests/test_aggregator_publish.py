@@ -229,6 +229,32 @@ def test_yaml_exception_does_not_disclose_subscription_credentials():
     assert not objects.writes
 
 
+def test_approved_converter_scalar_string_tag_keeps_candidate_bytes_and_password_type():
+    owner, objects, public = setup()
+    permit = owner.begin("deploy", OLD)
+    bodies = copy.deepcopy(BODIES)
+    # 批准转换器对纯数字密码的真实输出形式；不得全局放宽 SafeLoader。
+    bodies["subs/clash.yaml"] = (b'proxies:\n  - {name: controlled-fixture, server: 192.0.2.1, port: 443, '
+                                  b'type: ss, cipher: aes-128-gcm, password: !<str> 123456}')
+    candidate = publish.publish_candidate(owner, permit, objects, public, bodies)
+    assert candidate.artifacts == bodies
+    assert publish.yaml.load(bodies["subs/clash.yaml"], Loader=publish.ClashSafeLoader)["proxies"][0]["password"] == "123456"
+    with pytest.raises(publish.yaml.constructor.ConstructorError):
+        publish.yaml.safe_load(bodies["subs/clash.yaml"])
+
+
+@pytest.mark.parametrize("tagged", [b"!<str> []", b"!<str> {}", b"!<other> 123456",
+                                   b"!<str:private> 123456", b'!!python/object/apply:os.system ["PRIVATE"]'])
+def test_clash_loader_rejects_nonscalar_and_unreviewed_tags_before_any_stage(tagged):
+    owner, objects, public = setup()
+    permit = owner.begin("deploy", OLD)
+    bodies = copy.deepcopy(BODIES)
+    bodies["subs/clash.yaml"] = b"proxies: [{name: fixture, password: " + tagged + b"}]"
+    with pytest.raises(ArtifactError, match="FORMAT"):
+        publish.publish_candidate(owner, permit, objects, public, bodies)
+    assert not objects.writes and not owner.store.stages
+
+
 @pytest.mark.parametrize("field,value", [("operation_id", "0" * 32), ("candidate_digest", "0" * 64),
                                         ("aggregator_sha", "0" * 40)])
 def test_audit_receipt_must_match_operation_bytes_and_approved_gitlink(field, value):

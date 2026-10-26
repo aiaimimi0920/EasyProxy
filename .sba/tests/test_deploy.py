@@ -137,15 +137,21 @@ def test_attested_recovery_never_initializes_d1_again_and_commits_only_after_rem
     assert state(store)["active"] == request.candidate and state(store)["writer"] is None
 
 
-@pytest.mark.parametrize("assets", [False, True])
+@pytest.mark.parametrize("kind", ["pages", "assets", "generation"])
 @pytest.mark.parametrize("failure", [None, "edge", "pages", "sync"])
-def test_pages_recovery_does_not_replay_d1_or_github_and_passes_resume_to_publication(prepared, monkeypatch, failure, assets):
+def test_pages_recovery_does_not_replay_d1_or_github_and_passes_resume_to_publication(prepared, monkeypatch, failure, kind):
     from pages_repair import PagesResume
     from repair_context import PAGES_CONTEXT, PAGES_PARENT_RELEASE, ASSETS_CONTEXT, ASSETS_PARENT_RELEASE
+    from repair_context import GENERATION_CONTEXT, GENERATION_PARENT_RELEASE
     import hashlib
     request, root, tools, image, sealer, output, credentials, store, record = prepared
-    parent = ASSETS_PARENT_RELEASE if assets else PAGES_PARENT_RELEASE
-    recovery = replace(request, action="repair", previous=parent, context=ASSETS_CONTEXT if assets else PAGES_CONTEXT)
+    parent = PAGES_PARENT_RELEASE if kind == "pages" else ASSETS_PARENT_RELEASE
+    context, previous, symbol = {
+        "pages": (PAGES_CONTEXT, PAGES_PARENT_RELEASE, "begin_pages_recovery"),
+        "assets": (ASSETS_CONTEXT, ASSETS_PARENT_RELEASE, "begin_assets_recovery"),
+        "generation": (GENERATION_CONTEXT, GENERATION_PARENT_RELEASE, "begin_generation_recovery"),
+    }[kind]
+    recovery = replace(request, action="repair", previous=previous, context=context)
     handles = []
     def begin(owner, current, source, values):
         assert current is recovery and source == root and values is credentials
@@ -153,7 +159,7 @@ def test_pages_recovery_does_not_replay_d1_or_github_and_passes_resume_to_public
         resume = PagesResume(permit.operation_id, hashlib.sha256(permit.state_bytes).hexdigest(), parent["sourceSha"])
         handles.append(resume)
         return permit, resume
-    monkeypatch.setattr(orchestration, "begin_assets_recovery" if assets else "begin_pages_recovery", begin)
+    monkeypatch.setattr(orchestration, symbol, begin)
     monkeypatch.setattr(orchestration, "initialize_d1", lambda *_a, **_k: pytest.fail("no DDL"))
     monkeypatch.setattr(orchestration, "configure_environment", lambda *_a, **_k: pytest.fail("no GitHub write"))
     def d1(*_):
