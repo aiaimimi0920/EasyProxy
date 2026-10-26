@@ -88,12 +88,9 @@ class PagesAPI:
                            pages_asset_response=True, diagnostic=diagnostic,
                            json=[{"key": key, "value": base64.b64encode(asset.body).decode("ascii"),
                                   "metadata": {"contentType": asset.content_type}, "base64": True}])
-        # A second read-only check confirms every required hash is present.
-        with pages_phase("PAGES_ASSET_VERIFY") as diagnostic:
-            before_write()
-            verified = api_result(self._session, jwt, "POST", "/pages/assets/check-missing", require,
-                                  pages_asset_response=True, diagnostic=diagnostic, json={"hashes": hashes})
-            require(verified == [], "ASSETS_UNKNOWN")
+        # Match the pinned Wrangler Pages protocol: upload ACKs precede recent-hash
+        # registration. check-missing is not an immediate post-upload read barrier.
+        # Deployment/project/public-version verification remains in publish_pages.
         with pages_phase("PAGES_ASSET_REGISTER") as diagnostic:
             before_write()
             api_result(self._session, jwt, "POST", "/pages/assets/upsert-hashes", require,

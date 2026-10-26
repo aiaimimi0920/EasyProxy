@@ -100,7 +100,7 @@ def test_all_diagnostic_codes_fit_actual_springbok_contract():
     ('server-error','EASYPROXY_SBA_PAGES_PROJECT_CREATE_HTTP_5XX_UNKNOWN',1),
     ('asset-upload-denied','EASYPROXY_SBA_PAGES_ASSET_UPLOAD_HTTP_403_UNKNOWN',3),
     ('asset-query-invalid-json','EASYPROXY_SBA_PAGES_ASSET_QUERY_DECODE_UNKNOWN',2),
-    ('asset-register-rate-limit','EASYPROXY_SBA_PAGES_ASSET_REGISTER_HTTP_429_UNKNOWN',5)])
+    ('asset-register-rate-limit','EASYPROXY_SBA_PAGES_ASSET_REGISTER_HTTP_429_UNKNOWN',4)])
 def test_real_http_failure_is_precise_and_preserves_locked_writer(candidate, api_wire, mode, code, write_count):
     release, settings = candidate
     api_wire['mode'] = mode

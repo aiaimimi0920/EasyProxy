@@ -135,7 +135,7 @@ def test_success_cannot_be_repeated_and_wrong_context_never_observes_resources(p
 
 def test_manifest_has_five_separate_scopes_and_no_additional_secrets():
     manifest = json.loads((Path(__file__).resolve().parents[1] / "manifest.json").read_bytes())
-    assert manifest["version"] == "1.0.9" and len(manifest["repairs"]) == 7
+    assert manifest["version"] == "1.0.10" and len(manifest["repairs"]) == 8
     scope = next(row for row in manifest["repairs"] if row["id"] == GENERATION_CONTEXT["repairId"])
     assert scope["fromErrorCodes"] == [GENERATION_CONTEXT["errorCode"]] and set(scope["secretNames"]) == SECRETS
 
