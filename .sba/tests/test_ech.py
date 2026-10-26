@@ -265,17 +265,19 @@ def test_real_fixed_build_to_http_publication_keeps_suite_writer(candidate, api_
 
 
 @pytest.mark.parametrize("failure", [None, "settings", "bundle", "server-error", "response-lost"])
-def test_exact_pages_resume_publishes_only_new_worker_revision_without_subdomain_rewrite(candidate, api_wire, monkeypatch, tmp_path, failure):
+@pytest.mark.parametrize("assets", [False, True])
+def test_exact_pages_resume_publishes_only_new_worker_revision_without_subdomain_rewrite(candidate, api_wire, monkeypatch, tmp_path, failure, assets):
     import pages_repair
     release, settings = candidate
     owner, permit, store, _ = held(release)
     bundle = ech.build_bundle(settings.root, settings.esbuild, tmp_path / "previous-worker")
     monkeypatch.setattr(pages_repair, "WORKER_BUNDLE_SHA256", hashlib.sha256(bundle).hexdigest())
     api_wire["downloadBundle"] = b"changed" if failure == "bundle" else bundle
-    api_wire["settings"] = ech.metadata(owner, pages_repair.PAGES_PARENT_RELEASE, ECH_TOKEN)
+    parent = pages_repair.ASSETS_PARENT_RELEASE if assets else pages_repair.PAGES_PARENT_RELEASE
+    api_wire["settings"] = ech.metadata(owner, parent, ECH_TOKEN)
     if failure == "settings": api_wire["settings"]["bindings"][0]["bucket_name"] = "other-bucket"
     api_wire["mode"] = failure or "normal"
-    resume = pages_repair.PagesResume(permit.operation_id, hashlib.sha256(permit.state_bytes).hexdigest())
+    resume = pages_repair.PagesResume(permit.operation_id, hashlib.sha256(permit.state_bytes).hexdigest(), parent["sourceSha"])
     def run():
         return ech.publish_ech(owner, permit, settings, api_token="fixture-api-token", ech_token=ECH_TOKEN, resume=resume)
     if failure:

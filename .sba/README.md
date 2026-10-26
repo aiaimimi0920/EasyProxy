@@ -2,10 +2,38 @@
 
 ## 当前状态（2026-10-26）
 
-五动作入口、实例周期刷新、manifest v3 与 deployment v2 已实现；当前 1.0.3 为 Pages 定向恢复候选。
-首次部署、pristine repair 和后续 GitHub repair 均返回 `unknown`；没有重放或清锁，旧服务保持。
+五动作入口、实例周期刷新、manifest v3 与 deployment v2 已实现；当前 1.0.4 为 Pages 资产响应恢复候选。
+首次部署和前三次独立 repair 均返回 `unknown`；没有重放或清锁，旧服务保持。
 应用尚未通过 SpringBok 正式上线，不能把本地测试、构建或平台上线当作应用上线。
 当前完整合同及边界见 [生命周期与调度](lifecycle.md)。旧手动部署及工作流保持不动。
+
+### EP-SBA-14：Pages 资产 API 合同与新准确任务恢复（负责人：主 AI）
+
+1.0.3 的单次恢复 `dc-3dad4093eba94806b436848210a958fb` / run `40288989518`
+在 Pages 阶段再次 UNKNOWN 后停止。只读查询确定 `check-missing` 成功响应省略 `errors`；
+99 个公开资产 hash 均未命中，项目无 deployment，control 和十个原对象保持。
+Cloudflare 官方 OpenAPI 另明确 upload/upsert 成功 ACK 不要求 `result`。
+1.0.4 仅为三个准确的资产 POST 端点接受省略 `errors`，仅两个写入 ACK 可省略 `result`；
+显式错误、缺少成功标志、查询缺少结果、错误 hash 列表和其他 provider 响应仍拒绝。
+不改变无重试、无重定向和 UNKNOWN 停写语义。
+
+用户已另行批准新操作 `continue-pages-assets-deployment`，仅绑定上述 1.0.3 父任务、
+run、准确请求和结果摘要。恢复前核新 control 字节、十个原对象及全部正文、D1 schema/history/
+四表零行、完整 GitHub、1.0.3 Worker 元数据/公开版本/同业务模块摘要、准确 Pages ID/配置/
+零部署；任何漂移拒绝写入。先 create-only 移交证据，再单次 CAS 移交非空 writer，保留所有
+历史阶段与 UNKNOWN，不重放 D1 或 GitHub，不删除资源。Worker 只更新同 bundle 的来源
+元数据；Pages 复用项目，更新版本、首次上传资产和发布；随后完整审计、同步和独立读回。
+再次 UNKNOWN 立即停止。该入口尚未正式执行，不能称应用已上线。
+
+资产 API 四文件窄修的隔离 Linux 全量 `assets-native-54.xml` 为 **805 passed、0 skip**。
+此前 native52 的单项失败已证实是 Windows bind mount 丢失测试 helper 执行权限；仅在隔离
+容器复制、核摘要并 chmod 后复验，不修改产品或宿主二进制。新恢复初轮定向验证
+`assets-repair-55.xml` 为 195 passed。1.0.4 完整冻结源码的 `assets-recovery-native-57.xml`
+为 **868 passed、0 skip**，CLI Go 82 项、0 skip 与 go vet 通过，并按新源码重建真实 sealer。
+native56 因隔离网络下空 Go cache 无法下载依赖而失败；native57 显式复用固定测试环境内的
+已有依赖缓存、禁用下载后复验，不改产品合同。SpringBok 实际 parser 接受四个 repair，
+冻结源码 Gitleaks 未发现泄漏；`assets-readonly-preflight-58.safe.json` 七项真实只读前置通过。
+准确 PR/main CI、正式单次恢复和最终本地业务验收仍待完成。
 
 ### EP-SBA-13：Pages 空变量响应与准确部分发布恢复（负责人：主 AI）
 

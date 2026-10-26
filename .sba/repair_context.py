@@ -26,3 +26,14 @@ PAGES_CONTEXT = {
     "resultDigest": "0e6d8cc8b2e6dd1a15f64ddcfffc308a2a9d5b753cd8f8ea273a7b33495265a1",
     "errorCode": "EASYPROXY_SBA_PAGES_UNKNOWN",
 }
+
+ASSETS_REPAIR_ID = "continue-pages-assets-deployment"
+ASSETS_PARENT_RELEASE = {"sourceSha": "097ef164bd8980e880cb8044f24f5bad4be1ef69", "applicationVersion": "1.0.3"}
+ASSETS_CONTEXT = {
+    "repairId": ASSETS_REPAIR_ID,
+    "parentTaskId": "dc-3dad4093eba94806b436848210a958fb",
+    "parentRunId": 40288989518,
+    "requestDigest": "7b1360af73689f933536b3e9297ce073cf1cd202a1e90d2842d2c461a566a38d",
+    "resultDigest": "7ccfdffe0f7a0b5e3d19283c992e1788a1fd4e43810efac3411c70b5fe734170",
+    "errorCode": "EASYPROXY_SBA_PAGES_UNKNOWN",
+}

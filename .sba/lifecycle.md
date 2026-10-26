@@ -2,8 +2,8 @@
 
 ## 当前状态（2026-10-26）
 
-五动作应用入口、实例周期刷新、manifest v3 与 deployment v2 已实现；1.0.3 包含准确 Pages 中断恢复
-候选。首次任务、pristine repair 和 GitHub repair 返回 UNKNOWN，未重放、未清锁。应用尚未通过
+五动作应用入口、实例周期刷新、manifest v3 与 deployment v2 已实现；1.0.4 包含准确 Pages 资产响应恢复
+候选。首次任务和前三次独立 repair 返回 UNKNOWN，未重放、未清锁。应用尚未通过
 SpringBok 正式部署，不能把本地合同测试、构建或平台 SUITE-03 上线当作应用上线。
 旧手动部署和旧工作流仍保留，不被本套件隐式接管。
 
@@ -106,6 +106,25 @@ R2 writer 不会锁住外部管理员；部署期间必须排除 out-of-band 修
 也不为维持它另建长期服务。产物仍须至少有真实可消费节点并通过相同审计，停用不绕过验收。
 
 ## 验证与证据
+
+### 准确 Pages 资产响应恢复（EP-SBA-14）
+
+1.0.3 任务 `dc-3dad4093eba94806b436848210a958fb` / run `40288989518` 再次 UNKNOWN。
+真实只读资产查询省略 `errors`；官方 OpenAPI 的 upload/upsert ACK 又不要求 `result`。
+兼容仅限三个准确资产 POST 端点；查询仍必须返回合法 hash 列表，普通项目/Worker 合同不变。
+
+另行批准的新 repair `continue-pages-assets-deployment` 固定准确 1.0.3 context/release、
+control `aa8c2bf3295c755bba5f2a2018a6c9eff8c93dc1600ac8fdc7750617f6ff80b3`、
+writer `0321f9e60e7044b1a73ae1134ab332d4` 和十个原对象。重复核 control/对象及全部
+资源前置后才保存新移交证据、单次 CAS；writer 从不清空。D1/GitHub 只读，Worker/Pages
+严格先验证现有 1.0.3 而不是旧 1.0.2，再发布一致的新版本来源证明，不新建或删除资源。
+原 UNKNOWN 和全部阶段保持；任何响应不确定立即停止，不自动重复恢复。
+
+资产 API 窄修隔离 Linux 全量 `assets-native-54.xml`：805 passed、0 skip；新恢复定向
+`assets-repair-55.xml`：195 passed。1.0.4 完整冻结源码 `assets-recovery-native-57.xml` 为
+868 passed、0 skip，CLI Go 82 项与 go vet 通过、真实 sealer 重建；SpringBok parser、
+Gitleaks 与真实只读七项前置也通过。这些不是正式部署成功证据。
+仍须准确源码发布、正式单次恢复、独立无写凭据 verify 和最终版本的双来源真实代理验收。
 
 ### 准确 Pages 中断恢复（EP-SBA-13）
 

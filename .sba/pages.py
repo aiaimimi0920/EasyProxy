@@ -122,7 +122,7 @@ def _verify_public(project: str, release: dict):
 
 
 def publish_pages(owner: Coordinator, permit: Permit, settings: PagesDeployment, *, api_token: str, secrets: dict, resume=None) -> dict:
-    from pages_repair import PagesResume, PAGES_PARENT_RELEASE, PROJECT_ID
+    from pages_repair import PagesResume, PROJECT_ID
     state = owner.assert_owned(permit)
     require(permit.action in ("deploy", "update", "preview") and inventory_digest(settings.inventory) == owner.inventory_digest,
             "INVENTORY")
@@ -145,7 +145,7 @@ def publish_pages(owner: Coordinator, permit: Permit, settings: PagesDeployment,
         existing = api.project()
         project_id = None
         if resume is not None:
-            previous = configuration(owner, PAGES_PARENT_RELEASE, settings.project_name, databases[0]["id"], secrets)
+            previous = configuration(owner, resume.parent_release, settings.project_name, databases[0]["id"], secrets)
             project_id = _verify_project(existing, settings.project_name, previous, PROJECT_ID)
             require(existing.get("latest_deployment") is None and existing.get("canonical_deployment") is None
                     and api.deployments() == [], "DEPLOYMENT")

@@ -14,10 +14,13 @@ import github_environment
 from refresh_registry import REGISTRY_VARIABLE
 from test_pages_repair import recovery_request
 from test_request import parse
+from repair_context import ASSETS_PARENT_RELEASE
 
 
 @pytest.mark.parametrize("mutation", [None, "repository", "workflow", "environment", "variables", "secrets", "registry", "policy"])
-def test_complete_github_is_only_read_and_any_drift_stops(monkeypatch, tmp_path, mutation):
+@pytest.mark.parametrize("assets", [False, True])
+def test_complete_github_is_only_read_and_any_drift_stops(monkeypatch, tmp_path, mutation, assets):
+    parent = ASSETS_PARENT_RELEASE if assets else repair.PAGES_PARENT_RELEASE
     config = parse(recovery_request()).config
     owner = SimpleNamespace(identity=config.identity("production"), inventory_digest=config.inventory_digest)
     expected = github_environment.variables(owner, config, 123, repair.ENVIRONMENT_ID)
@@ -46,9 +49,10 @@ def test_complete_github_is_only_read_and_any_drift_stops(monkeypatch, tmp_path,
     monkeypatch.setattr(repair, "GitHubAPI", API)
     if mutation:
         with pytest.raises(RuntimeError):
-            repair.verify_configured(owner, config, tmp_path, "fixture-only")
+            repair.verify_configured(owner, config, tmp_path, "fixture-only", parent_release=parent)
     else:
-        assert repair.verify_configured(owner, config, tmp_path, "fixture-only")["refreshEnabled"] is True
+        assert repair.verify_configured(owner, config, tmp_path, "fixture-only", parent_release=parent)["refreshEnabled"] is True
+        assert parent["sourceSha"] in calls
     assert calls[-1] == "closed"
 
 
@@ -83,11 +87,13 @@ def test_worker_module_download_is_bounded_get_and_strict_single_module(mutation
 
 
 @pytest.mark.parametrize("mutation", [None, "subdomain", "settings", "bundle", "public-version"])
-def test_existing_worker_requires_settings_public_version_and_exact_module(monkeypatch, mutation):
+@pytest.mark.parametrize("assets", [False, True])
+def test_existing_worker_requires_settings_public_version_and_exact_module(monkeypatch, mutation, assets):
     from ech import metadata
     config = parse(recovery_request()).config
     owner = SimpleNamespace(identity=config.identity("production"), inventory_digest=config.inventory_digest)
-    expected = metadata(owner, repair.PAGES_PARENT_RELEASE, "fixture-token")
+    parent = ASSETS_PARENT_RELEASE if assets else repair.PAGES_PARENT_RELEASE
+    expected = metadata(owner, parent, "fixture-token")
     calls = []
     class API:
         def __init__(self, *_): pass
@@ -101,9 +107,9 @@ def test_existing_worker_requires_settings_public_version_and_exact_module(monke
     monkeypatch.setattr(repair, "WorkerAPI", API)
     monkeypatch.setattr(repair, "worker_bundle_digest", lambda *_: "f" * 64 if mutation == "bundle" else repair.WORKER_BUNDLE_SHA256)
     monkeypatch.setattr(repair, "public_release", lambda _: {"schemaVersion": 1, "applicationId": "easyproxy-cloud",
-        **repair.PAGES_PARENT_RELEASE, **({"sourceSha": "f" * 40} if mutation == "public-version" else {})})
+        **parent, **({"sourceSha": "f" * 40} if mutation == "public-version" else {})})
     if mutation:
-        with pytest.raises(RuntimeError): repair.verify_existing_worker(config, owner, "fixture-api", "fixture-token")
+        with pytest.raises(RuntimeError): repair.verify_existing_worker(config, owner, "fixture-api", "fixture-token", parent_release=parent)
     else:
-        repair.verify_existing_worker(config, owner, "fixture-api", "fixture-token")
+        repair.verify_existing_worker(config, owner, "fixture-api", "fixture-token", parent_release=parent)
     assert calls[-1] == "closed"

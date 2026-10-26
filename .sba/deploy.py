@@ -7,6 +7,7 @@ from aggregator_audit import audit_candidate
 from aggregator_publish import RAW, PublicArtifacts, _validate, promote_candidate, publish_candidate
 from artifact_store import ArtifactStore
 from audit_image import AuditImage, image_identity
+from assets_repair import begin_recovery as begin_assets_recovery
 from coordination import Coordinator, r2_store
 from d1_init import initialize_d1
 from diagnostics import phase
@@ -17,7 +18,7 @@ from misub_sync import sync_misub
 from migration import MiSubMigration, migrate_misub
 from pages import PagesDeployment, configuration as pages_configuration, publish_pages
 from pages_repair import PagesResume, begin_recovery as begin_pages_recovery, verify_configured
-from repair_context import PAGES_REPAIR_ID
+from repair_context import PAGES_REPAIR_ID, ASSETS_REPAIR_ID
 from request import ApplicationRequest, SECRETS
 from sealed_box import Sealer, secret_value
 from sources import inspect_checkout
@@ -89,7 +90,8 @@ def deploy_suite(request: ApplicationRequest, root: Path, tools: LinuxTools, ima
             if recovery_request is None:
                 permit = owner.begin(request.action, release, previous=request.previous)
             else:
-                begin = begin_pages_recovery if recovery_request.context.get("repairId") == PAGES_REPAIR_ID else begin_recovery
+                begin = {PAGES_REPAIR_ID: begin_pages_recovery, ASSETS_REPAIR_ID: begin_assets_recovery}.get(
+                    recovery_request.context.get("repairId"), begin_recovery)
                 permit, resume = begin(owner, recovery_request, root, credentials)
         # No stage, exception path, or finally below may release this writer.
         if request.action == "deploy":
@@ -110,7 +112,8 @@ def deploy_suite(request: ApplicationRequest, root: Path, tools: LinuxTools, ima
         with phase("GITHUB"):
             if type(resume) is PagesResume:
                 resume.assert_permit(owner, permit)
-                github = verify_configured(owner, config, root, credentials["EASYPROXY_GITHUB_TOKEN"])
+                github = verify_configured(owner, config, root, credentials["EASYPROXY_GITHUB_TOKEN"],
+                                           parent_release=resume.parent_release)
             else:
                 github = configure_environment(owner, permit, config, root, token=credentials["EASYPROXY_GITHUB_TOKEN"],
                     secrets={name: credentials[name] for name in REFRESH_SECRETS}, sealer=sealer, resume=resume)

@@ -66,7 +66,8 @@ class PagesAPI:
         hash_set = {asset.hash for asset in assets}
         hashes = sorted(hash_set)
         before_write()
-        missing = api_result(self._session, jwt, "POST", "/pages/assets/check-missing", require, json={"hashes": hashes})
+        missing = api_result(self._session, jwt, "POST", "/pages/assets/check-missing", require,
+                             pages_asset_response=True, json={"hashes": hashes})
         require(type(missing) is list and all(type(item) is str and item in hash_set for item in missing)
                 and len(set(missing)) == len(missing), "ASSETS_UNKNOWN")
         by_hash = {asset.hash: asset for asset in assets}
@@ -76,14 +77,17 @@ class PagesAPI:
             asset = by_hash[key]
             before_write()
             api_result(self._session, jwt, "POST", "/pages/assets/upload", require,
+                       pages_asset_response=True,
                        json=[{"key": key, "value": base64.b64encode(asset.body).decode("ascii"),
                               "metadata": {"contentType": asset.content_type}, "base64": True}])
         # A second read-only check confirms every required hash is present.
         before_write()
-        verified = api_result(self._session, jwt, "POST", "/pages/assets/check-missing", require, json={"hashes": hashes})
+        verified = api_result(self._session, jwt, "POST", "/pages/assets/check-missing", require,
+                              pages_asset_response=True, json={"hashes": hashes})
         require(verified == [], "ASSETS_UNKNOWN")
         before_write()
-        api_result(self._session, jwt, "POST", "/pages/assets/upsert-hashes", require, json={"hashes": hashes})
+        api_result(self._session, jwt, "POST", "/pages/assets/upsert-hashes", require,
+                   pages_asset_response=True, json={"hashes": hashes})
 
     def deploy(self, artifact, release: dict) -> dict:
         value = api_result(self._session, self._token, "POST", self.path + "/deployments", require, files={
