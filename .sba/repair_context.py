@@ -37,3 +37,15 @@ ASSETS_CONTEXT = {
     "resultDigest": "7ccfdffe0f7a0b5e3d19283c992e1788a1fd4e43810efac3411c70b5fe734170",
     "errorCode": "EASYPROXY_SBA_PAGES_UNKNOWN",
 }
+
+# generation 在任何移交之前失败；资源仍属于 1.0.3，不将 previous 版本误作现场版本。
+GENERATION_REPAIR_ID = "continue-generation-initial-deployment"
+GENERATION_PARENT_RELEASE = {"sourceSha": "c1dee04af9b0157551f316586d1a9a881e3f13ac", "applicationVersion": "1.0.4"}
+GENERATION_CONTEXT = {
+    "repairId": GENERATION_REPAIR_ID,
+    "parentTaskId": "dc-a541706c25ec4b25a446013a86acab17",
+    "parentRunId": 40311072936,
+    "requestDigest": "3e89453fa2a6eef210b90f2fb759e59806b792851baff45f1b865294ad29cc0e",
+    "resultDigest": "b66b1d96c2eb4c492abc15c4600b40de40a8f6f2921cfdd180504342f170a16c",
+    "errorCode": "EASYPROXY_SBA_GENERATION_UNKNOWN",
+}

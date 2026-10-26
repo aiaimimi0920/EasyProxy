@@ -1,7 +1,9 @@
 """隔离副本补丁和固定工具拒绝路径；不运行上游生成或云操作。"""
 import hashlib
 from pathlib import Path
+import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -80,3 +82,29 @@ def test_runtime_receipt_and_bytes_are_rechecked_after_generation(tmp_path, monk
     (tmp_path / next(iter(pins))).write_bytes(b"changed-during-generation")
     with pytest.raises(ArtifactError, match="RUNTIME_TOOL"):
         runtime.verify_runtime(tmp_path.resolve(), receipt)
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="approved converter is Linux/x64")
+def test_real_approved_converter_numeric_password_passes_isolated_clash_loader(tmp_path):
+    import aggregator_publish as publish
+    from test_aggregator_publish import BODIES
+    work = tmp_path / "subconverter"
+    shutil.copytree(ROOT / "upstreams/aggregator/subconverter", work)
+    binary = work / "subconverter-linux-amd"
+    assert hashlib.sha256(binary.read_bytes()).hexdigest() == runtime.BINARIES["subconverter/subconverter-linux-amd"]
+    binary.chmod(0o700)
+    (work / "fixture.yaml").write_text('proxies: [{name: controlled-fixture, type: ss, server: 192.0.2.1, '
+        'port: 443, cipher: aes-128-gcm, password: "123456"}]\n', encoding="utf-8")
+    (work / "generate.ini").write_text("[probe]\npath=probe.yaml\nurl=fixture.yaml\nexpand=false\n"
+        "target=clash\nlist=true\nemoji=true\nadd_emoji=true\n", encoding="utf-8")
+    completed = subprocess.run([str(binary), "-g", "--artifact", "probe"], cwd=work,
+                               capture_output=True, timeout=30, check=False)
+    assert completed.returncode == 0
+    body = (work / "probe.yaml").read_bytes()
+    assert b"password: !<str> 123456" in body
+    with pytest.raises(publish.yaml.constructor.ConstructorError):
+        publish.yaml.safe_load(body)
+    bodies = {**BODIES, "subs/clash.yaml": body}
+    publish._validate(bodies, publish.RAW)
+    assert bodies["subs/clash.yaml"] == body
+    assert publish.yaml.load(body, Loader=publish.ClashSafeLoader)["proxies"][0]["password"] == "123456"

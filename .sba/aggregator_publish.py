@@ -29,6 +29,13 @@ RAW = {key for name, key in ARTIFACTS.items() if name not in ("public-effective"
 RUN = re.compile(r"[a-f0-9]{32}\Z")
 
 
+class ClashSafeLoader(yaml.SafeLoader):
+    """仅兼容批准 subconverter 输出的 !<str> 标量；不污染全局 SafeLoader。"""
+
+
+ClashSafeLoader.add_constructor("str", yaml.SafeLoader.construct_yaml_str)
+
+
 @dataclass(frozen=True)
 class Candidate:
     operation_id: str
@@ -74,7 +81,7 @@ def _validate(bodies: dict[str, bytes], expected: set[str]) -> None:
                 if key == "subs/singbox.json":
                     require(type(value) is dict and type(value.get("outbounds")) is list and value["outbounds"], "FORMAT")
             if key == "subs/clash.yaml":
-                value = yaml.safe_load(body)
+                value = yaml.load(body, Loader=ClashSafeLoader)
                 require(type(value) is dict and type(value.get("proxies")) is list and value["proxies"], "FORMAT")
             if key in ("subs/mixed.txt", "subs/v2ray.txt"):
                 decoded = base64.b64decode(b"".join(body.split()), validate=True).decode("utf-8")

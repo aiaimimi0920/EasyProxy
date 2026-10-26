@@ -14,11 +14,12 @@ from diagnostics import phase
 from ech import EchDeployment, metadata as worker_metadata, publish_ech
 from github_environment import REFRESH_SECRETS, configure_environment, reviewed_workflow
 from github_repair import begin_recovery, verify_initialized
+from generation_repair import begin_recovery as begin_generation_recovery
 from misub_sync import sync_misub
 from migration import MiSubMigration, migrate_misub
 from pages import PagesDeployment, configuration as pages_configuration, publish_pages
 from pages_repair import PagesResume, begin_recovery as begin_pages_recovery, verify_configured
-from repair_context import PAGES_REPAIR_ID, ASSETS_REPAIR_ID
+from repair_context import PAGES_REPAIR_ID, ASSETS_REPAIR_ID, GENERATION_REPAIR_ID
 from request import ApplicationRequest, SECRETS
 from sealed_box import Sealer, secret_value
 from sources import inspect_checkout
@@ -90,7 +91,8 @@ def deploy_suite(request: ApplicationRequest, root: Path, tools: LinuxTools, ima
             if recovery_request is None:
                 permit = owner.begin(request.action, release, previous=request.previous)
             else:
-                begin = {PAGES_REPAIR_ID: begin_pages_recovery, ASSETS_REPAIR_ID: begin_assets_recovery}.get(
+                begin = {PAGES_REPAIR_ID: begin_pages_recovery, ASSETS_REPAIR_ID: begin_assets_recovery,
+                         GENERATION_REPAIR_ID: begin_generation_recovery}.get(
                     recovery_request.context.get("repairId"), begin_recovery)
                 permit, resume = begin(owner, recovery_request, root, credentials)
         # No stage, exception path, or finally below may release this writer.

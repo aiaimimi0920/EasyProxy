@@ -9,6 +9,7 @@ from coordination import SHA, VERSION
 from sealed_box import secret_value
 from repair_context import CONTEXT_FIELDS, PARENT_ERROR, PARENT_RELEASE, REPAIR_ID, GITHUB_CONTEXT, GITHUB_PARENT_RELEASE
 from repair_context import PAGES_CONTEXT, PAGES_PARENT_RELEASE, ASSETS_CONTEXT, ASSETS_PARENT_RELEASE
+from repair_context import GENERATION_CONTEXT, GENERATION_PARENT_RELEASE
 from suite_config import ConfigurationError, SuiteConfig, parse_configuration
 
 
@@ -77,6 +78,9 @@ def repair_context(value, config):
         return
     if context["repairId"] == ASSETS_CONTEXT["repairId"]:
         require(context == ASSETS_CONTEXT and value["previous"] == ASSETS_PARENT_RELEASE)
+        return
+    if context["repairId"] == GENERATION_CONTEXT["repairId"]:
+        require(context == GENERATION_CONTEXT and value["previous"] == GENERATION_PARENT_RELEASE)
         return
     require(value["previous"] == PARENT_RELEASE
             and context["repairId"] == REPAIR_ID and context["errorCode"] == PARENT_ERROR
