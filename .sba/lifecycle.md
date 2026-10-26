@@ -2,9 +2,11 @@
 
 ## 当前状态（2026-10-26）
 
-五动作应用入口、实例周期刷新、manifest v3 与 deployment v2 已实现；1.0.4 的准确资产恢复任务
-已在发布前 generation 阶段返回 UNKNOWN，control、十个原对象及全部资源保持，没有移交 writer。
-首次任务和四次独立 repair 均未完成，未自动重放、未清锁。应用尚未通过
+五动作应用入口、实例周期刷新、manifest v3 与 deployment v2 已实现；1.0.5 的准确恢复任务
+`dc-7affcab05da84f4f938d4430aa9b4799` / run `40323259410` 在 Pages 返回 UNKNOWN。
+只读核实 `active=null`、writer 锁定 1.0.5、R2 十三对象及原九阶段对象保持；Worker 公开
+版本与 Pages 配置均为 1.0.5，但 Pages 零 deployment。D1/GitHub 保持，后续发布未进入。
+首次任务和五次独立 repair 均未完成，未自动重放、未清锁。应用尚未通过
 SpringBok 正式部署，不能把本地合同测试、构建或平台 SUITE-03 上线当作应用上线。
 旧手动部署和旧工作流仍保留，不被本套件隐式接管。
 
@@ -38,9 +40,16 @@ PR #20 将 generation 进一步分为来源、runtime、配置、采集、读回
 旧 hosted 失败只直接定位到 Clash YAML，而另一同源码采集已通过，不能扩大根因结论。
 新准确操作 `continue-generation-initial-deployment` 绑定 1.0.4 task
 `dc-a541706c25ec4b25a446013a86acab17` 的原请求/结果摘要与终态，并另核原 Pages 父任务。
-当前资源仍为 1.0.3；沿用其完整十对象/所有资源核对、单次 marker 后 CAS 移交，不重放
-D1/GitHub、不清锁、不删除，保留 UNKNOWN 与阶段证据。新 UNKNOWN 立即停写。
-用户已批准本次受限恢复；新任务尚未提交，1.0.5 尚未上线。
+该准确恢复执行时先核原 1.0.3 资源和完整十对象，再单次 marker 后 CAS 移交，不重放
+D1/GitHub、不清锁、不删除，保留 UNKNOWN 与阶段证据；最终 Pages 再次 UNKNOWN 后停写。
+用户对该次受限恢复的批准已消费，不得用它重试或移交当前 1.0.5 writer。
+
+1.0.6 仅补充二十个固定 Pages 子阶段及有限 HTTP/响应分类，回执不含正文、headers、
+token 或异常原文。请求顺序、次数、归属检查、成功判断及无重试语义保持，原 repair 的
+错误码匹配与准确父任务绑定不扩大。本轮授权仅为诊断源码发布和隔离验证，不执行生产
+repair/deploy/verify、writer 移交、资产上传、Pages 部署或旧服务删除；不是新的恢复许可。
+当前只读查询和 audit 未保存原失败资产请求的 HTTP 细节，根因仍未证实；诊断不能补回
+历史缺失信息，也不能把本地故障注入的分类成功当成线上修复成功。
 
 ## 五个生命周期动作
 

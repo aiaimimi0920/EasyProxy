@@ -132,7 +132,7 @@ def test_semantically_equal_noncanonical_control_is_rejected(partial):
 
 def test_manifest_has_a_third_separate_error_scope_with_existing_secrets_only():
     manifest = json.loads((Path(__file__).resolve().parents[1] / "manifest.json").read_bytes())
-    assert manifest["version"] == "1.0.5" and len(manifest["repairs"]) == 5
+    assert manifest["version"] == "1.0.6" and len(manifest["repairs"]) == 5
     scope = next(row for row in manifest["repairs"] if row["id"] == PAGES_CONTEXT["repairId"])
     assert scope["fromErrorCodes"] == [PAGES_CONTEXT["errorCode"]] and set(scope["secretNames"]) == SECRETS
 

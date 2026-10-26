@@ -19,6 +19,7 @@ import pytest
 import requests
 
 from test_ech import coordination, MemoryStore, CHECKS, commit, git, checkout
+from diagnostics import StageError, safe_error_code
 
 for module_name in ("pages_api", "pages_build", "pages"):
     spec = importlib.util.spec_from_file_location(module_name, Path(__file__).parents[1] / (module_name + ".py"))
@@ -153,6 +154,15 @@ def api_wire(monkeypatch):
             raw = self.rfile.read(int(self.headers["Content-Length"]))
             record["requests"].append((self.command, self.path))
             record["writes"].append((self.command, self.path, raw))
+            if record["mode"] == "asset-upload-denied" and self.path.endswith("/upload"):
+                self.send(status=403, raw=b"PRIVATE_PROVIDER_BODY_WITH_TOKEN")
+                return
+            if record["mode"] == "asset-query-invalid-json" and self.path.endswith("/check-missing"):
+                self.send(raw=b"PRIVATE_PROVIDER_BODY_WITH_TOKEN")
+                return
+            if record["mode"] == "asset-register-rate-limit" and self.path.endswith("/upsert-hashes"):
+                self.send(status=429, raw=b"PRIVATE_PROVIDER_BODY_WITH_TOKEN")
+                return
             if record["mode"] == "server-error":
                 self.send(status=500, raw=b"private-provider-details")
                 return
@@ -314,7 +324,10 @@ def test_exact_pages_resume_reuses_project_without_create_and_never_replays(cand
     def run():
         return pages.publish_pages(owner, permit, settings, api_token="fixture-api-token", secrets=SECRETS, resume=resume)
     if failure:
-        with pytest.raises(api_module.PagesError): run()
+        with pytest.raises(StageError) as caught: run()
+        expected = {"foreign-project": "PAGES_PARENT_VERIFY", "existing-deployment": "PAGES_PARENT_VERIFY",
+                    "config-drift": "PAGES_CONFIG_VERIFY", "lost-deploy": "PAGES_DEPLOYMENT_SUBMIT_NETWORK"}
+        assert safe_error_code(caught.value) == "EASYPROXY_SBA_" + expected[failure] + "_UNKNOWN"
         if failure in ("foreign-project", "existing-deployment"): assert api_wire["writes"] == []
     else:
         assert run()["checks"]["pages-published"] is True
@@ -322,7 +335,7 @@ def test_exact_pages_resume_reuses_project_without_create_and_never_replays(cand
     assert not any(method == "POST" and path.endswith("/projects") for method, path, *_ in api_wire["writes"])
     assert state_writer(store) == permit.operation_id
     before = len(api_wire["writes"])
-    with pytest.raises((api_module.PagesError, coordination.CoordinationError)): run()
+    with pytest.raises((api_module.PagesError, coordination.CoordinationError, StageError)): run()
     assert len(api_wire["writes"]) == before
 
 
@@ -358,7 +371,7 @@ def test_unknown_never_replays_rolls_back_deletes_or_unlocks(candidate, api_wire
     release, settings = candidate
     owner, permit, store, _ = held(release)
     api_wire["mode"] = mode
-    with pytest.raises(api_module.PagesError) as error:
+    with pytest.raises(StageError) as error:
         publish(owner, permit, settings)
     assert len(store.stages) == 1 and len(store.writes) == 1
     assert json.loads(store.body)["writer"]["operationId"] == permit.operation_id
@@ -372,7 +385,7 @@ def test_unknown_never_replays_rolls_back_deletes_or_unlocks(candidate, api_wire
     api_wire["mode"] = "normal"
     # Initial lost create now appears as an unowned resource, or the stage marker
     # itself rejects reentry. Either path must prevent all further provider writes.
-    with pytest.raises((coordination.CoordinationError, api_module.PagesError)):
+    with pytest.raises((coordination.CoordinationError, api_module.PagesError, StageError)):
         publish(owner, permit, replace(settings, workdir=settings.workdir.with_name("second-attempt")))
     assert len(api_wire["writes"]) == prior
 
@@ -404,7 +417,7 @@ def test_preflight_refuses_unapproved_ownership_and_credentials(candidate, api_w
         kwargs["api_token"] = "verification-not-applicable"
     if mode == "placeholder-business":
         kwargs["secrets"] = {**SECRETS, "COOKIE_SECRET": "verification-not-applicable"}
-    with pytest.raises((coordination.CoordinationError, api_module.PagesError)):
+    with pytest.raises((coordination.CoordinationError, api_module.PagesError, StageError)):
         publish(owner, permit, settings, **kwargs)
     assert api_wire["writes"] == [] and not store.stages
 
@@ -415,7 +428,7 @@ def test_concurrent_stage_entry_has_only_one_publication(candidate, api_wire):
     def attempt(index):
         try:
             return publish(owner, permit, replace(settings, workdir=settings.workdir.with_name(str(index))))
-        except (coordination.CoordinationError, api_module.PagesError):
+        except (coordination.CoordinationError, api_module.PagesError, StageError):
             return None
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(attempt, range(2)))
