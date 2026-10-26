@@ -137,27 +137,30 @@ def test_attested_recovery_never_initializes_d1_again_and_commits_only_after_rem
     assert state(store)["active"] == request.candidate and state(store)["writer"] is None
 
 
+@pytest.mark.parametrize("assets", [False, True])
 @pytest.mark.parametrize("failure", [None, "edge", "pages", "sync"])
-def test_pages_recovery_does_not_replay_d1_or_github_and_passes_resume_to_publication(prepared, monkeypatch, failure):
+def test_pages_recovery_does_not_replay_d1_or_github_and_passes_resume_to_publication(prepared, monkeypatch, failure, assets):
     from pages_repair import PagesResume
-    from repair_context import PAGES_CONTEXT, PAGES_PARENT_RELEASE
+    from repair_context import PAGES_CONTEXT, PAGES_PARENT_RELEASE, ASSETS_CONTEXT, ASSETS_PARENT_RELEASE
     import hashlib
     request, root, tools, image, sealer, output, credentials, store, record = prepared
-    recovery = replace(request, action="repair", previous=PAGES_PARENT_RELEASE, context=PAGES_CONTEXT)
+    parent = ASSETS_PARENT_RELEASE if assets else PAGES_PARENT_RELEASE
+    recovery = replace(request, action="repair", previous=parent, context=ASSETS_CONTEXT if assets else PAGES_CONTEXT)
     handles = []
     def begin(owner, current, source, values):
         assert current is recovery and source == root and values is credentials
         permit = owner.begin("deploy", request.candidate)
-        resume = PagesResume(permit.operation_id, hashlib.sha256(permit.state_bytes).hexdigest())
+        resume = PagesResume(permit.operation_id, hashlib.sha256(permit.state_bytes).hexdigest(), parent["sourceSha"])
         handles.append(resume)
         return permit, resume
-    monkeypatch.setattr(orchestration, "begin_pages_recovery", begin)
+    monkeypatch.setattr(orchestration, "begin_assets_recovery" if assets else "begin_pages_recovery", begin)
     monkeypatch.setattr(orchestration, "initialize_d1", lambda *_a, **_k: pytest.fail("no DDL"))
     monkeypatch.setattr(orchestration, "configure_environment", lambda *_a, **_k: pytest.fail("no GitHub write"))
     def d1(*_):
         record["order"].append("d1-readonly")
         return {"checks": {"d1-initialized": True, "schema-verified": True}}
-    def github(*_):
+    def github(*_, **kwargs):
+        assert kwargs == {"parent_release": parent}
         record["order"].append("github-readonly")
         return {"checks": dict.fromkeys(("github-environment-configured", "github-environment-verified", "github-workflow-verified"), True),
                 "refreshEnabled": True}

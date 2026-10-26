@@ -31,9 +31,14 @@ def decode_object(raw: bytes, require) -> dict:
     return value
 
 
-def api_result(session: requests.Session, token: str, method: str, path: str, require, *, missing_code=None, **kwargs):
+def api_result(session: requests.Session, token: str, method: str, path: str, require, *, missing_code=None,
+               pages_asset_response=False, **kwargs):
     # Only typed provider clients construct paths. There is no configurable host.
     require(path.startswith("/") and not any(char in path for char in ("?", "#", "\\", "\r", "\n")), "IDENTITY")
+    # Pages' JWT asset API omits errors on success; its two write ACKs also
+    # omit result. Scope these wire exceptions to exact asset POST endpoints.
+    require(type(pages_asset_response) is bool and (not pages_asset_response or method == "POST"
+            and path in ("/pages/assets/check-missing", "/pages/assets/upload", "/pages/assets/upsert-hashes")), "IDENTITY")
     try:
         with session.request(method, "https://api.cloudflare.com/client/v4" + path,
                              headers={"Authorization": "Bearer " + token}, timeout=(10, 60),
@@ -51,8 +56,10 @@ def api_result(session: requests.Session, token: str, method: str, path: str, re
                         and type(errors[0]) is dict and errors[0].get("code") == missing_code, "RESPONSE_UNKNOWN")
                 return None
             require(200 <= response.status_code < 300, "REQUEST_UNKNOWN")
-            require(payload.get("success") is True and payload.get("errors") == [] and "result" in payload,
+            require(payload.get("success") is True and payload.get("errors", [] if pages_asset_response else None) == []
+                    and ("result" in payload or pages_asset_response and path in
+                         ("/pages/assets/upload", "/pages/assets/upsert-hashes")),
                     "RESPONSE_UNKNOWN")
-            return payload["result"]
+            return payload.get("result")
     except (requests.RequestException, OSError):
         require(False, "REQUEST_UNKNOWN")

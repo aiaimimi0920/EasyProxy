@@ -143,7 +143,7 @@ def build_bundle(root: Path, esbuild: Path, workdir: Path) -> bytes:
 
 
 def publish_ech(owner: Coordinator, permit: Permit, settings: EchDeployment, *, api_token: str, ech_token: str, resume=None) -> dict:
-    from pages_repair import PagesResume, PAGES_PARENT_RELEASE, WORKER_BUNDLE_SHA256, worker_bundle_digest
+    from pages_repair import PagesResume, WORKER_BUNDLE_SHA256, worker_bundle_digest
     state = owner.assert_owned(permit)
     require(permit.action in ("deploy", "update", "preview"), "OWNERSHIP")
     require(inventory_digest(settings.inventory) == owner.inventory_digest, "INVENTORY")
@@ -165,7 +165,7 @@ def publish_ech(owner: Coordinator, permit: Permit, settings: EchDeployment, *, 
         existing = [row for row in api.list_workers() if row["id"] == settings.worker_name]
         if resume is not None:
             require(len(existing) == 1 and hashlib.sha256(bundle).hexdigest() == WORKER_BUNDLE_SHA256, "OWNERSHIP")
-            _verify_settings(api.settings(settings.worker_name), metadata(owner, PAGES_PARENT_RELEASE, ech_token))
+            _verify_settings(api.settings(settings.worker_name), metadata(owner, resume.parent_release, ech_token))
             require(worker_bundle_digest(api, settings.worker_name) == WORKER_BUNDLE_SHA256, "OWNERSHIP")
             api.script_subdomain(settings.worker_name)
         elif permit.action == "update":

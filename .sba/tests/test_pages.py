@@ -97,7 +97,12 @@ def api_wire(monkeypatch):
             pass
 
         def send(self, value=None, status=200, raw=None):
-            raw = raw if raw is not None else json.dumps({"success": True, "errors": [], "result": value}).encode()
+            envelope = {"success": True, "errors": [], "result": value}
+            if record["mode"] == "sparse-assets" and self.path.startswith("/client/v4/pages/assets/"):
+                envelope.pop("errors")
+                if self.path.endswith(("/upload", "/upsert-hashes")):
+                    envelope.pop("result")
+            raw = raw if raw is not None else json.dumps(envelope).encode()
             self.send_response(status)
             self.send_header("Content-Length", str(len(raw)))
             if status == 307:
@@ -248,6 +253,17 @@ def publish(owner, permit, settings, **kwargs):
                                secrets=kwargs.get("secrets", SECRETS))
 
 
+def test_sparse_asset_success_envelope_keeps_writer_and_single_publication(candidate, api_wire):
+    release, settings = candidate
+    api_wire["mode"] = "sparse-assets"
+    owner, permit, store, _ = held(release)
+    result = publish(owner, permit, settings)
+    assert result["checks"] == {"pages-published": True, "pages-bindings-verified": True, "pages-version-verified": True}
+    assert api_wire["deployments"] == 1 and len(api_wire["writes"]) == 6
+    assert json.loads(store.body)["writer"]["operationId"] == permit.operation_id
+    assert json.loads(store.body)["active"] is None
+
+
 @pytest.mark.parametrize("action", ["deploy", "update", "preview", "public-delay", "functions-late", "nullable-empty-preview"])
 def test_publish_stage_keeps_suite_writer_and_uses_distinct_upload_token(candidate, api_wire, action):
     release, settings = candidate
@@ -280,19 +296,21 @@ def test_expected_empty_environment_accepts_only_provider_empty_map_shapes(candi
 
 
 @pytest.mark.parametrize("failure", [None, "foreign-project", "existing-deployment", "config-drift", "lost-deploy"])
-def test_exact_pages_resume_reuses_project_without_create_and_never_replays(candidate, api_wire, monkeypatch, failure):
+@pytest.mark.parametrize("assets", [False, True])
+def test_exact_pages_resume_reuses_project_without_create_and_never_replays(candidate, api_wire, monkeypatch, failure, assets):
     import hashlib
     import pages_repair
     release, settings = candidate
     owner, permit, store, _ = held(release)
     monkeypatch.setattr(pages_repair, "PROJECT_ID", PROJECT_ID)
-    existing = project(pages.configuration(owner, pages_repair.PAGES_PARENT_RELEASE, PROJECT, DATABASE_ID, SECRETS))
+    parent = pages_repair.ASSETS_PARENT_RELEASE if assets else pages_repair.PAGES_PARENT_RELEASE
+    existing = project(pages.configuration(owner, parent, PROJECT, DATABASE_ID, SECRETS))
     existing["deployment_configs"]["preview"]["env_vars"] = None
     if failure == "foreign-project": existing["id"] = DATABASE_ID
     if failure == "existing-deployment": existing["canonical_deployment"] = deployment(release)
     api_wire["project"] = existing
     api_wire["mode"] = failure or "normal"
-    resume = pages_repair.PagesResume(permit.operation_id, hashlib.sha256(permit.state_bytes).hexdigest())
+    resume = pages_repair.PagesResume(permit.operation_id, hashlib.sha256(permit.state_bytes).hexdigest(), parent["sourceSha"])
     def run():
         return pages.publish_pages(owner, permit, settings, api_token="fixture-api-token", secrets=SECRETS, resume=resume)
     if failure:

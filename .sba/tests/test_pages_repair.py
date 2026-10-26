@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import application
 import pages_repair as repair
 from coordination import Coordinator, CoordinationError, StoreUnknown, StoreConflict, STATE_KEY
-from repair_context import PAGES_CONTEXT, PAGES_PARENT_RELEASE
+from repair_context import PAGES_CONTEXT, PAGES_PARENT_RELEASE, ASSETS_CONTEXT
 from request import RequestError, SECRETS
 from test_coordination import MemoryStore, state
 from test_pristine_repair import request_fixture
@@ -132,7 +132,7 @@ def test_semantically_equal_noncanonical_control_is_rejected(partial):
 
 def test_manifest_has_a_third_separate_error_scope_with_existing_secrets_only():
     manifest = json.loads((Path(__file__).resolve().parents[1] / "manifest.json").read_bytes())
-    assert manifest["version"] == "1.0.3" and len(manifest["repairs"]) == 3
+    assert manifest["version"] == "1.0.4" and len(manifest["repairs"]) == 4
     scope = next(row for row in manifest["repairs"] if row["id"] == PAGES_CONTEXT["repairId"])
     assert scope["fromErrorCodes"] == [PAGES_CONTEXT["errorCode"]] and set(scope["secretNames"]) == SECRETS
 
@@ -153,10 +153,12 @@ def test_application_passes_only_the_exact_pages_recovery_request(tmp_path, monk
 
 
 @pytest.mark.parametrize("mutation", [None, "status", "conclusion", "run_attempt", "head_sha", "path", "display_title", "event", "http", "json"])
-def test_parent_is_terminal_first_attempt_with_exact_executor_and_request(monkeypatch, mutation):
-    row = {"id": PAGES_CONTEXT["parentRunId"], "run_attempt": 1, "status": "completed", "conclusion": "success",
+@pytest.mark.parametrize("assets", [False, True])
+def test_parent_is_terminal_first_attempt_with_exact_executor_and_request(monkeypatch, mutation, assets):
+    context = ASSETS_CONTEXT if assets else PAGES_CONTEXT
+    row = {"id": context["parentRunId"], "run_attempt": 1, "status": "completed", "conclusion": "success",
            "head_sha": repair.EXECUTOR_SHA, "event": "workflow_dispatch", "path": ".github/workflows/sba-execute-linux.yml",
-           "display_title": "sba:" + PAGES_CONTEXT["parentTaskId"] + ":" + PAGES_CONTEXT["requestDigest"]}
+           "display_title": "sba:" + context["parentTaskId"] + ":" + context["requestDigest"]}
     if mutation in row: row[mutation] = True if mutation == "run_attempt" else "wrong"
     calls = []
     class Response:
@@ -167,11 +169,11 @@ def test_parent_is_terminal_first_attempt_with_exact_executor_and_request(monkey
     class Session:
         def close(self): calls.append("closed")
         def get(self, url, **kwargs):
-            assert url.endswith("/actions/runs/40280908267") and kwargs["allow_redirects"] is False
+            assert url.endswith("/actions/runs/" + str(context["parentRunId"])) and kwargs["allow_redirects"] is False
             calls.append("GET")
             return Response()
     monkeypatch.setattr(repair, "secure_session", Session)
-    if mutation is None: repair.parent_completed("fixture-only")
+    if mutation is None: repair.parent_completed("fixture-only", context=context)
     else:
-        with pytest.raises(repair.PagesRepairError): repair.parent_completed("fixture-only")
+        with pytest.raises(repair.PagesRepairError): repair.parent_completed("fixture-only", context=context)
     assert calls == ["GET", "closed"]

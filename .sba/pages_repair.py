@@ -9,7 +9,7 @@ from cloudflare_http import decode_object, secure_session
 from coordination import Coordinator, Permit, ETAG, STATE_KEY, _encode
 from github_api import GitHubAPI
 from github_repair import verify_initialized, EXECUTOR_SHA, ENVIRONMENT_ID
-from repair_context import GITHUB_CONTEXT, PAGES_CONTEXT, PAGES_PARENT_RELEASE
+from repair_context import GITHUB_CONTEXT, PAGES_CONTEXT, PAGES_PARENT_RELEASE, ASSETS_CONTEXT, ASSETS_PARENT_RELEASE
 from request import ApplicationRequest
 from worker_api import WorkerAPI, public_release
 
@@ -35,18 +35,29 @@ def require(value, _code=None):
 class PagesResume:
     operation_id: str
     permit_sha256: str
+    parent_source_sha: str = PAGES_PARENT_RELEASE["sourceSha"]
+
+    @property
+    def parent_release(self):
+        for release in (PAGES_PARENT_RELEASE, ASSETS_PARENT_RELEASE):
+            if self.parent_source_sha == release["sourceSha"]:
+                return dict(release)
+        require(False)
 
     def assert_permit(self, owner: Coordinator, permit: Permit):
+        self.parent_release  # Only the two reviewed, exact parent versions are allowed.
         owner.assert_owned(permit)
         require(permit.action == "deploy" and owner.identity["purpose"] == "production"
                 and permit.operation_id == self.operation_id
                 and hashlib.sha256(permit.state_bytes).hexdigest() == self.permit_sha256)
 
 
-def parent_completed(token: str):
+def parent_completed(token: str, *, context=None):
+    context = PAGES_CONTEXT if context is None else context
+    require(context in (PAGES_CONTEXT, ASSETS_CONTEXT))
     session = secure_session()
     try:
-        url = "https://api.github.com/repos/aiaimimi0920/SpringBok/actions/runs/" + str(PAGES_CONTEXT["parentRunId"])
+        url = "https://api.github.com/repos/aiaimimi0920/SpringBok/actions/runs/" + str(context["parentRunId"])
         with session.get(url, headers={"Authorization": "Bearer " + token, "Accept": "application/vnd.github+json",
                          "X-GitHub-Api-Version": "2022-11-28"}, timeout=(10, 60), stream=True, allow_redirects=False) as response:
             require(response.status_code == 200)
@@ -55,11 +66,11 @@ def parent_completed(token: str):
                 raw.extend(chunk)
                 require(len(raw) <= 1024 * 1024)
             row = decode_object(bytes(raw), require)
-        require(row.get("id") == PAGES_CONTEXT["parentRunId"] and type(row.get("run_attempt")) is int
+        require(row.get("id") == context["parentRunId"] and type(row.get("run_attempt")) is int
                 and row["run_attempt"] == 1 and row.get("status") == "completed" and row.get("conclusion") == "success"
                 and row.get("head_sha") == EXECUTOR_SHA and row.get("event") == "workflow_dispatch"
                 and row.get("path") == ".github/workflows/sba-execute-linux.yml"
-                and row.get("display_title") == "sba:" + PAGES_CONTEXT["parentTaskId"] + ":" + PAGES_CONTEXT["requestDigest"])
+                and row.get("display_title") == "sba:" + context["parentTaskId"] + ":" + context["requestDigest"])
     finally:
         session.close()
 
@@ -106,14 +117,16 @@ def checked_objects(owner: Coordinator):
             stream.close()
 
 
-def verify_configured(owner, config, root, token):
+def verify_configured(owner, config, root, token, *, parent_release=None):
+    parent_release = PAGES_PARENT_RELEASE if parent_release is None else parent_release
+    require(parent_release in (PAGES_PARENT_RELEASE, ASSETS_PARENT_RELEASE))
     from github_environment import variables, verify_policy, reviewed_workflow, REFRESH_SECRETS
     from refresh_registry import REGISTRY_VARIABLE, parse_registry
     api = GitHubAPI(config.repository, config.environment, token)
     try:
         repository = api.repository_info()
         require(repository["defaultBranch"] == "main")
-        require(api.workflow_at("main") == api.workflow_at(PAGES_PARENT_RELEASE["sourceSha"]) == reviewed_workflow(root))
+        require(api.workflow_at("main") == api.workflow_at(parent_release["sourceSha"]) == reviewed_workflow(root))
         api.active_workflow()
         environment = api.environment_info()
         require(environment is not None and environment["id"] == ENVIRONMENT_ID)
@@ -149,23 +162,27 @@ def worker_bundle_digest(api: WorkerAPI, name: str):
     return hashlib.sha256(parts[0].get_payload(decode=True)).hexdigest()
 
 
-def verify_existing_worker(config, owner, token, ech_token):
+def verify_existing_worker(config, owner, token, ech_token, *, parent_release=None):
+    parent_release = PAGES_PARENT_RELEASE if parent_release is None else parent_release
+    require(parent_release in (PAGES_PARENT_RELEASE, ASSETS_PARENT_RELEASE))
     from ech import metadata, _verify_settings
     api = WorkerAPI(config.account_id, token)
     try:
         require(api.account_subdomain() == config.workers_subdomain)
-        _verify_settings(api.settings(config.worker_name), metadata(owner, PAGES_PARENT_RELEASE, ech_token))
+        _verify_settings(api.settings(config.worker_name), metadata(owner, parent_release, ech_token))
         api.script_subdomain(config.worker_name)
         require(worker_bundle_digest(api, config.worker_name) == WORKER_BUNDLE_SHA256)
-        require(public_release(config.worker_origin) == {"schemaVersion": 1, "applicationId": "easyproxy-cloud", **PAGES_PARENT_RELEASE})
+        require(public_release(config.worker_origin) == {"schemaVersion": 1, "applicationId": "easyproxy-cloud", **parent_release})
     finally:
         api.close()
 
 
-def verify_existing_pages(api, owner, config, secrets):
+def verify_existing_pages(api, owner, config, secrets, *, parent_release=None):
+    parent_release = PAGES_PARENT_RELEASE if parent_release is None else parent_release
+    require(parent_release in (PAGES_PARENT_RELEASE, ASSETS_PARENT_RELEASE))
     from pages import configuration, _verify_project
     existing = api.project()
-    _verify_project(existing, config.pages_name, configuration(owner, PAGES_PARENT_RELEASE,
+    _verify_project(existing, config.pages_name, configuration(owner, parent_release,
                     config.pages_name, config.database_id, secrets), PROJECT_ID)
     require(existing.get("latest_deployment") is None and existing.get("canonical_deployment") is None
             and api.deployments() == [])
