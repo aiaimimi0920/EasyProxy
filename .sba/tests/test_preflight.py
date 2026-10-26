@@ -207,3 +207,44 @@ def test_legacy_target_failure_does_not_import_a_new_diagnostics_dependency(tmp_
     assert value["errorCode"] == "EASYPROXY_PREFLIGHT_GENERATION"
     assert value["diagnosticCode"] == "EASYPROXY_SBA_ARTIFACT_OUTPUT"
     assert b"DIAGNOSTICS_IMPORT_FORBIDDEN" not in completed.stdout + completed.stderr
+
+
+@pytest.mark.parametrize("artifact,body,reason", [
+    ("subs/mixed.txt", b"not-base64!", "base64"),
+    ("subs/mixed.txt", b"c3M6Ly9wcml2YXRlIHNlY3JldAo=", "uri-line-format"),
+    ("subs/singbox.json", b"PRIVATE_INVALID_JSON", "json"),
+    ("subs/singbox.json", b'{"outbounds":[]}', "singbox-shape"),
+    ("internal/crawledsubs.json", b"{}", "json-empty"),
+    ("subs/clash.yaml", b"PRIVATE_YAML", "yaml-or-proxy-shape"),
+])
+def test_legacy_validator_failure_only_exports_fixed_artifact_and_reason(tmp_path, artifact, body, reason):
+    namespace = {"ArtifactError": ArtifactError}
+    exec(compile("def _validate(key, body):\n    raise ArtifactError('EASYPROXY_SBA_ARTIFACT_FORMAT')\n",
+                 str(tmp_path / ".sba/aggregator_publish.py"), "exec"), namespace)
+    try:
+        namespace["_validate"](artifact, body)
+    except ArtifactError as error:
+        value = preflight.generation_artifact_diagnostic(error, tmp_path)
+    assert value == {"artifact": artifact, "reason": reason}
+    assert "PRIVATE" not in json.dumps(value)
+
+
+@pytest.mark.parametrize("field", ["artifact", "reason"])
+def test_private_artifact_diagnostic_fields_are_rejected_before_write(tmp_path, field):
+    value = {"artifact": "subs/mixed.txt", "reason": "base64"}
+    value[field] = "DO_NOT_PRINT_PRIVATE"
+    path = tmp_path / "result.json"
+    with pytest.raises(ValueError, match="EASYPROXY_PREFLIGHT_INPUT"):
+        preflight.report(path, SHA, "generation", passed=False, artifact_diagnostic=value)
+    assert not path.exists()
+
+
+def test_artifact_diagnostic_never_reads_another_source_or_unknown_key(tmp_path):
+    for filename, key in ((tmp_path / "other/aggregator_publish.py", "subs/mixed.txt"),
+                          (tmp_path / ".sba/aggregator_publish.py", "PRIVATE_KEY")):
+        namespace = {"ArtifactError": ArtifactError}
+        exec(compile("def _validate(key, body):\n    raise ArtifactError('PRIVATE_BODY')\n", str(filename), "exec"), namespace)
+        try:
+            namespace["_validate"](key, b"PRIVATE_BODY")
+        except ArtifactError as error:
+            assert preflight.generation_artifact_diagnostic(error, tmp_path) is None

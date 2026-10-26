@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 from pathlib import Path
 import re
@@ -19,10 +20,65 @@ GENERATION_DIAGNOSTICS = frozenset({
         "SECRETS", "OUTPUT", "SOURCE", "CONFIG", "RUNTIME_SOURCE", "RUNTIME_HOST", "RUNTIME_PATCH",
         "RUNTIME_TOOL", "BUILD_CONFIG", "BUILD_GENERATION", "V2RAY", "INPUT", "EMPTY", "FORMAT")
 })
+GENERATION_ARTIFACTS = frozenset({"subs/clash.yaml", "subs/singbox.json", "subs/mixed.txt",
+                                "subs/v2ray.txt", "internal/crawledsubs.json"})
+GENERATION_REASONS = frozenset({"utf8", "base64", "uri-line-format", "json", "json-empty",
+                               "singbox-shape", "yaml-or-proxy-shape", "unclassified"})
 
 
-def report(path: Path, sha: str, stage: str, *, passed: bool, checks: dict | None = None, diagnostic_code=None):
+def generation_artifact_diagnostic(error, root):
+    """只观察准确目标校验栈的有限键和失败类别；绝不返回正文或任意局部变量。"""
+    validator = root / ".sba/aggregator_publish.py"
+    for _ in range(4):
+        if error is None:
+            break
+        trace = error.__traceback__
+        while trace is not None:
+            frame = trace.tb_frame
+            if Path(frame.f_code.co_filename) == validator and frame.f_code.co_name == "_validate":
+                key, body = frame.f_locals.get("key"), frame.f_locals.get("body")
+                if type(key) is str and key in GENERATION_ARTIFACTS and type(body) is bytes and len(body) <= 64 * 1024 * 1024:
+                    reason = "unclassified"
+                    try:
+                        text = body.decode("utf-8", errors="strict")
+                        if key.endswith(".json"):
+                            try:
+                                value = json.loads(text)
+                                if value in ({}, [], "", None):
+                                    reason = "json-empty"
+                                elif key == "subs/singbox.json" and (type(value) is not dict
+                                        or type(value.get("outbounds")) is not list or not value["outbounds"]):
+                                    reason = "singbox-shape"
+                            except (ValueError, RecursionError):
+                                reason = "json"
+                        elif key.endswith(".yaml"):
+                            reason = "yaml-or-proxy-shape"
+                        else:
+                            try:
+                                decoded = base64.b64decode(b"".join(body.split()), validate=True).decode("utf-8")
+                                if not decoded.strip() or any("://" not in line or any(char.isspace() for char in line)
+                                                              for line in decoded.splitlines() if line):
+                                    reason = "uri-line-format"
+                            except UnicodeError:
+                                reason = "utf8"
+                            except ValueError:
+                                reason = "base64"
+                    except UnicodeError:
+                        reason = "utf8"
+                    return {"artifact": key, "reason": reason}
+            trace = trace.tb_next
+        error = error.__context__
+    return None
+
+
+def report(path: Path, sha: str, stage: str, *, passed: bool, checks: dict | None = None, diagnostic_code=None,
+           artifact_diagnostic=None):
     if stage not in STAGES or re.fullmatch(r"[a-f0-9]{40}", sha) is None:
+        raise ValueError("EASYPROXY_PREFLIGHT_INPUT")
+    if artifact_diagnostic is not None and (passed or stage != "generation" or type(artifact_diagnostic) is not dict
+            or set(artifact_diagnostic) != {"artifact", "reason"}
+            or type(artifact_diagnostic["artifact"]) is not str or artifact_diagnostic["artifact"] not in GENERATION_ARTIFACTS
+            or type(artifact_diagnostic["reason"]) is not str or artifact_diagnostic["reason"] not in GENERATION_REASONS):
         raise ValueError("EASYPROXY_PREFLIGHT_INPUT")
     if diagnostic_code is not None and (passed or stage != "generation"
             or diagnostic_code not in GENERATION_DIAGNOSTICS):
@@ -33,6 +89,8 @@ def report(path: Path, sha: str, stage: str, *, passed: bool, checks: dict | Non
         value["errorCode"] = "EASYPROXY_PREFLIGHT_" + stage.upper()
         if diagnostic_code is not None:
             value["diagnosticCode"] = diagnostic_code
+        if artifact_diagnostic is not None:
+            value["artifactDiagnostic"] = artifact_diagnostic
     with path.open("x", encoding="utf-8", newline="\n") as stream:
         json.dump(value, stream, indent=2)
         stream.write("\n")
@@ -87,7 +145,9 @@ def inspect_prepared(root: Path, output: Path, sha: str, report_path: Path) -> i
             # 老目标可能没有 diagnostics；不为诊断而回退加载 driver 的新模块。
             if type(error) in (ArtifactError, stage_error) and str(error) in GENERATION_DIAGNOSTICS:
                 diagnostic_code = str(error)
-        report(report_path, sha, stage, passed=False, checks=checks, diagnostic_code=diagnostic_code)
+        artifact_diagnostic = generation_artifact_diagnostic(error, root) if diagnostic_code is not None else None
+        report(report_path, sha, stage, passed=False, checks=checks, diagnostic_code=diagnostic_code,
+               artifact_diagnostic=artifact_diagnostic)
         return 1
     report(report_path, sha, stage, passed=True, checks=checks)
     return 0
