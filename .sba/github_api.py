@@ -54,7 +54,12 @@ class GitHubAPI:
                     raw.extend(chunk)
                     require(len(raw) <= 1024 * 1024, "RESPONSE_UNKNOWN")
                 if empty:
-                    require(not raw and not absent, "RESPONSE_UNKNOWN")
+                    require(not absent, "RESPONSE_UNKNOWN")
+                    if raw:
+                        # GitHub 201 的官方合同是 JSON empty-object；204 仍须没有正文。
+                        require(status == 201 and response.headers.get("Content-Type", "").split(";")[0].lower()
+                                in ("application/json", "application/vnd.github+json")
+                                and decode_object(bytes(raw), require) == {}, "RESPONSE_UNKNOWN")
                     return None
                 require(response.headers.get("Content-Type", "").split(";")[0].lower()
                         in ("application/json", "application/vnd.github+json"), "RESPONSE_UNKNOWN")

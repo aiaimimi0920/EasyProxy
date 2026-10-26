@@ -28,7 +28,8 @@ from test_suite_config import PUBLIC
 @pytest.fixture
 def wire(monkeypatch):
     record = {"environment": None, "variables": {}, "secrets": {}, "policies": [], "writes": [], "requests": [],
-              "mode": "normal", "defaultBranch": "main", "admin": True, "registry": None}
+              "mode": "normal", "defaultBranch": "main", "admin": True, "registry": None,
+              "createdRaw": b"{}"}
     record["workflow"] = b"name: Fixture approved schedule\non: workflow_dispatch\njobs: {}\n"
     root = "/repos/fixture/easyproxy"
     env = root + "/environments/testing"
@@ -127,6 +128,11 @@ def wire(monkeypatch):
             if record["mode"] == "duplicate-json":
                 self.send(raw=b'{"id":67890,"id":0}')
                 return
+            if status == 201:
+                # GitHub 的创建变量/秘密响应为 JSON empty-object，不是 204 空正文。
+                self.send(status=status, raw=record["createdRaw"] if record["mode"] != "unexpected-created-body"
+                          else b'{"unexpected":true}')
+                return
             self.send(value, status)
 
         do_PUT = mutate
@@ -182,12 +188,12 @@ def setup(action="deploy"):
     return config, owner, permit, secrets, sealer
 
 
-def configure(inputs, tmp_path):
+def configure(inputs, tmp_path, **kwargs):
     config, owner, permit, secrets, sealer = inputs
     path = tmp_path / WORKFLOW
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"name: Fixture approved schedule\non: workflow_dispatch\njobs: {}\n")
-    return deployment.configure_environment(owner, permit, config, tmp_path, token="fixture-token", secrets=secrets, sealer=sealer)
+    return deployment.configure_environment(owner, permit, config, tmp_path, token="fixture-token", secrets=secrets, sealer=sealer, **kwargs)
 
 
 def test_environment_configures_only_refresh_credentials_and_keeps_suite_writer(wire, tmp_path):
@@ -204,6 +210,42 @@ def test_environment_configures_only_refresh_credentials_and_keeps_suite_writer(
     assert OLD["sourceSha"] not in json.dumps(wire["variables"])
     assert wire["writes"][0][2] == {
         "deployment_branch_policy": {"protected_branches": False, "custom_branch_policies": True}}
+
+
+def test_created_response_with_unexpected_fields_stops_at_first_variable_without_replay(wire, tmp_path):
+    inputs = setup()
+    wire["mode"] = "unexpected-created-body"
+    with pytest.raises(GitHubError, match="RESPONSE_UNKNOWN"):
+        configure(inputs, tmp_path)
+    assert list(wire["variables"]) == [deployment.CONFIG_VARIABLE]
+    assert len(wire["writes"]) == 3 and not wire["secrets"]
+    assert state(inputs[1].store)["writer"] is not None
+    with pytest.raises(GitHubError, match="UNOWNED_ENVIRONMENT"):
+        configure(inputs, tmp_path)
+    assert len(wire["writes"]) == 3
+
+
+@pytest.mark.parametrize("raw,accepted", [(b"{}", True), (b" \n{} ", True), (b"", True),
+    (b"[]", False), (b"null", False), (b'{"unexpected":true}', False),
+    (b'{"x":1,"x":2}', False), (b"invalid", False)])
+@pytest.mark.parametrize("operation", ["environment-variable", "repository-variable", "environment-secret"])
+def test_creation_response_accepts_only_empty_object_or_legacy_empty_body_once(wire, raw, accepted, operation):
+    wire["createdRaw"] = raw
+    api = GitHubAPI("fixture/easyproxy", "testing", "fixture-token")
+    calls = {
+        "environment-variable": lambda: api.create_variable("FIXTURE_VALUE", "fixture-public"),
+        "repository-variable": lambda: api.put_repository_variable(REGISTRY_VARIABLE, "fixture-public", create=True),
+        "environment-secret": lambda: api.put_secret("FIXTURE_SECRET", "fixture-encrypted", "123456789", create=True),
+    }
+    try:
+        if accepted:
+            assert calls[operation]() is None
+        else:
+            with pytest.raises(GitHubError, match="RESPONSE_UNKNOWN"):
+                calls[operation]()
+        assert len(wire["writes"]) == 1
+    finally:
+        api.close()
 
 
 def test_preview_environment_has_no_refresh_credentials_or_cloud_write_token(wire, tmp_path):
@@ -232,6 +274,30 @@ def test_update_checks_ownership_then_reencrypts_existing_secret_names(wire, tmp
     configure((config, owner, update, secrets, Sealer(Path("/fixture/sealer"), NEW["sourceSha"], "f" * 64)), tmp_path)
     assert len(wire["writes"]) - count == len(secrets)
     assert state(owner.store)["active"] == OLD and state(owner.store)["writer"]["candidate"] == NEW
+
+
+def test_attested_recovery_only_creates_missing_owner_secrets_and_registry(wire, tmp_path, monkeypatch):
+    import github_repair
+    inputs = setup()
+    wire["environment"] = {"id": 67890, "name": "testing", "url": "https://api.github.com/repos/fixture/easyproxy/environments/testing",
+                           "deployment_branch_policy": {"protected_branches": False, "custom_branch_policies": True},
+                           "protection_rules": [{"id": 17, "type": "branch_policy"}]}
+    wire["policies"] = [{"id": 1, "name": "main", "type": "branch"}]
+    expected = deployment.variables(inputs[1], inputs[0], 12345, 67890)
+    wire["variables"] = {deployment.CONFIG_VARIABLE: expected[deployment.CONFIG_VARIABLE]}
+    monkeypatch.setattr(github_repair, "ENVIRONMENT_ID", 67890)
+    permit = inputs[2]
+    proof = github_repair.GitHubResume(permit.operation_id, hashlib.sha256(permit.state_bytes).hexdigest(), 67890)
+    result = configure(inputs, tmp_path, resume=proof)
+    assert result["refreshEnabled"] is True
+    assert len(wire["writes"]) == 2 + len(deployment.REFRESH_SECRETS)
+    assert wire["writes"][0][2]["name"] == deployment.OWNER_VARIABLE
+    assert not any(path.endswith("/deployment-branch-policies") or path.endswith("/environments/testing")
+                   or body.get("name") == deployment.CONFIG_VARIABLE for _, path, body in wire["writes"])
+    before = len(wire["writes"])
+    with pytest.raises(GitHubError, match="UNOWNED_ENVIRONMENT"):
+        configure(inputs, tmp_path, resume=proof)
+    assert len(wire["writes"]) == before
 
 
 @pytest.mark.parametrize("mutation", ["variables", "secret", "policy", "environment-id"])

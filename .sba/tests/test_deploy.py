@@ -117,6 +117,26 @@ def test_single_process_deploy_commits_only_after_every_real_stage_contract_pass
     assert len(store.writes) == 2 and record["storeClosed"] and record["publicClosed"]
 
 
+def test_attested_recovery_never_initializes_d1_again_and_commits_only_after_remaining_checks(prepared, monkeypatch):
+    request, root, tools, image, sealer, output, credentials, store, record = prepared
+    repair_request = replace(request, action="repair", previous={"sourceSha": "a" * 40, "applicationVersion": "1.0.0"}, context={})
+    def begin(owner, current, source, values):
+        assert current is repair_request and source == root and values is credentials
+        return owner.begin("deploy", request.candidate), SimpleNamespace()
+    def verified(config, source, token):
+        assert config is request.config and source == root and token == "fixture-value"
+        record["order"].append("d1-readonly")
+        return {"checks": {"d1-initialized": True, "schema-verified": True}}
+    monkeypatch.setattr(orchestration, "begin_recovery", begin)
+    monkeypatch.setattr(orchestration, "verify_initialized", verified)
+    monkeypatch.setattr(orchestration, "initialize_d1", lambda *_args, **_kwargs: pytest.fail("DDL must not be replayed"))
+    result = orchestration.deploy_suite(request, root, tools, image, sealer, BODIES, output,
+                                        credentials=credentials, recovery_request=repair_request)
+    assert record["order"] == ["d1-readonly", *ORDER[1:]]
+    assert result["checks"]["service-ready"] is True
+    assert state(store)["active"] == request.candidate and state(store)["writer"] is None
+
+
 @pytest.mark.parametrize("stage", ORDER)
 def test_each_unknown_stage_keeps_writer_and_never_runs_later_stages(prepared, stage):
     record, store = prepared[-1], prepared[-2]

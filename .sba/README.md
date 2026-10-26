@@ -2,10 +2,41 @@
 
 ## 当前状态（2026-10-26）
 
-五动作入口、实例周期刷新、manifest v3 与 deployment v2 已实现；1.0.1 新增受限 repair 候选。
-首次 SpringBok 部署已单次提交，但应用回执为 `unknown`；没有重放或清锁，旧服务保持。
+五动作入口、实例周期刷新、manifest v3 与 deployment v2 已实现；当前 1.0.2 为定向恢复候选。
+首次部署和随后一次 pristine repair 均返回 `unknown`；没有重放或清锁，旧服务保持。
 应用尚未通过 SpringBok 正式上线，不能把本地测试、构建或平台上线当作应用上线。
 当前完整合同及边界见 [生命周期与调度](lifecycle.md)。旧手动部署及工作流保持不动。
+
+### EP-SBA-12：GitHub 创建响应与准确中断点定向恢复（负责人：主 AI）
+
+1.0.1 的真实 repair 在 GitHub 阶段返回 `EASYPROXY_SBA_GITHUB_UNKNOWN`。只读核实 D1
+已完成两份审核迁移且业务表全空；GitHub 已创建实例 environment、main 策略及 CONFIG
+变量，尚无 OWNER、secrets 或刷新索引；Worker/Pages 尚不存在。原 writer 和两个阶段
+标记保留。它已不满足 pristine 条件，不重发原任务，也不扩展原 pristine repair。
+
+已联网核 GitHub 官方 REST OpenAPI：变量及 secret 的创建响应 201 为 JSON empty-object。
+原适配器只接受零字节正文，在第一个变量实际创建后误报 UNKNOWN；本机真实 HTTP 回归
+在同一调用点复现。1.0.2 仅允许该创建响应为严格 `{}` 或兼容原空正文；其他正文仍拒绝，
+204 仍只接受无正文，不改变重试、重定向或响应丢失语义。
+
+独立操作 `continue-github-initial-deployment` 仅绑定上述准确 1.0.1 父任务/run、请求和结果
+摘要。执行时重核父 run 已结束、仅一次尝试且 executor/title 一致，核原 control 的准确
+字节摘要、仅三个既有 R2 对象及两个原阶段正文、D1 完整 schema/history/零业务行、
+Worker/Pages 缺失、准确 GitHub environment ID/policy/仅 CONFIG/无 secrets/无索引。
+任何漂移或不确定读取都在云写入前停止；不支持其他部分部署或其他 UNKNOWN。
+
+用户已明确批准这一次定向恢复。全部检查通过后先 create-only 记录移交证据，再单次 CAS
+将非空 writer 原子移交到新候选，始终不解锁；旧 Permit 立即失效，旧阶段和 UNKNOWN
+回执保持。D1 只读复核，不重发 DDL；GitHub 不重建环境/策略/CONFIG，只补 OWNER、
+原声明 secrets 与索引，然后继续原发布/审计/同步/独立读回链。只有完整成功才提交版本。
+marker 或 CAS 响应丢失、新阶段失败均停止，不自动再次移交、删除、回滚或 retry。
+当前冻结 index 的原生 Linux 回归 `linux-native-recovery-24.xml` 为 **701 passed、0 skip**；
+CLI Go 82 项、0 skip 与 go vet 通过，真实 sealer、CLI 和迁移 materializer 均重新构建。
+先前 native20 的三个失败是 harness 缺 curl，补齐环境后使用相同冻结源码复验；native22
+没有完成回执，不计为通过。原失败/中断证据保留，未跳过 TLS 校验或修改产品保护。
+真实 SpringBok manifest parser 接受 1.0.2 的两个独立 repairs；上线前只读核对
+`recovery-readonly-23.safe.json` 全部通过，无 marker、writer 移交或云写入。
+当前仍待精确 CI 和正式执行；后续仍欠独立 verify、本地消费和旧资源退役批准。
 
 ### EP-SBA-10：无写凭据 hosted 预检（负责人：主 AI）
 

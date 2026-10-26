@@ -2,8 +2,8 @@
 
 ## 当前状态（2026-10-26）
 
-五动作应用入口、实例周期刷新、manifest v3 与 deployment v2 已实现；1.0.1 包含受限 repair
-候选。首次任务返回 UNKNOWN，未重放、未清锁。应用尚未通过
+五动作应用入口、实例周期刷新、manifest v3 与 deployment v2 已实现；1.0.2 包含准确中断点恢复
+候选。首次任务和一次 pristine repair 返回 UNKNOWN，未重放、未清锁。应用尚未通过
 SpringBok 正式部署，不能把本地合同测试、构建或平台 SUITE-03 上线当作应用上线。
 旧手动部署和旧工作流仍保留，不被本套件隐式接管。
 
@@ -56,6 +56,21 @@ databaseId、databaseName、bucketName、refreshTarget、pagesOrigin、workerOri
 `service-ready`；外层 action 为 repair，原 UNKNOWN 回执不变。全部 provider 发布仍有自身
 归属/单次写入检查；外部竞态或新故障仍可能 UNKNOWN，不能再次自动 repair 或换环境绕过。
 修复完成后仍须固定修复 SHA/version/config 的独立无写凭据 verify，再做本地真实消费验收。
+
+### 独立 repair：准确 GitHub 创建响应中断点
+
+`continue-github-initial-deployment` 与 pristine 操作分离，只接受已核实的准确 1.0.1
+父任务/run/请求与结果摘要及 `EASYPROXY_SBA_GITHUB_UNKNOWN`，不是通用 retry/接管。
+原 run 必须 completed、首次尝试且准确 executor/title 一致。原 control 必须逐字节命中
+固定摘要，R2 只能包含原 control 和两个正文一致的初始化/环境阶段标记；D1 schema、
+迁移历史和四表零行必须一致；Worker/Pages 不存在；GitHub 必须是准确环境 ID、main
+策略、仅准确 CONFIG、无 secret 和刷新索引。外部管理写入必须排除；任一漂移即停止。
+
+只在明确批准该恢复后使用。先 create-only 保存新操作的移交证据，再以原 ETag 单次 CAS
+将始终非空的 writer 移交至新候选，保留原任务 UNKNOWN 和旧阶段；旧 Permit 失效。
+不重放 D1 初始化、GitHub 环境/策略/CONFIG 写入，只补缺失 OWNER、原声明 secrets 和
+索引，再走完整发布/审计/同步/读回。marker/CAS/后续阶段 UNKNOWN 一律保留现场，
+无自动重试、过期、解锁、删除或回滚。该候选尚未执行成功，不能称应用已部署。
 
 ### 预升级的明确边界
 
@@ -122,6 +137,12 @@ image、sealer、generation、workflow），`cloudWrites=false`。`pristine-read
 1.0.1 候选的冻结 index 原生 Linux 回归 `linux-native-repair-10.xml` 为 633 passed，无 skip；
 `go-repair-10.safe.json` 为 CLI 82 项、0 skip、go vet 通过，真实 sealer/CLI 和迁移 materializer
 重新构建。使用当前全部 SBA 字节及准确基线 checkout，未借旧测试结果代证。无云写入。
+
+1.0.2 的冻结 index 回归 `linux-native-recovery-24.xml` 为 **701 passed、0 skip**；
+`go-recovery-24.safe.json` 为 CLI 82 项、0 skip、go vet 通过，真实 sealer、CLI 和迁移准备
+已重建。native20 缺 curl 的三个真实 TLS 环境失败与 native22 未完成记录均保留，未放宽产品
+保护或跳过测试。部署前 `recovery-readonly-23.safe.json` 的产品只读前置全部通过，原 control、
+阶段标记和部分配置保持；该核对不是 writer 移交，也不是部署成功，正式恢复仍会重新现场核验。
 
 Python 全量须提供摘要匹配的 `EASYPROXY_TEST_ESBUILD`、真实产物
 `EASYPROXY_TEST_PAGES_BUILD`、真实 sealed-box helper `EASYPROXY_TEST_SEALER`；否则相关用例
