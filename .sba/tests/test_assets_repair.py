@@ -146,7 +146,7 @@ def test_noncanonical_control_and_unreviewed_resume_parent_are_rejected(partial)
 
 def test_manifest_has_five_separate_repairs_with_existing_secrets_only():
     manifest = json.loads((Path(__file__).resolve().parents[1] / "manifest.json").read_bytes())
-    assert manifest["version"] == "1.0.8" and len(manifest["repairs"]) == 6
+    assert manifest["version"] == "1.0.9" and len(manifest["repairs"]) == 7
     scope = next(row for row in manifest["repairs"] if row["id"] == ASSETS_CONTEXT["repairId"])
     assert scope["fromErrorCodes"] == [ASSETS_CONTEXT["errorCode"]] and set(scope["secretNames"]) == SECRETS
 

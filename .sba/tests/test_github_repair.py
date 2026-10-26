@@ -197,7 +197,7 @@ def test_manifest_has_separate_error_scope_with_only_existing_secret_names():
     manifest = json.loads((Path(__file__).resolve().parents[1] / "manifest.json").read_bytes())
     scope = next(row for row in manifest["repairs"] if row["id"] == GITHUB_CONTEXT["repairId"])
     assert scope["fromErrorCodes"] == [GITHUB_CONTEXT["errorCode"]]
-    assert set(scope["secretNames"]) == SECRETS and manifest["version"] == "1.0.8"
+    assert set(scope["secretNames"]) == SECRETS and manifest["version"] == "1.0.9"
 
 
 def test_application_passes_exact_repair_context_only_to_new_recovery_path(tmp_path, monkeypatch):

@@ -11,6 +11,7 @@ from repair_context import CONTEXT_FIELDS, PARENT_ERROR, PARENT_RELEASE, REPAIR_
 from repair_context import PAGES_CONTEXT, PAGES_PARENT_RELEASE, ASSETS_CONTEXT, ASSETS_PARENT_RELEASE
 from repair_context import GENERATION_CONTEXT, GENERATION_PARENT_RELEASE
 from repair_context import PAGES_DIAGNOSTIC_CONTEXT, PAGES_DIAGNOSTIC_PARENT_RELEASE
+from repair_context import GENERATION_OUTPUTS_CONTEXT, GENERATION_OUTPUTS_PARENT_RELEASE
 from suite_config import ConfigurationError, SuiteConfig, parse_configuration
 
 
@@ -86,6 +87,10 @@ def repair_context(value, config):
     if context["repairId"] == PAGES_DIAGNOSTIC_CONTEXT["repairId"]:
         require(type(context["parentRunId"]) is int and context == PAGES_DIAGNOSTIC_CONTEXT
                 and value["previous"] == PAGES_DIAGNOSTIC_PARENT_RELEASE)
+        return
+    if context["repairId"] == GENERATION_OUTPUTS_CONTEXT["repairId"]:
+        require(type(context["parentRunId"]) is int and context == GENERATION_OUTPUTS_CONTEXT
+                and value["previous"] == GENERATION_OUTPUTS_PARENT_RELEASE)
         return
     require(value["previous"] == PARENT_RELEASE
             and context["repairId"] == REPAIR_ID and context["errorCode"] == PARENT_ERROR
