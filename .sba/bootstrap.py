@@ -9,6 +9,7 @@ import tempfile
 import time
 
 from deadline import MAX_SECONDS, action_deadline, remaining
+from diagnostics import StageError, phase, safe_error_code
 from python_runtime import environment as python_environment, prepare_python
 from refresh_context import manifest_release, require
 from request import parse_request
@@ -31,12 +32,14 @@ def bootstrap(request_path: Path, result_path: Path, *, environment) -> int:
     deadline = time.monotonic() + MAX_SECONDS
     try:
         with action_deadline(deadline):
-            inspect_checkout(root, request.config.repository, request.source_sha)
-            output = Path(tempfile.mkdtemp(prefix="easyproxy-sba-", dir=temporary))
-            prepared = output / "source"
-            materialize_workspace(prepared, request.config.repository, request.source_sha, cache_root=root)
-            require(manifest_release(prepared, request.source_sha)["applicationVersion"] == version)
-            runtime = prepare_python(prepared / ".sba/requirements-linux.lock", output / "python")
+            with phase("SOURCE"):
+                inspect_checkout(root, request.config.repository, request.source_sha)
+                output = Path(tempfile.mkdtemp(prefix="easyproxy-sba-", dir=temporary))
+                prepared = output / "source"
+                materialize_workspace(prepared, request.config.repository, request.source_sha, cache_root=root)
+                require(manifest_release(prepared, request.source_sha)["applicationVersion"] == version)
+            with phase("PYTHON"):
+                runtime = prepare_python(prepared / ".sba/requirements-linux.lock", output / "python")
         env = {**python_environment(output), **values, "RUNNER_TEMP": str(output)}
         with (output / "execution.private.log").open("xb") as log:
             result = subprocess.run([str(runtime.python), "-B", "-s", str(prepared / ".sba/execute.py"),
@@ -47,9 +50,10 @@ def bootstrap(request_path: Path, result_path: Path, *, environment) -> int:
             write_result(result_path, request, status="unknown", checks={}, error_code="EASYPROXY_SBA_RESULT_MISSING")
             return 1
         return result.returncode
-    except Exception:
+    except Exception as error:
         if not result_path.exists():
-            write_result(result_path, request, status="unknown", checks={}, error_code="EASYPROXY_SBA_BOOTSTRAP_UNKNOWN")
+            code = safe_error_code(error) if type(error) is StageError else "EASYPROXY_SBA_BOOTSTRAP_UNKNOWN"
+            write_result(result_path, request, status="unknown", checks={}, error_code=code)
         return 1
 
 

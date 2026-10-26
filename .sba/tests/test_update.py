@@ -66,7 +66,7 @@ def test_update_requires_backup_and_preservation_before_publishing_and_committin
 @pytest.mark.parametrize("stage", ORDER)
 def test_update_partial_or_unknown_never_releases_writer_or_runs_later_stage(upgraded, stage):
     upgraded[-2]["fail"] = stage
-    with pytest.raises(RuntimeError, match="FIXTURE_UNKNOWN"):
+    with pytest.raises(RuntimeError, match="EASYPROXY_SBA_" + stage.upper() + "_UNKNOWN"):
         run(upgraded)
     assert upgraded[-2]["order"] == ORDER[:ORDER.index(stage) + 1]
     assert state(upgraded[-3])["active"] == OLD and state(upgraded[-3])["writer"] is not None

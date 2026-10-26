@@ -2,7 +2,7 @@
   "schemaVersion": 3,
   "id": "easyproxy-cloud",
   "name": "EasyProxy 云套件",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "entrypoint": "springbok.ps1",
   "runtime": {
     "runner": "ubuntu-24.04",
@@ -15,8 +15,21 @@
     "update": { "timeoutSeconds": 3600 },
     "verify": { "timeoutSeconds": 3600 },
     "preview": { "timeoutSeconds": 3600 },
-    "destroy-preview": { "timeoutSeconds": 3600 }
+    "destroy-preview": { "timeoutSeconds": 3600 },
+    "repair": { "timeoutSeconds": 3600 }
   },
+  "repairs": [{
+    "id": "pristine-initial-deployment",
+    "name": "修复未开始发布的首次部署",
+    "fromErrorCodes": ["EASYPROXY_SBA_FAILED_OR_UNKNOWN"],
+    "secretNames": [
+      "EASYPROXY_CLOUDFLARE_API_TOKEN", "EASYPROXY_GITHUB_TOKEN",
+      "EASYPROXY_R2_ACCESS_KEY_ID", "EASYPROXY_R2_SECRET_ACCESS_KEY",
+      "EASYPROXY_MISUB_ADMIN_PASSWORD", "EASYPROXY_MISUB_COOKIE_SECRET",
+      "EASYPROXY_MANIFEST_TOKEN", "EASYPROXY_ECH_TOKEN", "EASYPROXY_BACKUP_PASSPHRASE",
+      "EASYPROXY_AGGREGATOR_SHARED_TOKEN", "EASYPROXY_AGGREGATOR_ISSUE91_SUB_URL_B64"
+    ]
+  }],
   "secrets": [
     "EASYPROXY_CLOUDFLARE_API_TOKEN",
     "EASYPROXY_GITHUB_TOKEN",

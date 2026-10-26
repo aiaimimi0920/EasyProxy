@@ -67,6 +67,11 @@ class WorkerAPI:
         require(type(value) is dict, "RESPONSE_UNKNOWN")
         return value
 
+    def settings_or_absent(self, name: str) -> dict | None:
+        value = self._request("GET", f"scripts/{self._name(name)}/settings", missing_code=10007)
+        require(value is None or type(value) is dict, "RESPONSE_UNKNOWN")
+        return value
+
     def upload(self, name: str, metadata: dict, bundle: bytes) -> dict:
         require(type(metadata) is dict and type(bundle) is bytes and 0 < len(bundle) <= 3 * 1024 * 1024, "BUNDLE")
         value = self._request("PUT", f"scripts/{self._name(name)}", files={

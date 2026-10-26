@@ -80,6 +80,10 @@ def api_wire(monkeypatch):
             elif self.path.endswith("/workers/scripts"):
                 self.send([] if record["settings"] is None else [{"id": WORKER}])
             elif self.path.endswith("/settings"):
+                if record["mode"].startswith("settings-404-"):
+                    code = int(record["mode"].removeprefix("settings-404-"))
+                    self.send(status=404, raw=json.dumps({"success": False, "errors": [{"code": code}]}).encode())
+                    return
                 value = copy.deepcopy(record["settings"])
                 if record["writes"] and record["mode"] == "wrong-binding":
                     value["bindings"][0]["bucket_name"] = "unapproved-bucket"
@@ -191,6 +195,21 @@ def held(release, action="deploy", inventory=None):
 
 def publish(owner, permit, settings):
     return ech.publish_ech(owner, permit, settings, api_token="fixture-api-token", ech_token=ECH_TOKEN)
+
+
+@pytest.mark.parametrize("code", [10007, 10000, 10090])
+def test_pristine_worker_absence_requires_exact_provider_404_code_without_writes(api_wire, code):
+    api_wire["mode"] = "settings-404-" + str(code)
+    client = api_module.WorkerAPI(IDENTITY["accountId"], "fixture-api-token")
+    try:
+        if code == 10007:
+            assert client.settings_or_absent(WORKER) is None
+        else:
+            with pytest.raises(api_module.WorkerError, match="RESPONSE_UNKNOWN"):
+                client.settings_or_absent(WORKER)
+    finally:
+        client.close()
+    assert len(api_wire["requests"]) == 1 and api_wire["writes"] == []
 
 
 @pytest.mark.parametrize("system,name", [("win32", "esbuild.exe"), ("linux", "esbuild")])

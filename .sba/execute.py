@@ -7,6 +7,7 @@ from pathlib import Path
 
 from application import execute
 from deadline import action_deadline
+from diagnostics import safe_error_code
 from refresh_context import manifest_release
 from request import parse_request
 from result import write_result
@@ -29,9 +30,9 @@ def main():
             result = execute(request, root, args.output, environment=os.environ)
         write_result(args.result, request, status="succeeded", checks=result["checks"], lifecycle=result.get("lifecycle"))
         return 0
-    except Exception:
+    except Exception as error:
         if request is not None and not args.result.exists():
-            write_result(args.result, request, status="unknown", checks={}, error_code="EASYPROXY_SBA_FAILED_OR_UNKNOWN")
+            write_result(args.result, request, status="unknown", checks={}, error_code=safe_error_code(error))
         return 1
 
 

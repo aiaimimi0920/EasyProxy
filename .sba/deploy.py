@@ -9,6 +9,7 @@ from artifact_store import ArtifactStore
 from audit_image import AuditImage, image_identity
 from coordination import Coordinator, r2_store
 from d1_init import initialize_d1
+from diagnostics import phase
 from ech import EchDeployment, metadata as worker_metadata, publish_ech
 from github_environment import REFRESH_SECRETS, configure_environment, reviewed_workflow
 from misub_sync import sync_misub
@@ -61,55 +62,67 @@ def deploy_suite(request: ApplicationRequest, root: Path, tools: LinuxTools, ima
     if migration_settings is not None:
         require(migration_settings.root == root and migration_settings.database_id == config.database_id
                 and migration_settings.base_url == config.pages_origin)
-    store = r2_store(config.account_id, config.bucket, credentials["EASYPROXY_R2_ACCESS_KEY_ID"],
-                     credentials["EASYPROXY_R2_SECRET_ACCESS_KEY"])
+    with phase("WRITER"):
+        store = r2_store(config.account_id, config.bucket, credentials["EASYPROXY_R2_ACCESS_KEY_ID"],
+                         credentials["EASYPROXY_R2_SECRET_ACCESS_KEY"])
     public = None
     try:
-        owner = Coordinator(store, config.identity("production"), config.inventory_digest)
-        page_secrets = {"ADMIN_PASSWORD": credentials["EASYPROXY_MISUB_ADMIN_PASSWORD"],
-                        "COOKIE_SECRET": credentials["EASYPROXY_MISUB_COOKIE_SECRET"],
-                        "MANIFEST_TOKEN": credentials["EASYPROXY_MANIFEST_TOKEN"]}
-        # Validate business credential formats before even acquiring the durable writer.
-        pages_configuration(owner, release, config.pages_name, config.database_id, page_secrets)
-        worker_metadata(owner, release, credentials["EASYPROXY_ECH_TOKEN"])
-        output.mkdir(mode=0o700, parents=True, exist_ok=False)
-        public = PublicArtifacts(config.worker_origin + "/aggregator")
-        permit = owner.begin(request.action, release, previous=request.previous)
+        with phase("WRITER"):
+            owner = Coordinator(store, config.identity("production"), config.inventory_digest)
+            page_secrets = {"ADMIN_PASSWORD": credentials["EASYPROXY_MISUB_ADMIN_PASSWORD"],
+                            "COOKIE_SECRET": credentials["EASYPROXY_MISUB_COOKIE_SECRET"],
+                            "MANIFEST_TOKEN": credentials["EASYPROXY_MANIFEST_TOKEN"]}
+            # Validate formats before even acquiring the durable writer.
+            pages_configuration(owner, release, config.pages_name, config.database_id, page_secrets)
+            worker_metadata(owner, release, credentials["EASYPROXY_ECH_TOKEN"])
+            output.mkdir(mode=0o700, parents=True, exist_ok=False)
+            public = PublicArtifacts(config.worker_origin + "/aggregator")
+            permit = owner.begin(request.action, release, previous=request.previous)
         # No stage, exception path, or finally below may release this writer.
         if request.action == "deploy":
-            initialized = initialize_d1(owner, permit, root, config.inventory,
-                                        api_token=credentials["EASYPROXY_CLOUDFLARE_API_TOKEN"])
+            with phase("D1"):
+                initialized = initialize_d1(owner, permit, root, config.inventory,
+                                            api_token=credentials["EASYPROXY_CLOUDFLARE_API_TOKEN"])
             stage_checks(initialized, {"d1-initialized", "schema-verified"})
         else:
-            migration = migrate_misub(owner, permit, migration_settings, credentials={
-                "CLOUDFLARE_API_TOKEN": credentials["EASYPROXY_CLOUDFLARE_API_TOKEN"],
-                "MISUB_ADMIN_PASSWORD": credentials["EASYPROXY_MISUB_ADMIN_PASSWORD"],
-                "EASYPROXY_BACKUP_PASSPHRASE": credentials["EASYPROXY_BACKUP_PASSPHRASE"]})
+            with phase("MIGRATION"):
+                migration = migrate_misub(owner, permit, migration_settings, credentials={
+                    "CLOUDFLARE_API_TOKEN": credentials["EASYPROXY_CLOUDFLARE_API_TOKEN"],
+                    "MISUB_ADMIN_PASSWORD": credentials["EASYPROXY_MISUB_ADMIN_PASSWORD"],
+                    "EASYPROXY_BACKUP_PASSPHRASE": credentials["EASYPROXY_BACKUP_PASSPHRASE"]})
             stage_checks(migration, {"backup-created", "data-preserved", "migration-verified"})
-        github = configure_environment(owner, permit, config, root, token=credentials["EASYPROXY_GITHUB_TOKEN"],
-            secrets={name: credentials[name] for name in REFRESH_SECRETS}, sealer=sealer)
+        with phase("GITHUB"):
+            github = configure_environment(owner, permit, config, root, token=credentials["EASYPROXY_GITHUB_TOKEN"],
+                secrets={name: credentials[name] for name in REFRESH_SECRETS}, sealer=sealer)
         stage_checks(github, {"github-environment-configured", "github-environment-verified", "github-workflow-verified"})
         require(github.get("refreshEnabled") is True)
-        edge = publish_ech(owner, permit, EchDeployment(root, tools.esbuild, output / "edge", config.worker_name,
-            config.inventory), api_token=credentials["EASYPROXY_CLOUDFLARE_API_TOKEN"], ech_token=credentials["EASYPROXY_ECH_TOKEN"])
+        with phase("EDGE"):
+            edge = publish_ech(owner, permit, EchDeployment(root, tools.esbuild, output / "edge", config.worker_name,
+                config.inventory), api_token=credentials["EASYPROXY_CLOUDFLARE_API_TOKEN"], ech_token=credentials["EASYPROXY_ECH_TOKEN"])
         stage_checks(edge, {"ech-published", "ech-bindings-verified", "ech-version-verified"})
         require(edge.get("origin") == config.worker_origin and edge.get("sourceSha") == release["sourceSha"]
                 and edge.get("applicationVersion") == release["applicationVersion"])
-        pages = publish_pages(owner, permit, PagesDeployment(root, tools.node, tools.npm_cli, output / "pages",
-            config.pages_name, config.inventory), api_token=credentials["EASYPROXY_CLOUDFLARE_API_TOKEN"], secrets=page_secrets)
+        with phase("PAGES"):
+            pages = publish_pages(owner, permit, PagesDeployment(root, tools.node, tools.npm_cli, output / "pages",
+                config.pages_name, config.inventory), api_token=credentials["EASYPROXY_CLOUDFLARE_API_TOKEN"], secrets=page_secrets)
         stage_checks(pages, {"pages-published", "pages-bindings-verified", "pages-version-verified"})
         require(pages.get("origin") == config.pages_origin and pages.get("sourceSha") == release["sourceSha"]
                 and pages.get("applicationVersion") == release["applicationVersion"])
         artifacts = ArtifactStore(store)
-        candidate = publish_candidate(owner, permit, artifacts, public, bodies)
-        audit = audit_candidate(owner, permit, candidate, public, root, output / "audit", image=image)
-        promotion = promote_candidate(owner, permit, artifacts, public, candidate, audit=audit, root=root)
+        with phase("CANDIDATE"):
+            candidate = publish_candidate(owner, permit, artifacts, public, bodies)
+        with phase("AUDIT"):
+            audit = audit_candidate(owner, permit, candidate, public, root, output / "audit", image=image)
+        with phase("PROMOTION"):
+            promotion = promote_candidate(owner, permit, artifacts, public, candidate, audit=audit, root=root)
         stage_checks(promotion, {"candidate-verified", "stable-verified"})
-        synchronized = sync_misub(owner, permit, candidate, audit, public, root, config.inventory,
-            admin_password=credentials["EASYPROXY_MISUB_ADMIN_PASSWORD"],
-            manifest_token=credentials["EASYPROXY_MANIFEST_TOKEN"], ech_token=credentials["EASYPROXY_ECH_TOKEN"])
+        with phase("SYNC"):
+            synchronized = sync_misub(owner, permit, candidate, audit, public, root, config.inventory,
+                admin_password=credentials["EASYPROXY_MISUB_ADMIN_PASSWORD"],
+                manifest_token=credentials["EASYPROXY_MANIFEST_TOKEN"], ech_token=credentials["EASYPROXY_ECH_TOKEN"])
         stage_checks(synchronized, {"misub-refreshed"})
-        verified = verify_public(config, release, root)
+        with phase("VERIFY"):
+            verified = verify_public(config, release, root)
         stage_checks(verified, {"release-versions-verified", "published-subscriptions-verified", "pages-frontend-verified"})
         require(verified.get("runId") == promotion.get("runId") == permit.operation_id
                 and verified.get("manifestSha256") == promotion.get("manifestSha256")
@@ -118,7 +131,8 @@ def deploy_suite(request: ApplicationRequest, root: Path, tools: LinuxTools, ima
         checks = {"suite-published": True, "service-ready": True}
         if request.action == "update":
             checks.update({"backup-created": True, "data-preserved": True})
-        owner.commit_verified(permit, checks)
+        with phase("COMMIT"):
+            owner.commit_verified(permit, checks)
         return {"checks": checks}
     finally:
         if public is not None:

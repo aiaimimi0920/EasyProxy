@@ -121,7 +121,7 @@ def test_single_process_deploy_commits_only_after_every_real_stage_contract_pass
 def test_each_unknown_stage_keeps_writer_and_never_runs_later_stages(prepared, stage):
     record, store = prepared[-1], prepared[-2]
     record["fail"] = stage
-    with pytest.raises(RuntimeError, match="FIXTURE_UNKNOWN"):
+    with pytest.raises(RuntimeError, match="EASYPROXY_SBA_" + stage.upper() + "_UNKNOWN"):
         run(prepared)
     assert record["order"] == ORDER[:ORDER.index(stage) + 1]
     assert state(store)["writer"] is not None and state(store)["active"] is None and len(store.writes) == 1
