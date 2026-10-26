@@ -137,22 +137,24 @@ def test_attested_recovery_never_initializes_d1_again_and_commits_only_after_rem
     assert state(store)["active"] == request.candidate and state(store)["writer"] is None
 
 
-@pytest.mark.parametrize("kind", ["pages", "assets", "generation", "diagnostic"])
-@pytest.mark.parametrize("failure", [None, "edge", "pages", "sync"])
+@pytest.mark.parametrize("kind", ["pages", "assets", "generation", "diagnostic", "outputs"])
+@pytest.mark.parametrize("failure", [None, *ORDER[2:]])
 def test_pages_recovery_does_not_replay_d1_or_github_and_passes_resume_to_publication(prepared, monkeypatch, failure, kind):
     from pages_repair import PagesResume
     from repair_context import PAGES_CONTEXT, PAGES_PARENT_RELEASE, ASSETS_CONTEXT, ASSETS_PARENT_RELEASE
     from repair_context import GENERATION_CONTEXT, GENERATION_PARENT_RELEASE
     from repair_context import PAGES_DIAGNOSTIC_CONTEXT, PAGES_DIAGNOSTIC_PARENT_RELEASE
+    from repair_context import GENERATION_OUTPUTS_CONTEXT, GENERATION_OUTPUTS_PARENT_RELEASE
     import hashlib
     request, root, tools, image, sealer, output, credentials, store, record = prepared
     parent = PAGES_PARENT_RELEASE if kind == "pages" else ASSETS_PARENT_RELEASE
-    if kind == "diagnostic": parent = PAGES_DIAGNOSTIC_PARENT_RELEASE
+    if kind in ("diagnostic", "outputs"): parent = PAGES_DIAGNOSTIC_PARENT_RELEASE
     context, previous, symbol = {
         "pages": (PAGES_CONTEXT, PAGES_PARENT_RELEASE, "begin_pages_recovery"),
         "assets": (ASSETS_CONTEXT, ASSETS_PARENT_RELEASE, "begin_assets_recovery"),
         "generation": (GENERATION_CONTEXT, GENERATION_PARENT_RELEASE, "begin_generation_recovery"),
         "diagnostic": (PAGES_DIAGNOSTIC_CONTEXT, PAGES_DIAGNOSTIC_PARENT_RELEASE, "begin_pages_diagnostic_recovery"),
+        "outputs": (GENERATION_OUTPUTS_CONTEXT, GENERATION_OUTPUTS_PARENT_RELEASE, "begin_generation_outputs_recovery"),
     }[kind]
     recovery = replace(request, action="repair", previous=previous, context=context)
     handles = []

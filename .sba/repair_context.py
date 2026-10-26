@@ -61,3 +61,15 @@ PAGES_DIAGNOSTIC_CONTEXT = {
     "resultDigest": "618a2ecedcc93195d2459775ae4ea1eb87489bb460e5157bb36159620f48dd03",
     "errorCode": "EASYPROXY_SBA_PAGES_UNKNOWN",
 }
+
+# 最新生成失败尚未移交；previous=1.0.7，真实资源父版本仍为1.0.5。
+GENERATION_OUTPUTS_REPAIR_ID = "continue-generation-outputs-deployment"
+GENERATION_OUTPUTS_PARENT_RELEASE = {"sourceSha": "89cb8f23394c988570141d0cc15105c86aa98248", "applicationVersion": "1.0.7"}
+GENERATION_OUTPUTS_CONTEXT = {
+    "repairId": GENERATION_OUTPUTS_REPAIR_ID,
+    "parentTaskId": "dc-d8fbaaa6c7404904928900e9f6a8c9f1",
+    "parentRunId": 40358960520,
+    "requestDigest": "34d4657c1a29867fd8f0921e2498cc496e04927183dd08388afdc9fdaf80fb5f",
+    "resultDigest": "99c35c8e9074de444ff6eb71dec0cd7e1b5c9ec40622317e3f51a17c18f8a4d8",
+    "errorCode": "EASYPROXY_SBA_GENERATION_OUTPUTS_UNKNOWN",
+}

@@ -2,7 +2,25 @@
 
 ## 当前状态（2026-10-27）
 
-### EP-SBA-19：单个坏订阅拖掉整批好结果的本地修复（未发布）
+### EP-SBA-20：准确 1.0.7 失败的新受限恢复入口（实施中）
+
+用户已明确批准方案203：1.0.9新增独立`continue-generation-outputs-deployment`，只接受
+task `dc-d8fbaaa6c7404904928900e9f6a8c9f1` / run `40358960520` 的准确上下文和
+previous 1.0.7。旧六个repair、十一秘密及其他manifest字段保持；新入口不是通用重试。
+资源父版本仍是1.0.5，不把未发布的1.0.7候选当作线上资源。
+
+执行前严格重核最新原始回执、全部祖先终态、control字节/ETag、十三对象及十二历史正文、
+D1/GitHub/Worker/Pages。原始ZIP下载绑定固定摘要、有界内容及严格envelope/result；
+签名下载使用独立无Bearer会话，不允许第二跳，不导出签名URL或异常正文。
+任何漂移零写入；先create-only证据，再单次CAS移交始终非空的writer。D1初始化和GitHub
+配置只读复核，不重放；Worker保持同业务bundle，Pages复用原项目且最多单次部署。
+
+正常PR/main CI和完整隔离门禁后，只执行一次准确新main的无部署凭据hosted预检。
+通过并刷新全部现场后，才经正常SpringBok UI单次恢复；新UNKNOWN立即停写，不自动再次
+恢复、清锁或回滚。成功后另行独立verify与真实双来源TLS消费；旧服务不删除、禁用或退役。
+当前只完成本地入口及定向验证，尚未提交该恢复，不宣称预检、恢复或正式上线成功。
+
+### EP-SBA-19：单个坏订阅拖掉整批好结果的修复（已发布源码）
 
 在批准 gitlink 的真实进程池中已禁网复现：两个任务里一个抛普通异常，原
 `pool.map()` 使整批结果返回空列表，成功任务也丢失。隔离 runtime 现在对准确
@@ -15,7 +33,9 @@ provenance 项及实际字节。原 upstream/gitlink 不改。全任务失败仍
 真实审计及数量门禁拒绝；不补空文件、不放宽发布条件、不移交 writer。
 这修复的是已经复现的代码缺陷，不是原生产 UNKNOWN 根因已被唯一定位；原任务仅
 141 秒，已排除总预算耗尽，但现有留存证据不含原私有生成日志，不能倒推其实际失败分支。
-本轮仅本地修复和隔离验证，尚未提交、推送、发布或执行新生产恢复。
+该修复已由PR24正常发布，main为`7df6b7da5d8b6bb6a928cc50428ac909b68c39e8`；
+PR/main CI、禁网Linux1207项/零skip、Go82项/零skip及vet、真实公开采集均通过。
+这些是上一轮源码与隔离验证证据，不替代1.0.9门禁或新的生产业务验收。
 
 1.0.7 已通过正常 PR/main CI 发布，并于 00:25:18 经 SpringBok 单次提交任务
 `dc-d8fbaaa6c7404904928900e9f6a8c9f1` / run `40358960520`。应用回执为
@@ -25,14 +45,14 @@ provenance 项及实际字节。原 upstream/gitlink 不改。全任务失败仍
 
 ### EP-SBA-18：仅生成输出的有限诊断（负责人：主 AI）
 
-用户仅批准补充、隔离验证、正常发布诊断，并执行一次不带部署凭据的生成预检；未批准
-下一次生产恢复。1.0.8 是本轮诊断候选，不是线上版本，不新增 repair、不扩大旧匹配或秘密。
+该历史阶段仅批准补充、隔离验证、正常发布诊断及一次无部署凭据生成预检，不含生产恢复。
+1.0.8诊断已发布，唯一hosted run `40374394955`通过，但不是线上版本；当时未新增repair。
 输出读取仅允许 `public-clash.artifact`、`public-singbox.artifact`、`public-mixed.artifact`、
 `crawledsubs.artifact`，失败原因仅为 `missing`、`not-regular`、`symlink`、`path-alias`、
 `stat-error`、`path-error`、`permission`、`read-error`。仅在生成输出失败的只读预检报告中
 附加 `outputDiagnostic`；不导出路径、异常原文、日志或产物正文，不再次访问文件以诊断。
 生产阶段码仍为 `EASYPROXY_SBA_GENERATION_OUTPUTS_UNKNOWN`，单次生成和原产物字节/大小
-上限及后续验证保持；不存在新恢复权限。实际发布与 hosted 结果须在完成后另行记录。
+上限及后续验证保持；该历史诊断批准不构成再次恢复权限，新授权仅以上述EP-SBA-20为准。
 
 ### 1.0.5 Pages 中断现场（历史父资源保持）
 
