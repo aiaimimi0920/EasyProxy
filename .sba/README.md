@@ -2,7 +2,22 @@
 
 ## 当前状态（2026-10-27）
 
-### EP-SBA-20：准确 1.0.7 失败的新受限恢复入口（实施中）
+### EP-SBA-21：Pages 资产协议窄修与准确 1.0.9 恢复（实施中）
+
+1.0.9准确任务`dc-61ea1053fb0d425a9c755531a9e998af` / run`40396870242`已在
+`PAGES_ASSET_VERIFY`返回UNKNOWN，尚未形成Pages deployment；不是套件上线成功。
+1.0.10移除官方协议未保证的“上传后、登记前check-missing必须立即为空”门禁，保持
+首次列表严格校验、每次远程操作前owner核对、单次上传/登记及部署后全部验证。
+此机制已在合成提供方复现，但旧线上分支不能唯一倒推，owner读取失败仍可能产生同码。
+
+新增独立`continue-pages-asset-protocol-deployment`，previous和资源父版本均为准确1.0.9；
+仅绑定上述原回执、control SHA/ETag、16对象/15历史正文及全部资源，保七旧入口和十一秘密。
+先只读核验、create-only移交证据、再单次非空writer CAS；不重放D1初始化/GitHub配置，
+Worker同业务bundle，Pages复用原项目，任何UNKNOWN停写、不盲重放或清锁。
+正常发布和一次无写凭据预检后，现场刷新无漂移才提交准确恢复。成功后仍须独立verify
+及本地真实双来源TLS消费；旧服务不删除。当前实施状态不预报生产成功。
+
+### EP-SBA-20：准确 1.0.7 失败的新受限恢复入口（历史）
 
 用户已明确批准方案203：1.0.9新增独立`continue-generation-outputs-deployment`，只接受
 task `dc-d8fbaaa6c7404904928900e9f6a8c9f1` / run `40358960520` 的准确上下文和

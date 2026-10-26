@@ -2,6 +2,12 @@
 
 ## 当前状态（2026-10-27）
 
+最新1.0.9任务`dc-61ea1053fb0d425a9c755531a9e998af`在Pages资产验证UNKNOWN，
+已停止写入；现场Worker/Pages配置为1.0.9，Pages零deployment，writer非空、active=null。
+当前1.0.10实施准确协议窄修及`continue-pages-asset-protocol-deployment`：资源父版本
+也为1.0.9，核16对象/15正文，先证据后单次CAS；旧七入口、十一秘密及全部UNKNOWN保留。
+这不是部署成功，最终仍以正常SpringBok回执、独立verify和本地真实代理业务为准。
+
 五动作应用入口、实例周期刷新、manifest v3 与 deployment v2 已实现；1.0.5 的准确恢复任务
 `dc-7affcab05da84f4f938d4430aa9b4799` / run `40323259410` 在 Pages 返回 UNKNOWN。
 只读核实 `active=null`、writer 锁定 1.0.5、R2 十三对象及原九阶段对象保持；Worker 公开

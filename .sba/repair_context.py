@@ -73,3 +73,15 @@ GENERATION_OUTPUTS_CONTEXT = {
     "resultDigest": "99c35c8e9074de444ff6eb71dec0cd7e1b5c9ec40622317e3f51a17c18f8a4d8",
     "errorCode": "EASYPROXY_SBA_GENERATION_OUTPUTS_UNKNOWN",
 }
+
+# 本次资产验证失败已经移交且写入1.0.9元数据；previous和资源父版本相同。
+PAGES_ASSET_PROTOCOL_REPAIR_ID = "continue-pages-asset-protocol-deployment"
+PAGES_ASSET_PROTOCOL_PARENT_RELEASE = {"sourceSha": "50d33cfed123439c77b05e89e059863185cd75b1", "applicationVersion": "1.0.9"}
+PAGES_ASSET_PROTOCOL_CONTEXT = {
+    "repairId": PAGES_ASSET_PROTOCOL_REPAIR_ID,
+    "parentTaskId": "dc-61ea1053fb0d425a9c755531a9e998af",
+    "parentRunId": 40396870242,
+    "requestDigest": "6dd8f106b22a620d3e87e5488f8644f1cf1ff2dba6bee2292b14b9f6ea05886e",
+    "resultDigest": "f20967ee8d4eaa1ea9621ce18ffecbb1dcb9862c4981d8f31596864666397474",
+    "errorCode": "EASYPROXY_SBA_PAGES_ASSET_VERIFY_UNKNOWN",
+}

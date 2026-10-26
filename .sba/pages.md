@@ -76,8 +76,10 @@ SBA preview 将使用另一套独立 Pages 项目的 production 环境；每个�
 
 账户 token 只用于项目/部署 API。资产接口使用该项目 GET upload-token 返回的临时 JWT。
 hash 精确采用 Cloudflare 的 `BLAKE3(base64(file bytes) + extension without dot)` 的前 32
-个 hex 字符。先 check-missing，按缺失 hash 单次上传，再检查全量 hash 已存在，单次
-upsert-hashes 后发送唯一一个创建部署 multipart POST。JWT 到期不会刷新并重放写入。
+个 hex 字符。先check-missing，按缺失hash单次上传，再单次upsert-hashes，最后发送
+唯一一个创建部署multipart POST。匹配固定Wrangler4.93.1的官方上传顺序，不把
+check-missing当成未登记资产的即时读屏障；登记前不再要求第二次查询立即为空。
+上传/登记的ACK不代替后续部署、project和公开版本验证。JWT到期不刷新或重放写入。
 
 共用 `cloudflare_http.py` 的固定 HTTPS endpoint、TLS 校验、环境凭据隔离、响应大小限制、
 重复 JSON 键拒绝、重试 0、重定向关闭。即使通常被官方 CLI 当成可重试/可忽略的资产缓存

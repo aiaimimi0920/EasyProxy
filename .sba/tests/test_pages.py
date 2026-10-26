@@ -87,7 +87,7 @@ def candidate(tmp_path, monkeypatch):
 
 @pytest.fixture
 def api_wire(monkeypatch):
-    record = {"requests": [], "writes": [], "project": None, "mode": "normal", "assets": set(), "deployments": 0,
+    record = {"requests": [], "writes": [], "project": None, "mode": "normal", "assets": set(), "registered": set(), "deployments": 0,
               "polls": 0, "publicReads": 0, "serverErrors": []}
     monkeypatch.setattr(pages, "_propagation_delay", lambda: None)
 
@@ -195,7 +195,9 @@ def api_wire(monkeypatch):
                     record["project"] = project(body["deployment_configs"], canonical)
                     value = record["project"]
                 elif self.path.endswith("/check-missing"):
-                    value = [key for key in body["hashes"] if key not in record["assets"]]
+                    known = record["registered"] if record["mode"] == "registration-lag" else record["assets"]
+                    value = [key for key in body["hashes"] if key not in known]
+                    if "queryResult" in record: value = record["queryResult"]
                     if record["mode"] == "unknown-hash":
                         value = ["f" * 32]
                 elif self.path.endswith("/upload"):
@@ -206,6 +208,8 @@ def api_wire(monkeypatch):
                     record["assets"].add(body[0]["key"])
                     value = {}
                 elif self.path.endswith("/upsert-hashes"):
+                    assert set(body["hashes"]) <= record["assets"]
+                    record["registered"].update(body["hashes"])
                     value = {}
                 else:
                     raise AssertionError("Unexpected endpoint")
@@ -269,7 +273,7 @@ def test_sparse_asset_success_envelope_keeps_writer_and_single_publication(candi
     owner, permit, store, _ = held(release)
     result = publish(owner, permit, settings)
     assert result["checks"] == {"pages-published": True, "pages-bindings-verified": True, "pages-version-verified": True}
-    assert api_wire["deployments"] == 1 and len(api_wire["writes"]) == 6
+    assert api_wire["deployments"] == 1 and len(api_wire["writes"]) == 5
     assert json.loads(store.body)["writer"]["operationId"] == permit.operation_id
     assert json.loads(store.body)["active"] is None
 
@@ -285,7 +289,7 @@ def test_publish_stage_keeps_suite_writer_and_uses_distinct_upload_token(candida
     assert result["checks"] == {"pages-published": True, "pages-bindings-verified": True, "pages-version-verified": True}
     assert result["sourceSha"] == release["sourceSha"] and result["origin"] == f"https://{PROJECT}.pages.dev"
     assert result["deploymentId"] == DEPLOYMENT_ID and api_wire["polls"] == 2
-    assert len(api_wire["writes"]) == 6 and api_wire["deployments"] == 1 and len(store.stages) == 1
+    assert len(api_wire["writes"]) == 5 and api_wire["deployments"] == 1 and len(store.stages) == 1
     assert json.loads(store.body)["writer"]["operationId"] == permit.operation_id
     assert json.loads(store.body)["active"] == (old if action == "update" else None)
     assert "suite-published" not in result["checks"] and "service-ready" not in result["checks"]
@@ -307,7 +311,7 @@ def test_expected_empty_environment_accepts_only_provider_empty_map_shapes(candi
 
 @pytest.mark.parametrize("failure", [None, "foreign-project", "existing-deployment", "config-drift", "lost-deploy",
     "asset-upload-denied", "asset-query-invalid-json", "asset-register-rate-limit"])
-@pytest.mark.parametrize("assets", [False, True, "diagnostic"])
+@pytest.mark.parametrize("assets", [False, True, "diagnostic", "protocol"])
 def test_exact_pages_resume_reuses_project_without_create_and_never_replays(candidate, api_wire, monkeypatch, failure, assets):
     import hashlib
     import pages_repair
@@ -316,6 +320,7 @@ def test_exact_pages_resume_reuses_project_without_create_and_never_replays(cand
     monkeypatch.setattr(pages_repair, "PROJECT_ID", PROJECT_ID)
     parent = pages_repair.ASSETS_PARENT_RELEASE if assets else pages_repair.PAGES_PARENT_RELEASE
     if assets == "diagnostic": parent = pages_repair.PAGES_DIAGNOSTIC_PARENT_RELEASE
+    if assets == "protocol": parent = pages_repair.PAGES_ASSET_PROTOCOL_PARENT_RELEASE
     existing = project(pages.configuration(owner, parent, PROJECT, DATABASE_ID, SECRETS))
     existing["deployment_configs"]["preview"]["env_vars"] = None
     if failure == "foreign-project": existing["id"] = DATABASE_ID
@@ -532,4 +537,4 @@ def test_actual_build_artifact_flows_through_real_multipart_http(candidate, api_
     result = publish(owner, permit, settings)
     assert result["assetCount"] == len(artifact.assets) > 10
     assert api_wire["deployments"] == len(store.stages) == 1
-    assert len(api_wire["writes"]) == 5 + len({a.hash for a in artifact.assets})
+    assert len(api_wire["writes"]) == 4 + len({a.hash for a in artifact.assets})

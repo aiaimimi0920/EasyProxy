@@ -11,7 +11,7 @@ from github_api import GitHubAPI
 from github_repair import verify_initialized, EXECUTOR_SHA, ENVIRONMENT_ID
 from repair_context import GITHUB_CONTEXT, PAGES_CONTEXT, PAGES_PARENT_RELEASE, ASSETS_CONTEXT, ASSETS_PARENT_RELEASE
 from repair_context import GENERATION_CONTEXT, PAGES_DIAGNOSTIC_CONTEXT, PAGES_DIAGNOSTIC_PARENT_RELEASE
-from repair_context import GENERATION_OUTPUTS_CONTEXT
+from repair_context import GENERATION_OUTPUTS_CONTEXT, PAGES_ASSET_PROTOCOL_CONTEXT, PAGES_ASSET_PROTOCOL_PARENT_RELEASE
 from request import ApplicationRequest
 from worker_api import WorkerAPI, public_release
 
@@ -41,7 +41,7 @@ class PagesResume:
 
     @property
     def parent_release(self):
-        for release in (PAGES_PARENT_RELEASE, ASSETS_PARENT_RELEASE, PAGES_DIAGNOSTIC_PARENT_RELEASE):
+        for release in (PAGES_PARENT_RELEASE, ASSETS_PARENT_RELEASE, PAGES_DIAGNOSTIC_PARENT_RELEASE, PAGES_ASSET_PROTOCOL_PARENT_RELEASE):
             if self.parent_source_sha == release["sourceSha"]:
                 return dict(release)
         require(False)
@@ -56,7 +56,7 @@ class PagesResume:
 
 def parent_completed(token: str, *, context=None):
     context = PAGES_CONTEXT if context is None else context
-    require(context in (PAGES_CONTEXT, ASSETS_CONTEXT, GENERATION_CONTEXT, PAGES_DIAGNOSTIC_CONTEXT, GENERATION_OUTPUTS_CONTEXT))
+    require(context in (PAGES_CONTEXT, ASSETS_CONTEXT, GENERATION_CONTEXT, PAGES_DIAGNOSTIC_CONTEXT, GENERATION_OUTPUTS_CONTEXT, PAGES_ASSET_PROTOCOL_CONTEXT))
     session = secure_session()
     try:
         url = "https://api.github.com/repos/aiaimimi0920/SpringBok/actions/runs/" + str(context["parentRunId"])
@@ -121,7 +121,7 @@ def checked_objects(owner: Coordinator):
 
 def verify_configured(owner, config, root, token, *, parent_release=None):
     parent_release = PAGES_PARENT_RELEASE if parent_release is None else parent_release
-    require(parent_release in (PAGES_PARENT_RELEASE, ASSETS_PARENT_RELEASE, PAGES_DIAGNOSTIC_PARENT_RELEASE))
+    require(parent_release in (PAGES_PARENT_RELEASE, ASSETS_PARENT_RELEASE, PAGES_DIAGNOSTIC_PARENT_RELEASE, PAGES_ASSET_PROTOCOL_PARENT_RELEASE))
     from github_environment import variables, verify_policy, reviewed_workflow, REFRESH_SECRETS
     from refresh_registry import REGISTRY_VARIABLE, parse_registry
     api = GitHubAPI(config.repository, config.environment, token)
@@ -166,7 +166,7 @@ def worker_bundle_digest(api: WorkerAPI, name: str):
 
 def verify_existing_worker(config, owner, token, ech_token, *, parent_release=None):
     parent_release = PAGES_PARENT_RELEASE if parent_release is None else parent_release
-    require(parent_release in (PAGES_PARENT_RELEASE, ASSETS_PARENT_RELEASE, PAGES_DIAGNOSTIC_PARENT_RELEASE))
+    require(parent_release in (PAGES_PARENT_RELEASE, ASSETS_PARENT_RELEASE, PAGES_DIAGNOSTIC_PARENT_RELEASE, PAGES_ASSET_PROTOCOL_PARENT_RELEASE))
     from ech import metadata, _verify_settings
     api = WorkerAPI(config.account_id, token)
     try:
@@ -181,7 +181,7 @@ def verify_existing_worker(config, owner, token, ech_token, *, parent_release=No
 
 def verify_existing_pages(api, owner, config, secrets, *, parent_release=None):
     parent_release = PAGES_PARENT_RELEASE if parent_release is None else parent_release
-    require(parent_release in (PAGES_PARENT_RELEASE, ASSETS_PARENT_RELEASE, PAGES_DIAGNOSTIC_PARENT_RELEASE))
+    require(parent_release in (PAGES_PARENT_RELEASE, ASSETS_PARENT_RELEASE, PAGES_DIAGNOSTIC_PARENT_RELEASE, PAGES_ASSET_PROTOCOL_PARENT_RELEASE))
     from pages import configuration, _verify_project
     existing = api.project()
     _verify_project(existing, config.pages_name, configuration(owner, parent_release,

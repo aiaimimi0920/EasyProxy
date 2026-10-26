@@ -14,11 +14,11 @@ import github_environment
 from refresh_registry import REGISTRY_VARIABLE
 from test_pages_repair import recovery_request
 from test_request import parse
-from repair_context import ASSETS_PARENT_RELEASE, PAGES_DIAGNOSTIC_PARENT_RELEASE
+from repair_context import ASSETS_PARENT_RELEASE, PAGES_DIAGNOSTIC_PARENT_RELEASE, PAGES_ASSET_PROTOCOL_PARENT_RELEASE
 
 
 @pytest.mark.parametrize("mutation", [None, "repository", "workflow", "environment", "variables", "secrets", "registry", "policy"])
-@pytest.mark.parametrize("parent", [repair.PAGES_PARENT_RELEASE, ASSETS_PARENT_RELEASE, PAGES_DIAGNOSTIC_PARENT_RELEASE])
+@pytest.mark.parametrize("parent", [repair.PAGES_PARENT_RELEASE, ASSETS_PARENT_RELEASE, PAGES_DIAGNOSTIC_PARENT_RELEASE, PAGES_ASSET_PROTOCOL_PARENT_RELEASE])
 def test_complete_github_is_only_read_and_any_drift_stops(monkeypatch, tmp_path, mutation, parent):
     config = parse(recovery_request()).config
     owner = SimpleNamespace(identity=config.identity("production"), inventory_digest=config.inventory_digest)
@@ -86,7 +86,7 @@ def test_worker_module_download_is_bounded_get_and_strict_single_module(mutation
 
 
 @pytest.mark.parametrize("mutation", [None, "subdomain", "settings", "bundle", "public-version"])
-@pytest.mark.parametrize("parent", [repair.PAGES_PARENT_RELEASE, ASSETS_PARENT_RELEASE, PAGES_DIAGNOSTIC_PARENT_RELEASE])
+@pytest.mark.parametrize("parent", [repair.PAGES_PARENT_RELEASE, ASSETS_PARENT_RELEASE, PAGES_DIAGNOSTIC_PARENT_RELEASE, PAGES_ASSET_PROTOCOL_PARENT_RELEASE])
 def test_existing_worker_requires_settings_public_version_and_exact_module(monkeypatch, mutation, parent):
     from ech import metadata
     config = parse(recovery_request()).config
