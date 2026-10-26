@@ -49,3 +49,15 @@ GENERATION_CONTEXT = {
     "resultDigest": "b66b1d96c2eb4c492abc15c4600b40de40a8f6f2921cfdd180504342f170a16c",
     "errorCode": "EASYPROXY_SBA_GENERATION_UNKNOWN",
 }
+
+# 仅本次已明确批准的 1.0.5 Pages UNKNOWN；不复用任何祖先任务的批准。
+PAGES_DIAGNOSTIC_REPAIR_ID = "continue-pages-diagnostic-deployment"
+PAGES_DIAGNOSTIC_PARENT_RELEASE = {"sourceSha": "1e4334dcd2bb6f4dbb344740b430329bce61a341", "applicationVersion": "1.0.5"}
+PAGES_DIAGNOSTIC_CONTEXT = {
+    "repairId": PAGES_DIAGNOSTIC_REPAIR_ID,
+    "parentTaskId": "dc-7affcab05da84f4f938d4430aa9b4799",
+    "parentRunId": 40323259410,
+    "requestDigest": "184a62ffe67bb6e1c9b7823a1c9a6a9dcdae2f37fe483ca70a41b0d191eb554f",
+    "resultDigest": "618a2ecedcc93195d2459775ae4ea1eb87489bb460e5157bb36159620f48dd03",
+    "errorCode": "EASYPROXY_SBA_PAGES_UNKNOWN",
+}

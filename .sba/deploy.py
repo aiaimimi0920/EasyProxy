@@ -19,7 +19,8 @@ from misub_sync import sync_misub
 from migration import MiSubMigration, migrate_misub
 from pages import PagesDeployment, configuration as pages_configuration, publish_pages
 from pages_repair import PagesResume, begin_recovery as begin_pages_recovery, verify_configured
-from repair_context import PAGES_REPAIR_ID, ASSETS_REPAIR_ID, GENERATION_REPAIR_ID
+from pages_diagnostic_repair import begin_recovery as begin_pages_diagnostic_recovery
+from repair_context import PAGES_REPAIR_ID, ASSETS_REPAIR_ID, GENERATION_REPAIR_ID, PAGES_DIAGNOSTIC_REPAIR_ID
 from request import ApplicationRequest, SECRETS
 from sealed_box import Sealer, secret_value
 from sources import inspect_checkout
@@ -92,7 +93,8 @@ def deploy_suite(request: ApplicationRequest, root: Path, tools: LinuxTools, ima
                 permit = owner.begin(request.action, release, previous=request.previous)
             else:
                 begin = {PAGES_REPAIR_ID: begin_pages_recovery, ASSETS_REPAIR_ID: begin_assets_recovery,
-                         GENERATION_REPAIR_ID: begin_generation_recovery}.get(
+                         GENERATION_REPAIR_ID: begin_generation_recovery,
+                         PAGES_DIAGNOSTIC_REPAIR_ID: begin_pages_diagnostic_recovery}.get(
                     recovery_request.context.get("repairId"), begin_recovery)
                 permit, resume = begin(owner, recovery_request, root, credentials)
         # No stage, exception path, or finally below may release this writer.
