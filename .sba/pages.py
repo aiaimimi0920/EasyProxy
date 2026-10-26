@@ -7,6 +7,7 @@ from pathlib import Path
 import time
 
 from coordination import Coordinator, Permit, inventory_digest
+from diagnostics import phase
 from pages_api import PagesAPI, PagesError, credential, identifier, name, public_release, require
 from pages_build import COMPATIBILITY_DATE, build_pages
 
@@ -140,44 +141,54 @@ def publish_pages(owner: Coordinator, permit: Permit, settings: PagesDeployment,
     expected = configuration(owner, release, settings.project_name, databases[0]["id"], secrets)
     api = PagesAPI(owner.identity["accountId"], settings.project_name, api_token)
     try:
-        artifact = build_pages(settings.root, owner.identity["repository"], release["sourceSha"],
-                               settings.node, settings.npm_cli, settings.workdir)
+        with phase("PAGES_BUILD"):
+            artifact = build_pages(settings.root, owner.identity["repository"], release["sourceSha"],
+                                   settings.node, settings.npm_cli, settings.workdir)
         existing = api.project()
         project_id = None
         if resume is not None:
-            previous = configuration(owner, resume.parent_release, settings.project_name, databases[0]["id"], secrets)
-            project_id = _verify_project(existing, settings.project_name, previous, PROJECT_ID)
-            require(existing.get("latest_deployment") is None and existing.get("canonical_deployment") is None
-                    and api.deployments() == [], "DEPLOYMENT")
+            with phase("PAGES_PARENT_VERIFY"):
+                previous = configuration(owner, resume.parent_release, settings.project_name, databases[0]["id"], secrets)
+                project_id = _verify_project(existing, settings.project_name, previous, PROJECT_ID)
+                require(existing.get("latest_deployment") is None and existing.get("canonical_deployment") is None
+                        and api.deployments() == [], "DEPLOYMENT")
         elif permit.action == "update":
-            previous = configuration(owner, state["active"], settings.project_name, databases[0]["id"], secrets)
-            project_id = _verify_project(existing, settings.project_name, previous)
-            canonical = existing.get("canonical_deployment")
-            _verify_deployment(canonical, settings.project_name, project_id, state["active"])
-            require(type(canonical.get("latest_stage")) is dict and canonical["latest_stage"].get("name") == "deploy"
-                    and canonical["latest_stage"].get("status") == "success", "DEPLOYMENT")
+            with phase("PAGES_PARENT_VERIFY"):
+                previous = configuration(owner, state["active"], settings.project_name, databases[0]["id"], secrets)
+                project_id = _verify_project(existing, settings.project_name, previous)
+                canonical = existing.get("canonical_deployment")
+                _verify_deployment(canonical, settings.project_name, project_id, state["active"])
+                require(type(canonical.get("latest_stage")) is dict and canonical["latest_stage"].get("name") == "deploy"
+                        and canonical["latest_stage"].get("status") == "success", "DEPLOYMENT")
         else:
             require(existing is None, "UNOWNED_RESOURCE")
-        owner.claim_stage(permit, "pages-publication")
+        with phase("PAGES_CLAIM"):
+            owner.claim_stage(permit, "pages-publication")
         if existing is None:
             created = api.create(expected)
             project_id = _verify_project(created, settings.project_name, expected)
         else:
             api.configure(expected)
-        owner.assert_owned(permit)
-        _verify_project(api.project(), settings.project_name, expected, project_id)
+        with phase("PAGES_CONFIG_VERIFY"):
+            owner.assert_owned(permit)
+            _verify_project(api.project(), settings.project_name, expected, project_id)
         api.upload_assets(artifact.assets, lambda: owner.assert_owned(permit))
-        owner.assert_owned(permit)
-        # Recheck immediately before the only deployment POST. The provider has
-        # no project-config CAS here; do not claim atomic replacement against admins.
-        _verify_project(api.project(), settings.project_name, expected, project_id)
+        with phase("PAGES_PREDEPLOY_VERIFY"):
+            owner.assert_owned(permit)
+            # Recheck immediately before the only deployment POST. The provider has
+            # no project-config CAS here; do not claim atomic replacement against admins.
+            _verify_project(api.project(), settings.project_name, expected, project_id)
         deployed = api.deploy(artifact, release)
-        deployment_id = _wait_deployment(api, deployed, project_id, release)
-        project = api.project()
-        _verify_project(project, settings.project_name, expected, project_id)
-        _verify_deployment(project.get("canonical_deployment"), settings.project_name, project_id, release, deployment_id)
-        _verify_public(settings.project_name, release)
-        owner.assert_owned(permit)
+        with phase("PAGES_DEPLOYMENT_WAIT"):
+            deployment_id = _wait_deployment(api, deployed, project_id, release)
+        with phase("PAGES_DEPLOYMENT_VERIFY"):
+            project = api.project()
+            _verify_project(project, settings.project_name, expected, project_id)
+            _verify_deployment(project.get("canonical_deployment"), settings.project_name, project_id, release, deployment_id)
+        with phase("PAGES_PUBLIC_VERIFY"):
+            _verify_public(settings.project_name, release)
+        with phase("PAGES_FINAL_OWNER"):
+            owner.assert_owned(permit)
         return {"checks": {"pages-published": True, "pages-bindings-verified": True, "pages-version-verified": True},
                 "project": settings.project_name, "deploymentId": deployment_id,
                 "origin": f"https://{settings.project_name}.pages.dev", "sourceSha": release["sourceSha"],

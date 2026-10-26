@@ -2,12 +2,40 @@
 
 ## 当前状态（2026-10-26）
 
-五动作入口、实例周期刷新、manifest v3 与 deployment v2 已实现；1.0.4 的准确单次恢复已执行，
-在发布前的 generation 阶段返回 `unknown`。只读核实原控制记录、十个对象及云资源未变化，
-未创建移交标记或移交 writer；现有 Worker/Pages 仍为 1.0.3，Pages 仍无 deployment。
-首次部署和四次独立 repair 均未完成；没有自动重放或清锁，旧服务保持。
+五动作入口、实例周期刷新、manifest v3 与 deployment v2 已实现；1.0.5 的准确单次恢复任务
+`dc-7affcab05da84f4f938d4430aa9b4799` / run `40323259410` 返回
+`EASYPROXY_SBA_PAGES_UNKNOWN`，不是 Actions 成功即应用成功。只读核实 `active=null`，
+writer 仍锁定 1.0.5；R2 共十三对象，原九个阶段对象逐摘要保持。Worker 公开版本为 1.0.5，
+Pages 配置为 1.0.5，但零 deployment，latest/canonical 均为空；D1 与 GitHub 配置不变。
+首次部署和五次独立 repair 均未完成；没有自动重放或清锁，旧服务保持。
 应用尚未通过 SpringBok 正式上线，不能把本地测试、构建或平台上线当作应用上线。
 当前完整合同及边界见 [生命周期与调度](lifecycle.md)。旧手动部署及工作流保持不动。
+
+### EP-SBA-16：仅发布 Pages 有限子阶段诊断（负责人：主 AI）
+
+用户仅批准补充、隔离验证并发布诊断源码；本轮不提交生产 repair/deploy/verify，不移交
+writer，不上传资产、不部署 Pages、不删除旧服务。1.0.6 是诊断源码候选，不是线上版本。
+既有 repair 的 `fromErrorCodes`、秘密清单和准确父任务绑定保持不变，不扩大恢复权限。
+
+诊断覆盖构建、项目读取/创建/配置、归属核对、资产 token/查询/上传/验证/登记、部署提交/
+读取/列表/等待/读回、公开版本和最终 writer 核对共二十个固定子阶段。provider HTTP 错误仅
+保留固定分类：3xx、400/401/403/404/409/413/429、其他 4xx/5xx/其他状态，以及 SIZE、
+DECODE、ENVELOPE、TIMEOUT、NETWORK、REQUEST；不保存正文、headers、token 或异常原文。
+例如 `EASYPROXY_SBA_PAGES_ASSET_UPLOAD_HTTP_403_UNKNOWN`。请求顺序、写入归属检查、
+无重试、无重定向、成功校验与 UNKNOWN 保锁停写语义不变。未知值拒绝或回退通用安全码。
+
+只读证据 `generation-pages-diag-115.safe.json`、`generation-pages-offline-116.safe.json`
+和 `generation-pages-queries-117.safe.json` 未找回原资产请求的 HTTP 细节：当前 token 与
+check-missing 解析通过不等于原失败已复现；历史 99 个 hash 也不是 1.0.5 重构产物证据。
+audit 仅能看到项目/Worker 等成功请求，不能证明资产 JWT 接口原失败的具体原因。
+115 的原对象保持布尔值误用了 control 文件名；116 独立逐摘要核实原九阶段对象保持，
+不覆盖原证据。新诊断只能改善未来获批执行的回执，不能补回原失败未保留的信息。
+
+本轮验证与发布结果完成后另行记录，不能预先宣称测试通过或生产恢复成功。
+
+## 以下为分阶段历史实施记录
+
+下面各阶段的“尚未”描述是当时停点；以顶部当前状态和生命周期文档为准。
 
 ### EP-SBA-15：发布前生成 UNKNOWN 的只读核对和有限诊断（负责人：主 AI）
 
@@ -40,7 +68,7 @@ YAML/节点结构校验；后续同源码只读 run `40318129093` 全部通过�
 Pages 核对和 `PagesResume` 仍严格绑定真实 1.0.3。复用原十对象/所有资源的只读漂移检查，
 先 create-only 保存含最新失败与原祖先的移交证据，再单次 CAS 移交非空 writer；不删除、不
 重放 D1/GitHub，保留所有 UNKNOWN。任何新 UNKNOWN 均停止云写入，不自动再次恢复。
-用户已批准“先发布只读诊断，再按此受限方案继续恢复”；新任务尚未提交，1.0.5 未上线。
+用户批准后已执行该准确恢复任务，最终在 Pages 返回 UNKNOWN；见顶部最新状态，1.0.5 未完成上线。
 
 ### EP-SBA-14：Pages 资产 API 合同与新准确任务恢复（负责人：主 AI）
 
@@ -165,10 +193,6 @@ driver 版本替换；两个可选私有种子固定停用。仅保留固定字�
 不可覆盖和真实 Worker 404 错误码负例；CLI Go 82 项与 go vet 通过，真实 sealer/CLI/迁移
 准备完成。SpringBok 的实际 manifest parser 接受该 1.0.1 合同。证据见 `linux-native-repair-10.xml`；
 旧 555/247 回归仍只属于历史版本。尚待准确 PR/main CI、控制面发布和正式 repair/verify/本地消费。
-
-## 以下为分阶段历史实施记录
-
-下面各阶段的“尚未”描述是当时停点；以顶部当前状态和生命周期文档为准。
 
 ### EP-SBA-08：Linux 应用工具链与审计运行时（负责人：主 AI）
 

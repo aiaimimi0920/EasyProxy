@@ -8,6 +8,7 @@ import re
 import requests
 
 from cloudflare_http import api_result, decode_object, secure_session
+from diagnostics import pages_phase
 from worker_api import credential
 
 
@@ -44,70 +45,83 @@ class PagesAPI:
         self._session.close()
 
     def project(self) -> dict | None:
-        value = api_result(self._session, self._token, "GET", self.path, require, missing_code=8000007)
-        require(value is None or type(value) is dict, "RESPONSE_UNKNOWN")
-        return value
+        with pages_phase("PAGES_PROJECT_READ") as diagnostic:
+            value = api_result(self._session, self._token, "GET", self.path, require, missing_code=8000007, diagnostic=diagnostic)
+            require(value is None or type(value) is dict, "RESPONSE_UNKNOWN")
+            return value
 
     def create(self, config: dict) -> dict:
-        value = api_result(self._session, self._token, "POST", self.path.rsplit("/", 1)[0], require,
-                           json={"name": self.project_name, "production_branch": "main", "deployment_configs": config})
-        require(type(value) is dict, "RESPONSE_UNKNOWN")
-        return value
+        with pages_phase("PAGES_PROJECT_CREATE") as diagnostic:
+            value = api_result(self._session, self._token, "POST", self.path.rsplit("/", 1)[0], require, diagnostic=diagnostic,
+                               json={"name": self.project_name, "production_branch": "main", "deployment_configs": config})
+            require(type(value) is dict, "RESPONSE_UNKNOWN")
+            return value
 
     def configure(self, config: dict):
-        value = api_result(self._session, self._token, "PATCH", self.path, require, json={"deployment_configs": config})
-        require(type(value) is dict, "RESPONSE_UNKNOWN")
+        with pages_phase("PAGES_PROJECT_CONFIGURE") as diagnostic:
+            value = api_result(self._session, self._token, "PATCH", self.path, require, diagnostic=diagnostic,
+                               json={"deployment_configs": config})
+            require(type(value) is dict, "RESPONSE_UNKNOWN")
 
     def upload_assets(self, assets: tuple, before_write):
-        value = api_result(self._session, self._token, "GET", self.path + "/upload-token", require)
-        require(type(value) is dict and isinstance(value.get("jwt"), str) and 0 < len(value["jwt"]) <= 16384
-                and all(33 <= ord(char) <= 126 for char in value["jwt"]), "UPLOAD_TOKEN")
-        jwt = value["jwt"]
-        hash_set = {asset.hash for asset in assets}
-        hashes = sorted(hash_set)
-        before_write()
-        missing = api_result(self._session, jwt, "POST", "/pages/assets/check-missing", require,
-                             pages_asset_response=True, json={"hashes": hashes})
-        require(type(missing) is list and all(type(item) is str and item in hash_set for item in missing)
-                and len(set(missing)) == len(missing), "ASSETS_UNKNOWN")
+        with pages_phase("PAGES_ASSET_TOKEN") as diagnostic:
+            value = api_result(self._session, self._token, "GET", self.path + "/upload-token", require, diagnostic=diagnostic)
+            require(type(value) is dict and isinstance(value.get("jwt"), str) and 0 < len(value["jwt"]) <= 16384
+                    and all(33 <= ord(char) <= 126 for char in value["jwt"]), "UPLOAD_TOKEN")
+            jwt = value["jwt"]
+        with pages_phase("PAGES_ASSET_QUERY") as diagnostic:
+            hash_set = {asset.hash for asset in assets}
+            hashes = sorted(hash_set)
+            before_write()
+            missing = api_result(self._session, jwt, "POST", "/pages/assets/check-missing", require,
+                                 pages_asset_response=True, diagnostic=diagnostic, json={"hashes": hashes})
+            require(type(missing) is list and all(type(item) is str and item in hash_set for item in missing)
+                    and len(set(missing)) == len(missing), "ASSETS_UNKNOWN")
         by_hash = {asset.hash: asset for asset in assets}
         # One bounded asset per request; no hidden retry, refresh-token replay or
         # parallel partial-success path. Cloudflare permits 50 MiB / 5000 per batch.
         for key in missing:
-            asset = by_hash[key]
-            before_write()
-            api_result(self._session, jwt, "POST", "/pages/assets/upload", require,
-                       pages_asset_response=True,
-                       json=[{"key": key, "value": base64.b64encode(asset.body).decode("ascii"),
-                              "metadata": {"contentType": asset.content_type}, "base64": True}])
+            with pages_phase("PAGES_ASSET_UPLOAD") as diagnostic:
+                asset = by_hash[key]
+                before_write()
+                api_result(self._session, jwt, "POST", "/pages/assets/upload", require,
+                           pages_asset_response=True, diagnostic=diagnostic,
+                           json=[{"key": key, "value": base64.b64encode(asset.body).decode("ascii"),
+                                  "metadata": {"contentType": asset.content_type}, "base64": True}])
         # A second read-only check confirms every required hash is present.
-        before_write()
-        verified = api_result(self._session, jwt, "POST", "/pages/assets/check-missing", require,
-                              pages_asset_response=True, json={"hashes": hashes})
-        require(verified == [], "ASSETS_UNKNOWN")
-        before_write()
-        api_result(self._session, jwt, "POST", "/pages/assets/upsert-hashes", require,
-                   pages_asset_response=True, json={"hashes": hashes})
+        with pages_phase("PAGES_ASSET_VERIFY") as diagnostic:
+            before_write()
+            verified = api_result(self._session, jwt, "POST", "/pages/assets/check-missing", require,
+                                  pages_asset_response=True, diagnostic=diagnostic, json={"hashes": hashes})
+            require(verified == [], "ASSETS_UNKNOWN")
+        with pages_phase("PAGES_ASSET_REGISTER") as diagnostic:
+            before_write()
+            api_result(self._session, jwt, "POST", "/pages/assets/upsert-hashes", require,
+                       pages_asset_response=True, diagnostic=diagnostic, json={"hashes": hashes})
 
     def deploy(self, artifact, release: dict) -> dict:
-        value = api_result(self._session, self._token, "POST", self.path + "/deployments", require, files={
-            "manifest": (None, json.dumps({asset.path: asset.hash for asset in artifact.assets}, separators=(",", ":"))),
-            "branch": (None, "main"), "commit_hash": (None, release["sourceSha"]),
-            "commit_message": (None, "EasyProxy SBA " + release["applicationVersion"]), "commit_dirty": (None, "false"),
-            "_worker.bundle": ("_worker.bundle", artifact.worker_bundle, "application/octet-stream"),
-            "_routes.json": ("_routes.json", artifact.routes, "application/json")})
-        require(type(value) is dict, "RESPONSE_UNKNOWN")
-        return value
+        with pages_phase("PAGES_DEPLOYMENT_SUBMIT") as diagnostic:
+            value = api_result(self._session, self._token, "POST", self.path + "/deployments", require, diagnostic=diagnostic, files={
+                "manifest": (None, json.dumps({asset.path: asset.hash for asset in artifact.assets}, separators=(",", ":"))),
+                "branch": (None, "main"), "commit_hash": (None, release["sourceSha"]),
+                "commit_message": (None, "EasyProxy SBA " + release["applicationVersion"]), "commit_dirty": (None, "false"),
+                "_worker.bundle": ("_worker.bundle", artifact.worker_bundle, "application/octet-stream"),
+                "_routes.json": ("_routes.json", artifact.routes, "application/json")})
+            require(type(value) is dict, "RESPONSE_UNKNOWN")
+            return value
 
     def deployment(self, deployment_id: str) -> dict:
-        value = api_result(self._session, self._token, "GET", self.path + "/deployments/" + identifier(deployment_id), require)
-        require(type(value) is dict, "RESPONSE_UNKNOWN")
-        return value
+        with pages_phase("PAGES_DEPLOYMENT_READ") as diagnostic:
+            value = api_result(self._session, self._token, "GET", self.path + "/deployments/" + identifier(deployment_id), require,
+                               diagnostic=diagnostic)
+            require(type(value) is dict, "RESPONSE_UNKNOWN")
+            return value
 
     def deployments(self) -> list:
-        value = api_result(self._session, self._token, "GET", self.path + "/deployments", require)
-        require(type(value) is list and all(type(row) is dict for row in value), "RESPONSE_UNKNOWN")
-        return value
+        with pages_phase("PAGES_DEPLOYMENT_LIST") as diagnostic:
+            value = api_result(self._session, self._token, "GET", self.path + "/deployments", require, diagnostic=diagnostic)
+            require(type(value) is list and all(type(row) is dict for row in value), "RESPONSE_UNKNOWN")
+            return value
 
 
 def public_release(project: str) -> dict:
