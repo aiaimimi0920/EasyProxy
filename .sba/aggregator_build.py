@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 
@@ -20,6 +21,48 @@ PRIVATE = {"crawledproxies": "internal/crawledproxies.txt"}
 FILES = {**ARTIFACTS, **PRIVATE}
 SEED_SECRETS = {"EASYPROXY_AGGREGATOR_SHARED_TOKEN", "EASYPROXY_AGGREGATOR_ISSUE91_SUB_URL_B64"}
 DISABLED_SEED = "sba-disabled-source-v1"
+OUTPUT_NAMES = ("public-clash", "public-singbox", "public-mixed", "crawledsubs")
+OUTPUT_REASONS = frozenset({"missing", "not-regular", "symlink", "path-alias", "stat-error", "path-error", "permission", "read-error"})
+
+
+class GenerationOutputError(ArtifactError):
+    """仅携带固定文件名和原因；不携带路径、异常正文或产物内容。"""
+    def __init__(self, name, reason):
+        require(type(name) is str and name in OUTPUT_NAMES and type(reason) is str and reason in OUTPUT_REASONS, "OUTPUT")
+        self.artifact, self.reason = name + ".artifact", reason
+        super().__init__("EASYPROXY_SBA_ARTIFACT_OUTPUT")
+
+
+def _read_output(artifacts: Path, name: str) -> bytes:
+    require(type(name) is str and name in OUTPUT_NAMES, "OUTPUT")
+    path = artifacts / (name + ".artifact")
+    try:
+        mode = path.lstat().st_mode
+    except FileNotFoundError:
+        raise GenerationOutputError(name, "missing") from None
+    except PermissionError:
+        raise GenerationOutputError(name, "permission") from None
+    except OSError:
+        raise GenerationOutputError(name, "stat-error") from None
+    if stat.S_ISLNK(mode):
+        raise GenerationOutputError(name, "symlink")
+    if not stat.S_ISREG(mode):
+        raise GenerationOutputError(name, "not-regular")
+    try:
+        resolved = path.resolve(strict=True)
+    except PermissionError:
+        raise GenerationOutputError(name, "permission") from None
+    except (OSError, RuntimeError):
+        raise GenerationOutputError(name, "path-error") from None
+    if resolved != path:
+        raise GenerationOutputError(name, "path-alias")
+    try:
+        with path.open("rb") as stream:
+            return stream.read(MAX_BYTES + 1)
+    except PermissionError:
+        raise GenerationOutputError(name, "permission") from None
+    except OSError:
+        raise GenerationOutputError(name, "read-error") from None
 
 
 def configured_seed_secrets(values: dict) -> dict:
@@ -129,11 +172,8 @@ def build_aggregator(root: Path, repository: str, source_sha: str, output: Path,
         inspect_checkout(root, repository, source_sha)
     with phase("GENERATION_OUTPUTS"):
         bodies = {}
-        for name in ("public-clash", "public-singbox", "public-mixed", "crawledsubs"):
-            path = artifacts / (name + ".artifact")
-            require(path.is_file() and not path.is_symlink() and path.resolve(strict=True) == path, "OUTPUT")
-            with path.open("rb") as stream:
-                bodies[ARTIFACTS[name]] = stream.read(MAX_BYTES + 1)
+        for name in OUTPUT_NAMES:
+            bodies[ARTIFACTS[name]] = _read_output(artifacts, name)
     with phase("GENERATION_CONVERSION"):
         # 复用纯转换函数，不调用 R2 publish/main 入口。
         spec = importlib.util.spec_from_file_location("sba_v2ray_converter", root / "scripts/publish-aggregator-v2ray.py")
