@@ -11,15 +11,28 @@ import sys
 
 REPOSITORY = "aiaimimi0920/EasyProxy"
 STAGES = {"source", "python", "process", "inspection", "tools", "runtime", "image", "sealer", "generation", "workflow"}
+GENERATION_DIAGNOSTICS = frozenset({
+    "EASYPROXY_SBA_GENERATION_" + stage + "_UNKNOWN" for stage in (
+        "SOURCE", "RUNTIME", "CONFIG", "COLLECT", "READBACK", "OUTPUTS", "CONVERSION", "VALIDATION")
+} | {
+    "EASYPROXY_SBA_ARTIFACT_" + code for code in (
+        "SECRETS", "OUTPUT", "SOURCE", "CONFIG", "RUNTIME_SOURCE", "RUNTIME_HOST", "RUNTIME_PATCH",
+        "RUNTIME_TOOL", "BUILD_CONFIG", "BUILD_GENERATION", "V2RAY", "INPUT", "EMPTY", "FORMAT")
+})
 
 
-def report(path: Path, sha: str, stage: str, *, passed: bool, checks: dict | None = None):
+def report(path: Path, sha: str, stage: str, *, passed: bool, checks: dict | None = None, diagnostic_code=None):
     if stage not in STAGES or re.fullmatch(r"[a-f0-9]{40}", sha) is None:
+        raise ValueError("EASYPROXY_PREFLIGHT_INPUT")
+    if diagnostic_code is not None and (passed or stage != "generation"
+            or diagnostic_code not in GENERATION_DIAGNOSTICS):
         raise ValueError("EASYPROXY_PREFLIGHT_INPUT")
     value = {"schemaVersion": 1, "sourceSha": sha, "passed": passed, "cloudWrites": False,
              "stage": stage, "checks": checks or {}}
     if not passed:
         value["errorCode"] = "EASYPROXY_PREFLIGHT_" + stage.upper()
+        if diagnostic_code is not None:
+            value["diagnosticCode"] = diagnostic_code
     with path.open("x", encoding="utf-8", newline="\n") as stream:
         json.dump(value, stream, indent=2)
         stream.write("\n")
@@ -64,8 +77,17 @@ def inspect_prepared(root: Path, output: Path, sha: str, report_path: Path) -> i
         reviewed_workflow(root)
         inspect_checkout(root, REPOSITORY, sha)
         checks[stage] = True
-    except Exception:
-        report(report_path, sha, stage, passed=False, checks=checks)
+    except Exception as error:
+        diagnostic_code = None
+        if stage == "generation":
+            # 类型来自准确目标 checkout；只匹配有限常量，不导出异常正文或私有日志。
+            from artifact_store import ArtifactError
+            target_diagnostics = sys.modules.get("diagnostics")
+            stage_error = getattr(target_diagnostics, "StageError", None)
+            # 老目标可能没有 diagnostics；不为诊断而回退加载 driver 的新模块。
+            if type(error) in (ArtifactError, stage_error) and str(error) in GENERATION_DIAGNOSTICS:
+                diagnostic_code = str(error)
+        report(report_path, sha, stage, passed=False, checks=checks, diagnostic_code=diagnostic_code)
         return 1
     report(report_path, sha, stage, passed=True, checks=checks)
     return 0

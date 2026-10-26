@@ -12,6 +12,7 @@ import sys
 from aggregator_publish import ARTIFACTS, RAW, _validate
 from aggregator_runtime import prepare_runtime, verify_runtime
 from artifact_store import ArtifactError, MAX_BYTES, require
+from diagnostics import phase
 from sources import inspect_checkout, inspect_gitlink_checkout
 
 
@@ -90,49 +91,58 @@ def _run(args: list[str], cwd: Path, env: dict, label: str, timeout: int) -> Non
 
 
 def build_aggregator(root: Path, repository: str, source_sha: str, output: Path, *, seed_secrets: dict) -> dict[str, bytes]:
-    root = root.resolve(strict=True)
-    rows = inspect_checkout(root, repository, source_sha)
-    row = next(row for row in rows if row["path"] == "upstreams/aggregator")
-    inspect_gitlink_checkout(root, row)
-    require(output.is_absolute() and not str(output).startswith(("\\\\", "//")), "OUTPUT")
-    output = output.resolve()
-    require(not output.exists() and root not in output.parents and output != root, "OUTPUT")
-    seed_secrets = configured_seed_secrets(seed_secrets)
-    output.mkdir(mode=0o700, parents=True, exist_ok=False)
-    env = _environment(output)
-    workspace = output / "aggregator"
-    _copy(root / row["path"], workspace)
-    runtime = prepare_runtime(workspace, row["sourceSha"])
-    (output / "runtime-provenance.json").write_text(json.dumps(runtime, indent=2), encoding="utf-8")
-    # This script only materializes placeholders. Its environment has no cloud credentials.
-    materialized = output / "materialized.private.json"
-    _run([sys.executable, str(root / "scripts/materialize-aggregator-config.py"),
-          "--template", str(root / "deploy/upstreams/aggregator/config/config.actions.r2.json"),
-          "--output", str(materialized)], output, {**env, **seed_secrets}, "config", 30)
-    artifacts = output / "artifacts"
-    artifacts.mkdir()
-    config = local_config(json.loads(materialized.read_text(encoding="utf-8")), artifacts)
-    config_path, empty_env = output / "runtime.private.json", output / "empty.env"
-    config_path.write_text(json.dumps(config, ensure_ascii=False), encoding="utf-8")
-    empty_env.write_text("", encoding="utf-8")
-    _run([sys.executable, "-u", "subscribe/process.py", "--overwrite", "--skip-remark", "--invisible",
-          "--environment", str(empty_env), "--server", str(config_path)], workspace, env, "generation", 2400)
-    verify_runtime(workspace, runtime)
-    inspect_gitlink_checkout(root, row)
-    inspect_checkout(root, repository, source_sha)
-    bodies = {}
-    for name in ("public-clash", "public-singbox", "public-mixed", "crawledsubs"):
-        path = artifacts / (name + ".artifact")
-        require(path.is_file() and not path.is_symlink() and path.resolve(strict=True) == path, "OUTPUT")
-        with path.open("rb") as stream:
-            bodies[ARTIFACTS[name]] = stream.read(MAX_BYTES + 1)
-    # Reuse the root's pure conversion, never its R2 publish/main entrypoints.
-    spec = importlib.util.spec_from_file_location("sba_v2ray_converter", root / "scripts/publish-aggregator-v2ray.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    try:
-        bodies["subs/v2ray.txt"], _ = module.build_payload(bodies["subs/mixed.txt"])
-    except (ValueError, RuntimeError):
-        raise ArtifactError("EASYPROXY_SBA_ARTIFACT_V2RAY") from None
-    _validate(bodies, RAW)
+    with phase("GENERATION_SOURCE"):
+        root = root.resolve(strict=True)
+        rows = inspect_checkout(root, repository, source_sha)
+        row = next(row for row in rows if row["path"] == "upstreams/aggregator")
+        inspect_gitlink_checkout(root, row)
+    with phase("GENERATION_CONFIG"):
+        require(output.is_absolute() and not str(output).startswith(("\\\\", "//")), "OUTPUT")
+        output = output.resolve()
+        require(not output.exists() and root not in output.parents and output != root, "OUTPUT")
+        seed_secrets = configured_seed_secrets(seed_secrets)
+        output.mkdir(mode=0o700, parents=True, exist_ok=False)
+        env = _environment(output)
+    with phase("GENERATION_RUNTIME"):
+        workspace = output / "aggregator"
+        _copy(root / row["path"], workspace)
+        runtime = prepare_runtime(workspace, row["sourceSha"])
+        (output / "runtime-provenance.json").write_text(json.dumps(runtime, indent=2), encoding="utf-8")
+    with phase("GENERATION_CONFIG"):
+        # 这里只物化占位符；环境不含云写凭据，诊断也不保留私有异常正文。
+        materialized = output / "materialized.private.json"
+        _run([sys.executable, str(root / "scripts/materialize-aggregator-config.py"),
+              "--template", str(root / "deploy/upstreams/aggregator/config/config.actions.r2.json"),
+              "--output", str(materialized)], output, {**env, **seed_secrets}, "config", 30)
+        artifacts = output / "artifacts"
+        artifacts.mkdir()
+        config = local_config(json.loads(materialized.read_text(encoding="utf-8")), artifacts)
+        config_path, empty_env = output / "runtime.private.json", output / "empty.env"
+        config_path.write_text(json.dumps(config, ensure_ascii=False), encoding="utf-8")
+        empty_env.write_text("", encoding="utf-8")
+    with phase("GENERATION_COLLECT"):
+        _run([sys.executable, "-u", "subscribe/process.py", "--overwrite", "--skip-remark", "--invisible",
+              "--environment", str(empty_env), "--server", str(config_path)], workspace, env, "generation", 2400)
+    with phase("GENERATION_READBACK"):
+        verify_runtime(workspace, runtime)
+        inspect_gitlink_checkout(root, row)
+        inspect_checkout(root, repository, source_sha)
+    with phase("GENERATION_OUTPUTS"):
+        bodies = {}
+        for name in ("public-clash", "public-singbox", "public-mixed", "crawledsubs"):
+            path = artifacts / (name + ".artifact")
+            require(path.is_file() and not path.is_symlink() and path.resolve(strict=True) == path, "OUTPUT")
+            with path.open("rb") as stream:
+                bodies[ARTIFACTS[name]] = stream.read(MAX_BYTES + 1)
+    with phase("GENERATION_CONVERSION"):
+        # 复用纯转换函数，不调用 R2 publish/main 入口。
+        spec = importlib.util.spec_from_file_location("sba_v2ray_converter", root / "scripts/publish-aggregator-v2ray.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        try:
+            bodies["subs/v2ray.txt"], _ = module.build_payload(bodies["subs/mixed.txt"])
+        except (ValueError, RuntimeError):
+            raise ArtifactError("EASYPROXY_SBA_ARTIFACT_V2RAY") from None
+    with phase("GENERATION_VALIDATION"):
+        _validate(bodies, RAW)
     return bodies

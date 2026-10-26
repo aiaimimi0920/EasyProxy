@@ -2,8 +2,9 @@
 
 ## 当前状态（2026-10-26）
 
-五动作应用入口、实例周期刷新、manifest v3 与 deployment v2 已实现；1.0.4 包含准确 Pages 资产响应恢复
-候选。首次任务和前三次独立 repair 返回 UNKNOWN，未重放、未清锁。应用尚未通过
+五动作应用入口、实例周期刷新、manifest v3 与 deployment v2 已实现；1.0.4 的准确资产恢复任务
+已在发布前 generation 阶段返回 UNKNOWN，control、十个原对象及全部资源保持，没有移交 writer。
+首次任务和四次独立 repair 均未完成，未自动重放、未清锁。应用尚未通过
 SpringBok 正式部署，不能把本地合同测试、构建或平台 SUITE-03 上线当作应用上线。
 旧手动部署和旧工作流仍保留，不被本套件隐式接管。
 
@@ -28,6 +29,9 @@ databaseId、databaseName、bucketName、refreshTarget、pagesOrigin、workerOri
 结果是 create-only、UTF-8 无 BOM 的协议文件，不以 stdout 或进程退出 0 代替业务回执。
 发生写入结果不明时报告 UNKNOWN，不自动重放、回滚或清锁。
 新版本只记录固定白名单阶段错误码，不把内部异常或 provider 响应正文放进回执。
+当前工作树将 generation 进一步分为来源、runtime、配置、采集、读回、产物、转换和校验；
+这只是尚未发布的诊断改进，不是对原失败根因或恢复成功的证明。只读预检仅允许目标代码中
+准确错误类型与有限常量共同匹配的诊断码，旧目标不需要加载 driver 的新 diagnostics 模块。
 
 ## 五个生命周期动作
 
