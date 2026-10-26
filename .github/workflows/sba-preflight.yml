@@ -1,0 +1,44 @@
+name: SBA Read-only Preflight
+
+'on':
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact application commit to inspect without deployment credentials
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Inspect fixed source without write credentials
+        env:
+          PREFLIGHT_SOURCE_SHA: ${{ inputs.source_sha }}
+        run: >-
+          python -B -s .sba/preflight.py
+          --source-sha "$PREFLIGHT_SOURCE_SHA"
+          --output "$RUNNER_TEMP/easyproxy-preflight"
+          --report "$RUNNER_TEMP/easyproxy-preflight.safe.json"
+      - name: Retain only the fixed-schema public diagnostic
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: easyproxy-preflight
+          path: ${{ runner.temp }}/easyproxy-preflight.safe.json
+          if-no-files-found: error
+          retention-days: 14
