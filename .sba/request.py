@@ -7,11 +7,12 @@ import re
 
 from coordination import SHA, VERSION
 from sealed_box import secret_value
+from repair_context import CONTEXT_FIELDS, PARENT_ERROR, PARENT_RELEASE, REPAIR_ID
 from suite_config import ConfigurationError, SuiteConfig, parse_configuration
 
 
 APPLICATION_ID = "easyproxy-cloud"
-ACTIONS = {"deploy", "update", "verify", "preview", "destroy-preview"}
+ACTIONS = {"deploy", "update", "verify", "preview", "destroy-preview", "repair"}
 FIELDS = {"schemaVersion", "taskId", "action", "repository", "sourceSha", "applicationId", "applicationVersion",
           "environment", "configuration", "previous"}
 SECRETS = {"EASYPROXY_CLOUDFLARE_API_TOKEN", "EASYPROXY_GITHUB_TOKEN", "EASYPROXY_R2_ACCESS_KEY_ID",
@@ -60,6 +61,18 @@ def config_inventory(value, config: SuiteConfig):
 
 def task(value):
     require(matches(r"dc-[a-f0-9]{32}", value))
+
+
+def repair_context(value, config):
+    context = value["context"]
+    exact(context, CONTEXT_FIELDS)
+    task(context["parentTaskId"])
+    require(config.repository == "aiaimimi0920/easyproxy" and value["previous"] == PARENT_RELEASE
+            and context["repairId"] == REPAIR_ID and context["errorCode"] == PARENT_ERROR
+            and context["parentTaskId"] != value["taskId"]
+            and type(context["parentRunId"]) is int and context["parentRunId"] > 0
+            and matches(r"[a-f0-9]{64}", context["requestDigest"])
+            and matches(r"[a-f0-9]{64}", context["resultDigest"]))
 
 
 def preview_context(value: dict, config: SuiteConfig):
@@ -121,7 +134,7 @@ def parse_request(raw: bytes, *, application_version: str) -> ApplicationRequest
                            parse_constant=lambda _: require(False))
         require(type(value) is dict and type(value.get("action")) is str and value["action"] in ACTIONS)
         preview = value["action"] in ("preview", "destroy-preview")
-        exact(value, FIELDS | ({"context"} if preview else set()))
+        exact(value, FIELDS | ({"context"} if preview or value["action"] == "repair" else set()))
         require(type(value["schemaVersion"]) is int and value["schemaVersion"] == 3
                 and matches(r"[a-z][a-z0-9-]{1,62}", value["taskId"])
                 and value["applicationId"] == APPLICATION_ID and value["applicationVersion"] == application_version
@@ -132,7 +145,7 @@ def parse_request(raw: bytes, *, application_version: str) -> ApplicationRequest
             require(value["previous"] is None)
         else:
             release(value["previous"])
-            if value["action"] in ("update", "preview"):
+            if value["action"] in ("update", "preview", "repair"):
                 require(candidate["sourceSha"] != value["previous"]["sourceSha"] and
                         tuple(map(int, application_version.split("."))) >
                         tuple(map(int, value["previous"]["applicationVersion"].split("."))))
@@ -140,6 +153,8 @@ def parse_request(raw: bytes, *, application_version: str) -> ApplicationRequest
                 require(candidate == value["previous"])
         if preview:
             preview_context(value, config)
+        if value["action"] == "repair":
+            repair_context(value, config)
         return ApplicationRequest(value["taskId"], value["action"], value["sourceSha"], application_version, config,
                                   value["previous"], value.get("context"))
     except (ValueError, TypeError, UnicodeError, RecursionError, KeyError, ConfigurationError):

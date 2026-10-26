@@ -2,7 +2,8 @@
 
 ## 当前状态（2026-10-26）
 
-五动作应用入口、实例周期刷新、manifest v3 与 deployment v2 已实现。应用尚未通过
+五动作应用入口、实例周期刷新、manifest v3 与 deployment v2 已实现；1.0.1 包含受限 repair
+候选。首次任务返回 UNKNOWN，未重放、未清锁。应用尚未通过
 SpringBok 正式部署，不能把本地合同测试、构建或平台 SUITE-03 上线当作应用上线。
 旧手动部署和旧工作流仍保留，不被本套件隐式接管。
 
@@ -26,6 +27,7 @@ databaseId、databaseName、bucketName、refreshTarget、pagesOrigin、workerOri
 所有动作业务预算为 3300 秒，父进程另留 120 秒子进程清理，平台上限 3600 秒。
 结果是 create-only、UTF-8 无 BOM 的协议文件，不以 stdout 或进程退出 0 代替业务回执。
 发生写入结果不明时报告 UNKNOWN，不自动重放、回滚或清锁。
+新版本只记录固定白名单阶段错误码，不把内部异常或 provider 响应正文放进回执。
 
 ## 五个生命周期动作
 
@@ -40,6 +42,20 @@ databaseId、databaseName、bucketName、refreshTarget、pagesOrigin、workerOri
   数据摘要、版本、身份。源不冻结，正常并发写入可能使该次演练无法证明 source-unchanged。
 - **destroy-preview**：核私有 provenance 与批准七项清单；全部删除前置检查先完成，再按
   入口优先、数据随后顺序单次删除并读回。只删该 environment，不删共享 workflow/仓库。
+
+### 可选 repair：只处理原 1.0.0 的全资源 pristine 首次部署
+
+`pristine-initial-deployment` 仅接受原准确 SHA
+`1fc843033ba5f39384772d1dccb4ccd90deda03d`、版本 1.0.0 和
+`EASYPROXY_SBA_FAILED_OR_UNKNOWN`，并校验平台绑定的父任务、run 和请求/结果摘要。
+它不是 retry/update：只读确认 R2 全空且无控制记录、D1 身份及空 schema、Worker/Pages
+不存在、GitHub 仓库管理权及不存在的实例 environment 后，才在相同资源创建新候选。
+任何部分写入、不可访问或格式不确定均拒绝；不删除、解锁或接管旧 writer。
+
+完整部署成功才返回 `repair-completed`、`data-preserved`、`unchanged-resources-verified`、
+`service-ready`；外层 action 为 repair，原 UNKNOWN 回执不变。全部 provider 发布仍有自身
+归属/单次写入检查；外部竞态或新故障仍可能 UNKNOWN，不能再次自动 repair 或换环境绕过。
+修复完成后仍须固定修复 SHA/version/config 的独立无写凭据 verify，再做本地真实消费验收。
 
 ### 预升级的明确边界
 
@@ -97,6 +113,15 @@ Linux 环境缺命令错误伪装成已在 Linux 全量通过。
 `public-candidate-audit-24/audit.safe.json`。该次复用先前的审计 fixture 镜像，明确
 **不是最终发布 SHA 的正式云审计**；正式任务仍须从批准 SHA 重建并独立验收。
 线上部署/业务消费验收仍须独立记录，不能沿用旧 bundle 或本机审计代证。
+
+原准确版本的 hosted 只读预检 run `40267227117` 七项通过（exact-source、tools、runtime、
+image、sealer、generation、workflow），`cloudWrites=false`。`pristine-readonly-07.safe.json`
+记录当次全资源 pristine；它们都不证明历史未曾尝试写入、不确定原异常根因，也不替代
+新候选测试或正式 repair 的现场前置检查。上面的 555/247 是历史快照，不算作 1.0.1 回归。
+
+1.0.1 候选的冻结 index 原生 Linux 回归 `linux-native-repair-10.xml` 为 633 passed，无 skip；
+`go-repair-10.safe.json` 为 CLI 82 项、0 skip、go vet 通过，真实 sealer/CLI 和迁移 materializer
+重新构建。使用当前全部 SBA 字节及准确基线 checkout，未借旧测试结果代证。无云写入。
 
 Python 全量须提供摘要匹配的 `EASYPROXY_TEST_ESBUILD`、真实产物
 `EASYPROXY_TEST_PAGES_BUILD`、真实 sealed-box helper `EASYPROXY_TEST_SEALER`；否则相关用例

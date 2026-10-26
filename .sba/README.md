@@ -2,7 +2,7 @@
 
 ## 当前状态（2026-10-26）
 
-五动作入口、实例周期刷新、manifest v3 与 deployment v2 已实现，固定发布源码已通过本地验证。
+五动作入口、实例周期刷新、manifest v3 与 deployment v2 已实现；1.0.1 新增受限 repair 候选。
 首次 SpringBok 部署已单次提交，但应用回执为 `unknown`；没有重放或清锁，旧服务保持。
 应用尚未通过 SpringBok 正式上线，不能把本地测试、构建或平台上线当作应用上线。
 当前完整合同及边界见 [生命周期与调度](lifecycle.md)。旧手动部署及工作流保持不动。
@@ -17,7 +17,31 @@ driver 版本替换；两个可选私有种子固定停用。仅保留固定字�
 不上传私有日志、订阅正文或任何凭据。不调用部署、R2 writer、provider 客户端或原任务。
 
 此入口只排查准备阶段，不验证业务秘密、首次云写入、线上资源、部署成功或独立 verify。
-本地固定源码预备和四个官方工具下载已分别通过；hosted 复现仍待真实执行，未确定线上根因。
+本地固定源码预备和四个官方工具下载已分别通过。GitHub hosted run `40267227117` 对原准确
+源码 `1fc843033ba5f39384772d1dccb4ccd90deda03d` 的七项准备检查全部通过，无云写入。
+这不能恢复或确定原 UNKNOWN 的具体原因，也不授权重新执行原任务。
+
+### EP-SBA-11：严格 pristine 首次部署修复与脱敏阶段错误（负责人：主 AI）
+
+1.0.1 候选只声明 `pristine-initial-deployment`：绑定原 1.0.0 的准确源码、通用 UNKNOWN
+错误码和平台提供的父任务/run/请求与结果摘要，沿用同实例、同资源和原秘密 profile。
+修复前只读核验整个 R2 bucket 为空且无控制记录、D1 身份一致且业务 schema 为空、Worker
+和 Pages 不存在、GitHub 仓库可访问且具有管理权但实例 environment 不存在。任何既有对象、
+部分发布、读失败或不确定响应都停止，不清锁、不接管、不回滚或重放原 writer。
+
+全部前置通过后才在原资源创建新候选，重新执行完整发布及业务检查；只在成功后返回
+`repair-completed`、`data-preserved`、`unchanged-resources-verified`、`service-ready`。
+外层回执仍为 repair，原任务的 UNKNOWN 回执不变。该动作不处理修复中途再次失败的部分发布。
+当前只读核验成立不保证未来仍 pristine，正式 repair 必须现场重新检查。
+
+新入口将异常转换为固定白名单阶段的 `EASYPROXY_SBA_<STAGE>_UNKNOWN`，不输出异常正文、
+响应、秘密或配置；未知阶段仍使用通用错误码。错误状态、create-only 回执、持锁和不重试语义
+保持不变。此版本仍是待验证/发布的候选，不能据此声称已经修复或上线。
+
+当前候选冻结 index 的原生 Linux 回归为 633 passed、无 skip，含 repair/阶段错误/原回执
+不可覆盖和真实 Worker 404 错误码负例；CLI Go 82 项与 go vet 通过，真实 sealer/CLI/迁移
+准备完成。SpringBok 的实际 manifest parser 接受该 1.0.1 合同。证据见 `linux-native-repair-10.xml`；
+旧 555/247 回归仍只属于历史版本。尚待准确 PR/main CI、控制面发布和正式 repair/verify/本地消费。
 
 ## 以下为分阶段历史实施记录
 
