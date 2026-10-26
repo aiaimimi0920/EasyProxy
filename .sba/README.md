@@ -1,6 +1,25 @@
 # EasyProxy 云套件 SBA 接入
 
-## 当前状态（2026-10-26）
+## 当前状态（2026-10-27）
+
+1.0.7 已通过正常 PR/main CI 发布，并于 00:25:18 经 SpringBok 单次提交任务
+`dc-d8fbaaa6c7404904928900e9f6a8c9f1` / run `40358960520`。应用回执为
+`EASYPROXY_SBA_GENERATION_OUTPUTS_UNKNOWN`，不是部署成功。00:30 完整只读后验确认
+原 control/ETag、十三对象、D1/GitHub、Worker 1.0.5 和 Pages 零 deployment 均保持。
+本次尚未进入 writer 移交或 Pages 发布；未重试、清锁、verify、本地消费或删除旧服务。
+
+### EP-SBA-18：仅生成输出的有限诊断（负责人：主 AI）
+
+用户仅批准补充、隔离验证、正常发布诊断，并执行一次不带部署凭据的生成预检；未批准
+下一次生产恢复。1.0.8 是本轮诊断候选，不是线上版本，不新增 repair、不扩大旧匹配或秘密。
+输出读取仅允许 `public-clash.artifact`、`public-singbox.artifact`、`public-mixed.artifact`、
+`crawledsubs.artifact`，失败原因仅为 `missing`、`not-regular`、`symlink`、`path-alias`、
+`stat-error`、`path-error`、`permission`、`read-error`。仅在生成输出失败的只读预检报告中
+附加 `outputDiagnostic`；不导出路径、异常原文、日志或产物正文，不再次访问文件以诊断。
+生产阶段码仍为 `EASYPROXY_SBA_GENERATION_OUTPUTS_UNKNOWN`，单次生成和原产物字节/大小
+上限及后续验证保持；不存在新恢复权限。实际发布与 hosted 结果须在完成后另行记录。
+
+### 1.0.5 Pages 中断现场（历史父资源保持）
 
 五动作入口、实例周期刷新、manifest v3 与 deployment v2 已实现；1.0.5 的准确单次恢复任务
 `dc-7affcab05da84f4f938d4430aa9b4799` / run `40323259410` 返回
@@ -14,7 +33,7 @@ Pages 配置为 1.0.5，但零 deployment，latest/canonical 均为空；D1 与 
 ### EP-SBA-17：准确 1.0.5 的单次受限恢复（负责人：主 AI）
 
 用户已明确批准独立入口 `continue-pages-diagnostic-deployment` 的实现、验证、正常发布及
-单次执行；1.0.7 是该入口的源码候选，尚未执行生产恢复，不是线上版本。入口只接受上述
+单次执行；1.0.7 已执行但在生成输出阶段 UNKNOWN，未进入移交和发布，不是线上版本。入口只接受上述
 准确父任务、run、请求/结果摘要及 1.0.5 previous，不改变五个旧 repair 的匹配和秘密范围。
 先核全部父/祖先终态、准确 control 摘要和 ETag、十三对象集合及十二历史正文、D1/GitHub、
 Worker/Pages 准确 1.0.5。任何漂移零写入；先 create-only 保存新移交证据，再单次 CAS 将

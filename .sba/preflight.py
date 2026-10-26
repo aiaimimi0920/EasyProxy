@@ -26,6 +26,23 @@ GENERATION_REASONS = frozenset({"utf8", "base64", "uri-line-format", "json", "js
                                "singbox-shape", "yaml-or-proxy-shape", "clash-shape", "clash-empty",
                                "yaml-parse", "yaml-unknown-escape", "yaml-forbidden-token", "yaml-mapping",
                                "yaml-document", "yaml-block", "yaml-constructor", "unclassified"})
+OUTPUT_ARTIFACTS = frozenset({name + ".artifact" for name in ("public-clash", "public-singbox", "public-mixed", "crawledsubs")})
+OUTPUT_REASONS = frozenset({"missing", "not-regular", "symlink", "path-alias", "stat-error", "path-error", "permission", "read-error"})
+
+
+def generation_output_diagnostic(error):
+    """只接受已加载的准确目标类型；旧目标不导入新依赖，不再次访问文件。"""
+    output_error = getattr(sys.modules.get("aggregator_build"), "GenerationOutputError", None)
+    for _ in range(4):
+        if error is None:
+            break
+        if output_error is not None and type(error) is output_error:
+            artifact, reason = getattr(error, "artifact", None), getattr(error, "reason", None)
+            if type(artifact) is str and artifact in OUTPUT_ARTIFACTS and type(reason) is str and reason in OUTPUT_REASONS:
+                return {"artifact": artifact, "reason": reason}
+            return None
+        error = error.__context__
+    return None
 
 
 def clash_diagnostic(body):
@@ -100,7 +117,7 @@ def generation_artifact_diagnostic(error, root):
 
 
 def report(path: Path, sha: str, stage: str, *, passed: bool, checks: dict | None = None, diagnostic_code=None,
-           artifact_diagnostic=None):
+           artifact_diagnostic=None, output_diagnostic=None):
     if stage not in STAGES or re.fullmatch(r"[a-f0-9]{40}", sha) is None:
         raise ValueError("EASYPROXY_PREFLIGHT_INPUT")
     if artifact_diagnostic is not None and (passed or stage != "generation" or type(artifact_diagnostic) is not dict
@@ -111,6 +128,12 @@ def report(path: Path, sha: str, stage: str, *, passed: bool, checks: dict | Non
     if diagnostic_code is not None and (passed or stage != "generation"
             or diagnostic_code not in GENERATION_DIAGNOSTICS):
         raise ValueError("EASYPROXY_PREFLIGHT_INPUT")
+    if output_diagnostic is not None and (passed or stage != "generation" or artifact_diagnostic is not None
+            or diagnostic_code != "EASYPROXY_SBA_GENERATION_OUTPUTS_UNKNOWN" or type(output_diagnostic) is not dict
+            or set(output_diagnostic) != {"artifact", "reason"}
+            or type(output_diagnostic["artifact"]) is not str or output_diagnostic["artifact"] not in OUTPUT_ARTIFACTS
+            or type(output_diagnostic["reason"]) is not str or output_diagnostic["reason"] not in OUTPUT_REASONS):
+        raise ValueError("EASYPROXY_PREFLIGHT_INPUT")
     value = {"schemaVersion": 1, "sourceSha": sha, "passed": passed, "cloudWrites": False,
              "stage": stage, "checks": checks or {}}
     if not passed:
@@ -119,6 +142,8 @@ def report(path: Path, sha: str, stage: str, *, passed: bool, checks: dict | Non
             value["diagnosticCode"] = diagnostic_code
         if artifact_diagnostic is not None:
             value["artifactDiagnostic"] = artifact_diagnostic
+        if output_diagnostic is not None:
+            value["outputDiagnostic"] = output_diagnostic
     with path.open("x", encoding="utf-8", newline="\n") as stream:
         json.dump(value, stream, indent=2)
         stream.write("\n")
@@ -174,8 +199,9 @@ def inspect_prepared(root: Path, output: Path, sha: str, report_path: Path) -> i
             if type(error) in (ArtifactError, stage_error) and str(error) in GENERATION_DIAGNOSTICS:
                 diagnostic_code = str(error)
         artifact_diagnostic = generation_artifact_diagnostic(error, root) if diagnostic_code is not None else None
+        output_diagnostic = generation_output_diagnostic(error) if diagnostic_code == "EASYPROXY_SBA_GENERATION_OUTPUTS_UNKNOWN" else None
         report(report_path, sha, stage, passed=False, checks=checks, diagnostic_code=diagnostic_code,
-               artifact_diagnostic=artifact_diagnostic)
+               artifact_diagnostic=artifact_diagnostic, output_diagnostic=output_diagnostic)
         return 1
     report(report_path, sha, stage, passed=True, checks=checks)
     return 0

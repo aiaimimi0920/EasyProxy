@@ -2,7 +2,7 @@
   "schemaVersion": 3,
   "id": "easyproxy-cloud",
   "name": "EasyProxy 云套件",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "entrypoint": "springbok.ps1",
   "runtime": {
     "runner": "ubuntu-24.04",
