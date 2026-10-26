@@ -11,10 +11,25 @@ Pages 配置为 1.0.5，但零 deployment，latest/canonical 均为空；D1 与 
 应用尚未通过 SpringBok 正式上线，不能把本地测试、构建或平台上线当作应用上线。
 当前完整合同及边界见 [生命周期与调度](lifecycle.md)。旧手动部署及工作流保持不动。
 
-### EP-SBA-16：仅发布 Pages 有限子阶段诊断（负责人：主 AI）
+### EP-SBA-17：准确 1.0.5 的单次受限恢复（负责人：主 AI）
 
-用户仅批准补充、隔离验证并发布诊断源码；本轮不提交生产 repair/deploy/verify，不移交
-writer，不上传资产、不部署 Pages、不删除旧服务。1.0.6 是诊断源码候选，不是线上版本。
+用户已明确批准独立入口 `continue-pages-diagnostic-deployment` 的实现、验证、正常发布及
+单次执行；1.0.7 是该入口的源码候选，尚未执行生产恢复，不是线上版本。入口只接受上述
+准确父任务、run、请求/结果摘要及 1.0.5 previous，不改变五个旧 repair 的匹配和秘密范围。
+先核全部父/祖先终态、准确 control 摘要和 ETag、十三对象集合及十二历史正文、D1/GitHub、
+Worker/Pages 准确 1.0.5。任何漂移零写入；先 create-only 保存新移交证据，再单次 CAS 将
+始终非空的 writer 移交。旧 Permit 失效，全部历史证据保留，不重放 D1 初始化/GitHub配置。
+
+随后仅发布相同 Worker 业务 bundle 的新来源元数据、复用 Pages 项目，按新候选构建 hash
+查询并只上传缺失资产，不要求缓存为空。Pages 成功才继续原 Aggregator 审计/晋级、受限
+MiSub 业务同步及独立读回；该正常同步可能写业务数据，不等于重放数据库初始化。
+全部成功才 commit/release writer，之后独立 verify 和准确新版本本地双来源真实 TLS 验收。
+任何新 UNKNOWN 立即停写，不自动恢复、重试、清锁、删除、禁用或退役旧服务。
+
+### EP-SBA-16：已发布 Pages 有限子阶段诊断（历史范围）
+
+该阶段用户仅批准补充、隔离验证并发布诊断源码，没有提交生产 repair/deploy/verify、移交
+writer、上传资产、部署 Pages 或删除旧服务。1.0.6 已正常发布源码，但不是线上版本。
 既有 repair 的 `fromErrorCodes`、秘密清单和准确父任务绑定保持不变，不扩大恢复权限。
 
 诊断覆盖构建、项目读取/创建/配置、归属核对、资产 token/查询/上传/验证/登记、部署提交/

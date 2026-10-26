@@ -265,7 +265,7 @@ def test_real_fixed_build_to_http_publication_keeps_suite_writer(candidate, api_
 
 
 @pytest.mark.parametrize("failure", [None, "settings", "bundle", "server-error", "response-lost"])
-@pytest.mark.parametrize("assets", [False, True])
+@pytest.mark.parametrize("assets", [False, True, "diagnostic"])
 def test_exact_pages_resume_publishes_only_new_worker_revision_without_subdomain_rewrite(candidate, api_wire, monkeypatch, tmp_path, failure, assets):
     import pages_repair
     release, settings = candidate
@@ -274,6 +274,7 @@ def test_exact_pages_resume_publishes_only_new_worker_revision_without_subdomain
     monkeypatch.setattr(pages_repair, "WORKER_BUNDLE_SHA256", hashlib.sha256(bundle).hexdigest())
     api_wire["downloadBundle"] = b"changed" if failure == "bundle" else bundle
     parent = pages_repair.ASSETS_PARENT_RELEASE if assets else pages_repair.PAGES_PARENT_RELEASE
+    if assets == "diagnostic": parent = pages_repair.PAGES_DIAGNOSTIC_PARENT_RELEASE
     api_wire["settings"] = ech.metadata(owner, parent, ECH_TOKEN)
     if failure == "settings": api_wire["settings"]["bindings"][0]["bucket_name"] = "other-bucket"
     api_wire["mode"] = failure or "normal"

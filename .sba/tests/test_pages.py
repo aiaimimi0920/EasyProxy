@@ -305,8 +305,9 @@ def test_expected_empty_environment_accepts_only_provider_empty_map_shapes(candi
     pages._verify_environment(observed, expected)
 
 
-@pytest.mark.parametrize("failure", [None, "foreign-project", "existing-deployment", "config-drift", "lost-deploy"])
-@pytest.mark.parametrize("assets", [False, True])
+@pytest.mark.parametrize("failure", [None, "foreign-project", "existing-deployment", "config-drift", "lost-deploy",
+    "asset-upload-denied", "asset-query-invalid-json", "asset-register-rate-limit"])
+@pytest.mark.parametrize("assets", [False, True, "diagnostic"])
 def test_exact_pages_resume_reuses_project_without_create_and_never_replays(candidate, api_wire, monkeypatch, failure, assets):
     import hashlib
     import pages_repair
@@ -314,6 +315,7 @@ def test_exact_pages_resume_reuses_project_without_create_and_never_replays(cand
     owner, permit, store, _ = held(release)
     monkeypatch.setattr(pages_repair, "PROJECT_ID", PROJECT_ID)
     parent = pages_repair.ASSETS_PARENT_RELEASE if assets else pages_repair.PAGES_PARENT_RELEASE
+    if assets == "diagnostic": parent = pages_repair.PAGES_DIAGNOSTIC_PARENT_RELEASE
     existing = project(pages.configuration(owner, parent, PROJECT, DATABASE_ID, SECRETS))
     existing["deployment_configs"]["preview"]["env_vars"] = None
     if failure == "foreign-project": existing["id"] = DATABASE_ID
@@ -326,7 +328,9 @@ def test_exact_pages_resume_reuses_project_without_create_and_never_replays(cand
     if failure:
         with pytest.raises(StageError) as caught: run()
         expected = {"foreign-project": "PAGES_PARENT_VERIFY", "existing-deployment": "PAGES_PARENT_VERIFY",
-                    "config-drift": "PAGES_CONFIG_VERIFY", "lost-deploy": "PAGES_DEPLOYMENT_SUBMIT_NETWORK"}
+                    "config-drift": "PAGES_CONFIG_VERIFY", "lost-deploy": "PAGES_DEPLOYMENT_SUBMIT_NETWORK",
+                    "asset-upload-denied": "PAGES_ASSET_UPLOAD_HTTP_403", "asset-query-invalid-json": "PAGES_ASSET_QUERY_DECODE",
+                    "asset-register-rate-limit": "PAGES_ASSET_REGISTER_HTTP_429"}
         assert safe_error_code(caught.value) == "EASYPROXY_SBA_" + expected[failure] + "_UNKNOWN"
         if failure in ("foreign-project", "existing-deployment"): assert api_wire["writes"] == []
     else:
@@ -337,6 +341,22 @@ def test_exact_pages_resume_reuses_project_without_create_and_never_replays(cand
     before = len(api_wire["writes"])
     with pytest.raises((api_module.PagesError, coordination.CoordinationError, StageError)): run()
     assert len(api_wire["writes"]) == before
+
+
+def test_diagnostic_resume_accepts_cached_candidate_hashes_without_reupload(candidate, api_wire, monkeypatch):
+    import hashlib
+    import pages_repair
+    release, settings = candidate
+    owner, permit, store, _ = held(release)
+    monkeypatch.setattr(pages_repair, "PROJECT_ID", PROJECT_ID)
+    parent = pages_repair.PAGES_DIAGNOSTIC_PARENT_RELEASE
+    api_wire["project"] = project(pages.configuration(owner, parent, PROJECT, DATABASE_ID, SECRETS))
+    api_wire["assets"] = {asset.hash for asset in ARTIFACT.assets}
+    resume = pages_repair.PagesResume(permit.operation_id, hashlib.sha256(permit.state_bytes).hexdigest(), parent["sourceSha"])
+    assert pages.publish_pages(owner, permit, settings, api_token="fixture-api-token", secrets=SECRETS, resume=resume)["checks"]["pages-published"]
+    assert api_wire["deployments"] == 1
+    assert not any(path.endswith("/upload") for _, path, *_ in api_wire["writes"])
+    assert state_writer(store) == permit.operation_id
 
 
 def state_writer(store):

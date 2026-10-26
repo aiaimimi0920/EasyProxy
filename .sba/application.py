@@ -15,7 +15,7 @@ from pristine_repair import assert_pristine
 from refresh_context import require
 from request import ApplicationRequest
 from repair_context import REPAIR_ID, GITHUB_REPAIR_ID, PAGES_REPAIR_ID, ASSETS_REPAIR_ID
-from repair_context import GENERATION_REPAIR_ID
+from repair_context import GENERATION_REPAIR_ID, PAGES_DIAGNOSTIC_REPAIR_ID
 from sealed_box import build_sealer
 from sources import inspect_checkout
 from toolchain import build_cli, prepare_linux_tools
@@ -65,7 +65,7 @@ def execute(request: ApplicationRequest, root: Path, output: Path, *, environmen
             executable = build_cli(root, request.config.repository, request.source_sha, tools, output / "cli")
             migration = prepare_migration(request.config, request.candidate, root, tools, executable, output / "migration")
     deployment = replace(request, action="deploy", previous=None, context=None) if request.action == "repair" else request
-    recovery = {"recovery_request": request} if request.action == "repair" and request.context.get("repairId") in (GITHUB_REPAIR_ID, PAGES_REPAIR_ID, ASSETS_REPAIR_ID, GENERATION_REPAIR_ID) else {}
+    recovery = {"recovery_request": request} if request.action == "repair" and request.context.get("repairId") in (GITHUB_REPAIR_ID, PAGES_REPAIR_ID, ASSETS_REPAIR_ID, GENERATION_REPAIR_ID, PAGES_DIAGNOSTIC_REPAIR_ID) else {}
     with phase("PUBLISH"):
         result = deploy_suite(deployment, root, tools, image, sealer, bodies, output / "publish",
                               credentials=values, migration_settings=migration, **recovery)
