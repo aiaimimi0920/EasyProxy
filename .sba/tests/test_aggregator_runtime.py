@@ -69,6 +69,9 @@ def test_runtime_receipt_and_bytes_are_rechecked_after_generation(tmp_path, monk
     monkeypatch.setattr(runtime.sys, "platform", "linux")
     monkeypatch.setattr(runtime.platform, "machine", lambda: "x86_64")
     approved_utils(tmp_path)
+    raw = subprocess.check_output(["git", "-C", str(ROOT / "upstreams/aggregator"), "show",
+        runtime.AGGREGATOR_SHA + ":subscribe/workflow.py"])
+    (tmp_path / "subscribe/workflow.py").write_bytes(raw)
     pins = {}
     for relative in runtime.BINARIES:
         path = tmp_path / relative

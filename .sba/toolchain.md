@@ -24,6 +24,12 @@ Aggregator 仅接受 gitlink `089fb85414efff4c7deccfda48b5a540ce536835`，两个
 验证过的官方 release 签名或 provenance**。实际离线 fixture 已执行 mihomo 版本命令，并
 通过 subconverter 将 base64 订阅转换为含预期节点的 Clash 输出。
 
+隔离副本还固定修补 `subscribe/workflow.py` 的订阅任务边界：某个 `execute()` 的普通
+异常只产生该 taskid 的空结果，不再让 `pool.map()` 清空其他成功任务。不重试、不捕获
+取消、不记录异常/URL；任务顺序与数量保持。TLS 和任务隔离两个补丁的修改前后完整
+SHA256 都绑定在代码中，修改前检查全部源，生成后要求恰好两个固定 provenance 项并
+重核实际文件；不信任 receipt 自报的摘要，不改独立 upstream，也不放宽发布审计。
+
 ## TLS 的三个层次
 
 1. **源码抓取 HTTPS**：对批准 `subscribe/utils.py` 的准确 LF Git blob 做版本化最小补丁，
