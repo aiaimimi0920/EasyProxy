@@ -12,6 +12,7 @@ from d1_init import initialize_d1
 from diagnostics import phase
 from ech import EchDeployment, metadata as worker_metadata, publish_ech
 from github_environment import REFRESH_SECRETS, configure_environment, reviewed_workflow
+from github_repair import begin_recovery, verify_initialized
 from misub_sync import sync_misub
 from migration import MiSubMigration, migrate_misub
 from pages import PagesDeployment, configuration as pages_configuration, publish_pages
@@ -39,12 +40,17 @@ def stage_checks(result: dict, expected: set[str]):
 
 def deploy_suite(request: ApplicationRequest, root: Path, tools: LinuxTools, image: AuditImage, sealer: Sealer,
                  bodies: dict[str, bytes], output: Path, *, credentials: dict,
-                 migration_settings: MiSubMigration | None = None) -> dict:
+                 migration_settings: MiSubMigration | None = None,
+                 recovery_request: ApplicationRequest | None = None) -> dict:
     """工具、批准根、镜像和本地候选由调用方先准备；本函数不跨进程交接 Permit。"""
     require(type(request) is ApplicationRequest and request.action in ("deploy", "update")
             and (request.action == "update") == (type(migration_settings) is MiSubMigration)
             and (request.previous is None) == (request.action == "deploy")
             and type(tools) is LinuxTools and type(image) is AuditImage and type(sealer) is Sealer)
+    require(recovery_request is None or type(recovery_request) is ApplicationRequest
+            and recovery_request.action == "repair" and request.action == "deploy"
+            and recovery_request.task_id == request.task_id
+            and recovery_request.candidate == request.candidate and recovery_request.config == request.config)
     require(root.is_absolute() and root.resolve(strict=True) == root
             and output.is_absolute() and output.resolve() == output and not output.exists()
             and root != output and root not in output.parents)
@@ -77,12 +83,19 @@ def deploy_suite(request: ApplicationRequest, root: Path, tools: LinuxTools, ima
             worker_metadata(owner, release, credentials["EASYPROXY_ECH_TOKEN"])
             output.mkdir(mode=0o700, parents=True, exist_ok=False)
             public = PublicArtifacts(config.worker_origin + "/aggregator")
-            permit = owner.begin(request.action, release, previous=request.previous)
+            resume = None
+            if recovery_request is None:
+                permit = owner.begin(request.action, release, previous=request.previous)
+            else:
+                permit, resume = begin_recovery(owner, recovery_request, root, credentials)
         # No stage, exception path, or finally below may release this writer.
         if request.action == "deploy":
             with phase("D1"):
-                initialized = initialize_d1(owner, permit, root, config.inventory,
-                                            api_token=credentials["EASYPROXY_CLOUDFLARE_API_TOKEN"])
+                if resume is None:
+                    initialized = initialize_d1(owner, permit, root, config.inventory,
+                                                api_token=credentials["EASYPROXY_CLOUDFLARE_API_TOKEN"])
+                else:
+                    initialized = verify_initialized(config, root, credentials["EASYPROXY_CLOUDFLARE_API_TOKEN"])
             stage_checks(initialized, {"d1-initialized", "schema-verified"})
         else:
             with phase("MIGRATION"):
@@ -93,7 +106,7 @@ def deploy_suite(request: ApplicationRequest, root: Path, tools: LinuxTools, ima
             stage_checks(migration, {"backup-created", "data-preserved", "migration-verified"})
         with phase("GITHUB"):
             github = configure_environment(owner, permit, config, root, token=credentials["EASYPROXY_GITHUB_TOKEN"],
-                secrets={name: credentials[name] for name in REFRESH_SECRETS}, sealer=sealer)
+                secrets={name: credentials[name] for name in REFRESH_SECRETS}, sealer=sealer, resume=resume)
         stage_checks(github, {"github-environment-configured", "github-environment-verified", "github-workflow-verified"})
         require(github.get("refreshEnabled") is True)
         with phase("EDGE"):

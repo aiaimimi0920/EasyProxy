@@ -7,7 +7,7 @@ import re
 
 from coordination import SHA, VERSION
 from sealed_box import secret_value
-from repair_context import CONTEXT_FIELDS, PARENT_ERROR, PARENT_RELEASE, REPAIR_ID
+from repair_context import CONTEXT_FIELDS, PARENT_ERROR, PARENT_RELEASE, REPAIR_ID, GITHUB_CONTEXT, GITHUB_PARENT_RELEASE
 from suite_config import ConfigurationError, SuiteConfig, parse_configuration
 
 
@@ -67,7 +67,11 @@ def repair_context(value, config):
     context = value["context"]
     exact(context, CONTEXT_FIELDS)
     task(context["parentTaskId"])
-    require(config.repository == "aiaimimi0920/easyproxy" and value["previous"] == PARENT_RELEASE
+    require(config.repository == "aiaimimi0920/easyproxy" and context["parentTaskId"] != value["taskId"])
+    if context["repairId"] == GITHUB_CONTEXT["repairId"]:
+        require(context == GITHUB_CONTEXT and value["previous"] == GITHUB_PARENT_RELEASE)
+        return
+    require(value["previous"] == PARENT_RELEASE
             and context["repairId"] == REPAIR_ID and context["errorCode"] == PARENT_ERROR
             and context["parentTaskId"] != value["taskId"]
             and type(context["parentRunId"]) is int and context["parentRunId"] > 0

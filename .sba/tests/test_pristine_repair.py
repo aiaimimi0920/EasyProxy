@@ -152,6 +152,6 @@ def test_pristine_failure_is_fixed_diagnostic_and_stops_before_tools_or_publicat
 
 def test_manifest_repair_scope_and_fixed_parent_match_parser():
     manifest = json.loads((Path(__file__).resolve().parents[1] / "manifest.json").read_bytes())
-    scope, = manifest["repairs"]
+    scope = next(row for row in manifest["repairs"] if row["id"] == REPAIR_ID)
     assert scope["id"] == REPAIR_ID and scope["fromErrorCodes"] == [PARENT_ERROR]
-    assert set(scope["secretNames"]) == SECRETS and manifest["version"] == "1.0.1"
+    assert set(scope["secretNames"]) == SECRETS and manifest["version"] == "1.0.2"

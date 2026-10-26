@@ -6,6 +6,7 @@ from pathlib import Path
 
 from coordination import Coordinator, Permit
 from github_api import GitHubAPI, require
+from github_repair import GitHubResume
 from sealed_box import Sealer, secret_value
 from refresh_registry import REGISTRY_VARIABLE, include_environment, parse_registry
 from refresh_context import CONFIG_VARIABLE, OWNER_VARIABLE, REFRESH_SECRETS
@@ -47,12 +48,15 @@ def reviewed_workflow(root: Path) -> bytes:
 
 
 def configure_environment(owner: Coordinator, permit: Permit, config: SuiteConfig, root: Path, *,
-                          token: str, secrets: dict, sealer: Sealer | None) -> dict:
+                          token: str, secrets: dict, sealer: Sealer | None, resume: GitHubResume | None = None) -> dict:
     state = owner.assert_owned(permit)
     require(permit.action in ("deploy", "update", "preview") and type(config) is SuiteConfig
             and owner.identity == config.identity(state["identity"]["purpose"])
             and owner.inventory_digest == config.inventory_digest, "IDENTITY")
     production = state["identity"]["purpose"] == "production"
+    if resume is not None:
+        require(type(resume) is GitHubResume and production, "IDENTITY")
+        resume.assert_permit(owner, permit)
     expected_names = REFRESH_SECRETS if production else set()
     require(type(secrets) is dict and set(secrets) == expected_names
             and all(secret_value(value) for value in secrets.values()), "CREDENTIALS")
@@ -69,7 +73,14 @@ def configure_environment(owner: Coordinator, permit: Permit, config: SuiteConfi
         existing = api.environment_info()
         registry_raw = api.repository_variable(REGISTRY_VARIABLE) if production else None
         registry = parse_registry(registry_raw, config.repository) if production else None
-        if permit.action == "update":
+        if resume is not None:
+            require(existing is not None and existing["id"] == resume.environment_id and registry_raw is None,
+                    "UNOWNED_ENVIRONMENT")
+            expected = variables(owner, config, repository["id"], existing["id"])
+            require(api.variables() == {CONFIG_VARIABLE: expected[CONFIG_VARIABLE]} and api.secret_names() == set(),
+                    "UNOWNED_ENVIRONMENT")
+            verify_policy(existing, api.policies(), repository["defaultBranch"])
+        elif permit.action == "update":
             require(existing is not None, "UNOWNED_ENVIRONMENT")
             require(not production or config.environment in registry["environments"], "REGISTRY_DRIFT")
             expected = variables(owner, config, repository["id"], existing["id"])
@@ -91,6 +102,10 @@ def configure_environment(owner: Coordinator, permit: Permit, config: SuiteConfi
             for name, value in sorted(expected.items()):
                 owner.assert_owned(permit)
                 api.create_variable(name, value)
+        elif resume is not None:
+            # 已完成的 environment、branch policy、CONFIG 均只读验证，不再次发送写入。
+            owner.assert_owned(permit)
+            api.create_variable(OWNER_VARIABLE, expected[OWNER_VARIABLE])
         observed = api.environment_info()
         require(observed is not None and observed["id"] == existing["id"], "ENVIRONMENT")
         verify_policy(observed, api.policies(), repository["defaultBranch"])
