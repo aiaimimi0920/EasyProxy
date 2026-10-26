@@ -23,7 +23,35 @@ GENERATION_DIAGNOSTICS = frozenset({
 GENERATION_ARTIFACTS = frozenset({"subs/clash.yaml", "subs/singbox.json", "subs/mixed.txt",
                                 "subs/v2ray.txt", "internal/crawledsubs.json"})
 GENERATION_REASONS = frozenset({"utf8", "base64", "uri-line-format", "json", "json-empty",
-                               "singbox-shape", "yaml-or-proxy-shape", "unclassified"})
+                               "singbox-shape", "yaml-or-proxy-shape", "clash-shape", "clash-empty",
+                               "yaml-parse", "yaml-unknown-escape", "yaml-forbidden-token", "yaml-mapping",
+                               "yaml-document", "yaml-block", "yaml-constructor", "unclassified"})
+
+
+def clash_diagnostic(body):
+    # yaml 已由准确目标校验器加载；只分类有限 parser 问题，不导出 problem/context 正文。
+    yaml = sys.modules.get("yaml")
+    if yaml is None:
+        return "yaml-or-proxy-shape"
+    try:
+        value = yaml.safe_load(body)
+    except yaml.YAMLError as error:
+        problem = getattr(error, "problem", None)
+        if type(problem) is str:
+            for prefix, reason in (
+                ("found unknown escape character", "yaml-unknown-escape"),
+                ("found character", "yaml-forbidden-token"),
+                ("mapping values are not allowed here", "yaml-mapping"),
+                ("expected '<document start>'", "yaml-document"),
+                ("expected <block end>", "yaml-block"),
+                ("could not determine a constructor", "yaml-constructor"),
+            ):
+                if problem.startswith(prefix):
+                    return reason
+        return "yaml-parse"
+    if type(value) is not dict or type(value.get("proxies")) is not list:
+        return "clash-shape"
+    return "clash-empty" if not value["proxies"] else "unclassified"
 
 
 def generation_artifact_diagnostic(error, root):
@@ -52,7 +80,7 @@ def generation_artifact_diagnostic(error, root):
                             except (ValueError, RecursionError):
                                 reason = "json"
                         elif key.endswith(".yaml"):
-                            reason = "yaml-or-proxy-shape"
+                            reason = clash_diagnostic(body)
                         else:
                             try:
                                 decoded = base64.b64decode(b"".join(body.split()), validate=True).decode("utf-8")

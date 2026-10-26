@@ -215,7 +215,11 @@ def test_legacy_target_failure_does_not_import_a_new_diagnostics_dependency(tmp_
     ("subs/singbox.json", b"PRIVATE_INVALID_JSON", "json"),
     ("subs/singbox.json", b'{"outbounds":[]}', "singbox-shape"),
     ("internal/crawledsubs.json", b"{}", "json-empty"),
-    ("subs/clash.yaml", b"PRIVATE_YAML", "yaml-or-proxy-shape"),
+    ("subs/clash.yaml", b"PRIVATE_YAML", "clash-shape"),
+    ("subs/clash.yaml", b"proxies: []", "clash-empty"),
+    ("subs/clash.yaml", b'proxies: ["PRIVATE\\q"]', "yaml-unknown-escape"),
+    ("subs/clash.yaml", b"proxies:\n\tPRIVATE", "yaml-forbidden-token"),
+    ("subs/clash.yaml", b"proxies: !PRIVATE []", "yaml-constructor"),
 ])
 def test_legacy_validator_failure_only_exports_fixed_artifact_and_reason(tmp_path, artifact, body, reason):
     namespace = {"ArtifactError": ArtifactError}
