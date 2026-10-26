@@ -92,6 +92,10 @@ def api_wire(monkeypatch):
                 self.send(value)
             elif self.path.endswith("/subdomain"):
                 self.send({"enabled": True, "previews_enabled": False})
+            elif self.path.endswith("/workers/scripts/" + WORKER) and "downloadBundle" in record:
+                body = record["downloadBundle"]
+                self.send(raw=b'--' + b'a' * 32 + b'\r\nContent-Disposition: form-data; name="edge.mjs"\r\nContent-Type: text/plain\r\n\r\n'
+                          + body + b'\r\n--' + b'a' * 32 + b'--\r\n')
             else:
                 self.send(status=404, raw=b"private-provider-details")
 
@@ -258,6 +262,32 @@ def test_real_fixed_build_to_http_publication_keeps_suite_writer(candidate, api_
     assert ECH_TOKEN not in json.dumps(result) and "fixture-api-token" not in json.dumps(result)
     with pytest.raises(coordination.CoordinationError, match="BUSY"):
         owner.current_release()
+
+
+@pytest.mark.parametrize("failure", [None, "settings", "bundle", "server-error", "response-lost"])
+def test_exact_pages_resume_publishes_only_new_worker_revision_without_subdomain_rewrite(candidate, api_wire, monkeypatch, tmp_path, failure):
+    import pages_repair
+    release, settings = candidate
+    owner, permit, store, _ = held(release)
+    bundle = ech.build_bundle(settings.root, settings.esbuild, tmp_path / "previous-worker")
+    monkeypatch.setattr(pages_repair, "WORKER_BUNDLE_SHA256", hashlib.sha256(bundle).hexdigest())
+    api_wire["downloadBundle"] = b"changed" if failure == "bundle" else bundle
+    api_wire["settings"] = ech.metadata(owner, pages_repair.PAGES_PARENT_RELEASE, ECH_TOKEN)
+    if failure == "settings": api_wire["settings"]["bindings"][0]["bucket_name"] = "other-bucket"
+    api_wire["mode"] = failure or "normal"
+    resume = pages_repair.PagesResume(permit.operation_id, hashlib.sha256(permit.state_bytes).hexdigest())
+    def run():
+        return ech.publish_ech(owner, permit, settings, api_token="fixture-api-token", ech_token=ECH_TOKEN, resume=resume)
+    if failure:
+        with pytest.raises(api_module.WorkerError): run()
+        assert len(api_wire["writes"]) == (0 if failure in ("settings", "bundle") else 1)
+    else:
+        assert run()["checks"]["ech-published"] is True
+        assert [row[0] for row in api_wire["writes"]] == ["PUT"]
+    assert json.loads(store.body)["writer"]["operationId"] == permit.operation_id
+    before = len(api_wire["writes"])
+    with pytest.raises((api_module.WorkerError, coordination.CoordinationError)): run()
+    assert len(api_wire["writes"]) == before
 
 
 @pytest.mark.parametrize("mode", ["server-error", "response-lost", "redirect", "invalid-success", "wrong-binding",

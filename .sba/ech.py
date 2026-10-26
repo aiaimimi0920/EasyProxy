@@ -142,7 +142,8 @@ def build_bundle(root: Path, esbuild: Path, workdir: Path) -> bytes:
         raise WorkerError("EASYPROXY_SBA_WORKER_BUILD") from None
 
 
-def publish_ech(owner: Coordinator, permit: Permit, settings: EchDeployment, *, api_token: str, ech_token: str) -> dict:
+def publish_ech(owner: Coordinator, permit: Permit, settings: EchDeployment, *, api_token: str, ech_token: str, resume=None) -> dict:
+    from pages_repair import PagesResume, PAGES_PARENT_RELEASE, WORKER_BUNDLE_SHA256, worker_bundle_digest
     state = owner.assert_owned(permit)
     require(permit.action in ("deploy", "update", "preview"), "OWNERSHIP")
     require(inventory_digest(settings.inventory) == owner.inventory_digest, "INVENTORY")
@@ -150,6 +151,9 @@ def publish_ech(owner: Coordinator, permit: Permit, settings: EchDeployment, *, 
     buckets = [row for row in settings.inventory if row["kind"] == "r2"]
     require(len(workers) == len(buckets) == 1 and workers[0]["id"] == workers[0]["name"] == settings.worker_name
             and buckets[0]["id"] == buckets[0]["name"] == owner.identity["bucket"], "IDENTITY")
+    if resume is not None:
+        require(type(resume) is PagesResume, "OWNERSHIP")
+        resume.assert_permit(owner, permit)
     release = state["writer"]["candidate"]
     expected = metadata(owner, release, ech_token)
     api = WorkerAPI(owner.identity["accountId"], api_token)
@@ -159,7 +163,12 @@ def publish_ech(owner: Coordinator, permit: Permit, settings: EchDeployment, *, 
         inspect_checkout(settings.root, owner.identity["repository"], release["sourceSha"])
         subdomain = api.account_subdomain()  # Never create/change the account-wide subdomain.
         existing = [row for row in api.list_workers() if row["id"] == settings.worker_name]
-        if permit.action == "update":
+        if resume is not None:
+            require(len(existing) == 1 and hashlib.sha256(bundle).hexdigest() == WORKER_BUNDLE_SHA256, "OWNERSHIP")
+            _verify_settings(api.settings(settings.worker_name), metadata(owner, PAGES_PARENT_RELEASE, ech_token))
+            require(worker_bundle_digest(api, settings.worker_name) == WORKER_BUNDLE_SHA256, "OWNERSHIP")
+            api.script_subdomain(settings.worker_name)
+        elif permit.action == "update":
             require(len(existing) == 1, "OWNERSHIP")
             _verify_settings(api.settings(settings.worker_name), metadata(owner, state["active"], ech_token))
         else:
@@ -168,7 +177,8 @@ def publish_ech(owner: Coordinator, permit: Permit, settings: EchDeployment, *, 
         api.upload(settings.worker_name, expected, bundle)
         owner.assert_owned(permit)
         _verify_settings(api.settings(settings.worker_name), expected)
-        api.enable_subdomain(settings.worker_name)
+        if resume is None:
+            api.enable_subdomain(settings.worker_name)
         owner.assert_owned(permit)
         api.script_subdomain(settings.worker_name)
         origin = f"https://{settings.worker_name}.{subdomain}.workers.dev"

@@ -134,6 +134,8 @@ def api_wire(monkeypatch):
                 if record["mode"] == "deployment-wrong":
                     value["project_id"] = DATABASE_ID
                 self.send(value)
+            elif self.path.endswith("/deployments"):
+                self.send([] if record["project"]["canonical_deployment"] is None else [record["project"]["canonical_deployment"]])
             elif record["project"] is None:
                 self.send(status=404, raw=b'{"success":false,"errors":[{"code":8000007}],"result":null}')
             else:
@@ -170,6 +172,8 @@ def api_wire(monkeypatch):
                 if self.path.endswith("/projects"):
                     assert body["name"] == PROJECT and body["production_branch"] == "main"
                     record["project"] = project(body["deployment_configs"])
+                    if record["mode"] == "nullable-empty-preview":
+                        record["project"]["deployment_configs"]["preview"]["env_vars"] = None
                     value = record["project"]
                 elif self.command == "PATCH":
                     canonical = record["project"]["canonical_deployment"]
@@ -244,11 +248,11 @@ def publish(owner, permit, settings, **kwargs):
                                secrets=kwargs.get("secrets", SECRETS))
 
 
-@pytest.mark.parametrize("action", ["deploy", "update", "preview", "public-delay", "functions-late"])
+@pytest.mark.parametrize("action", ["deploy", "update", "preview", "public-delay", "functions-late", "nullable-empty-preview"])
 def test_publish_stage_keeps_suite_writer_and_uses_distinct_upload_token(candidate, api_wire, action):
     release, settings = candidate
     api_wire["mode"] = action
-    owner, permit, store, old = held(release, "deploy" if action in ("public-delay", "functions-late") else action)
+    owner, permit, store, old = held(release, "deploy" if action in ("public-delay", "functions-late", "nullable-empty-preview") else action)
     if action == "update":
         api_wire["project"] = project(pages.configuration(owner, old, PROJECT, DATABASE_ID, SECRETS), deployment(old))
     result = publish(owner, permit, settings)
@@ -260,6 +264,74 @@ def test_publish_stage_keeps_suite_writer_and_uses_distinct_upload_token(candida
     assert json.loads(store.body)["active"] == (old if action == "update" else None)
     assert "suite-published" not in result["checks"] and "service-ready" not in result["checks"]
     assert all(secret not in json.dumps(result) for secret in [*SECRETS.values(), "fixture-api-token", "fixture-upload-jwt"])
+
+
+@pytest.mark.parametrize("shape", ["missing", "null", "object"])
+def test_expected_empty_environment_accepts_only_provider_empty_map_shapes(candidate, shape):
+    release, _ = candidate
+    owner, _, _, _ = held(release)
+    expected = pages.configuration(owner, release, PROJECT, DATABASE_ID, SECRETS)["preview"]
+    observed = copy.deepcopy(expected)
+    if shape == "missing":
+        observed.pop("env_vars")
+    elif shape == "null":
+        observed["env_vars"] = None
+    pages._verify_environment(observed, expected)
+
+
+@pytest.mark.parametrize("failure", [None, "foreign-project", "existing-deployment", "config-drift", "lost-deploy"])
+def test_exact_pages_resume_reuses_project_without_create_and_never_replays(candidate, api_wire, monkeypatch, failure):
+    import hashlib
+    import pages_repair
+    release, settings = candidate
+    owner, permit, store, _ = held(release)
+    monkeypatch.setattr(pages_repair, "PROJECT_ID", PROJECT_ID)
+    existing = project(pages.configuration(owner, pages_repair.PAGES_PARENT_RELEASE, PROJECT, DATABASE_ID, SECRETS))
+    existing["deployment_configs"]["preview"]["env_vars"] = None
+    if failure == "foreign-project": existing["id"] = DATABASE_ID
+    if failure == "existing-deployment": existing["canonical_deployment"] = deployment(release)
+    api_wire["project"] = existing
+    api_wire["mode"] = failure or "normal"
+    resume = pages_repair.PagesResume(permit.operation_id, hashlib.sha256(permit.state_bytes).hexdigest())
+    def run():
+        return pages.publish_pages(owner, permit, settings, api_token="fixture-api-token", secrets=SECRETS, resume=resume)
+    if failure:
+        with pytest.raises(api_module.PagesError): run()
+        if failure in ("foreign-project", "existing-deployment"): assert api_wire["writes"] == []
+    else:
+        assert run()["checks"]["pages-published"] is True
+        assert api_wire["writes"][0][0] == "PATCH" and api_wire["deployments"] == 1
+    assert not any(method == "POST" and path.endswith("/projects") for method, path, *_ in api_wire["writes"])
+    assert state_writer(store) == permit.operation_id
+    before = len(api_wire["writes"])
+    with pytest.raises((api_module.PagesError, coordination.CoordinationError)): run()
+    assert len(api_wire["writes"]) == before
+
+
+def state_writer(store):
+    return json.loads(store.body)["writer"]["operationId"]
+
+
+@pytest.mark.parametrize("value", [False, 0, "", [], {"FOREIGN": {"type": "plain_text", "value": "x"}}])
+def test_empty_environment_does_not_accept_falsey_wrong_types_or_foreign_bindings(candidate, value):
+    release, _ = candidate
+    owner, _, _, _ = held(release)
+    expected = pages.configuration(owner, release, PROJECT, DATABASE_ID, SECRETS)["preview"]
+    observed = {**copy.deepcopy(expected), "env_vars": value}
+    with pytest.raises(api_module.PagesError, match="BINDINGS"):
+        pages._verify_environment(observed, expected)
+
+
+@pytest.mark.parametrize("shape", ["missing", "null", "object"])
+def test_nonempty_production_environment_still_rejects_missing_bindings(candidate, shape):
+    release, _ = candidate
+    owner, _, _, _ = held(release)
+    expected = pages.configuration(owner, release, PROJECT, DATABASE_ID, SECRETS)["production"]
+    observed = {**copy.deepcopy(expected), "env_vars": None if shape == "null" else {}}
+    if shape == "missing":
+        observed.pop("env_vars")
+    with pytest.raises(api_module.PagesError, match="BINDINGS"):
+        pages._verify_environment(observed, expected)
 
 
 @pytest.mark.parametrize("mode", ["server-error", "redirect", "lost-create", "lost-deploy", "invalid-success", "config-drift",

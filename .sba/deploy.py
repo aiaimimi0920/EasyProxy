@@ -16,6 +16,8 @@ from github_repair import begin_recovery, verify_initialized
 from misub_sync import sync_misub
 from migration import MiSubMigration, migrate_misub
 from pages import PagesDeployment, configuration as pages_configuration, publish_pages
+from pages_repair import PagesResume, begin_recovery as begin_pages_recovery, verify_configured
+from repair_context import PAGES_REPAIR_ID
 from request import ApplicationRequest, SECRETS
 from sealed_box import Sealer, secret_value
 from sources import inspect_checkout
@@ -87,7 +89,8 @@ def deploy_suite(request: ApplicationRequest, root: Path, tools: LinuxTools, ima
             if recovery_request is None:
                 permit = owner.begin(request.action, release, previous=request.previous)
             else:
-                permit, resume = begin_recovery(owner, recovery_request, root, credentials)
+                begin = begin_pages_recovery if recovery_request.context.get("repairId") == PAGES_REPAIR_ID else begin_recovery
+                permit, resume = begin(owner, recovery_request, root, credentials)
         # No stage, exception path, or finally below may release this writer.
         if request.action == "deploy":
             with phase("D1"):
@@ -105,19 +108,24 @@ def deploy_suite(request: ApplicationRequest, root: Path, tools: LinuxTools, ima
                     "EASYPROXY_BACKUP_PASSPHRASE": credentials["EASYPROXY_BACKUP_PASSPHRASE"]})
             stage_checks(migration, {"backup-created", "data-preserved", "migration-verified"})
         with phase("GITHUB"):
-            github = configure_environment(owner, permit, config, root, token=credentials["EASYPROXY_GITHUB_TOKEN"],
-                secrets={name: credentials[name] for name in REFRESH_SECRETS}, sealer=sealer, resume=resume)
+            if type(resume) is PagesResume:
+                resume.assert_permit(owner, permit)
+                github = verify_configured(owner, config, root, credentials["EASYPROXY_GITHUB_TOKEN"])
+            else:
+                github = configure_environment(owner, permit, config, root, token=credentials["EASYPROXY_GITHUB_TOKEN"],
+                    secrets={name: credentials[name] for name in REFRESH_SECRETS}, sealer=sealer, resume=resume)
         stage_checks(github, {"github-environment-configured", "github-environment-verified", "github-workflow-verified"})
         require(github.get("refreshEnabled") is True)
+        continuation = {"resume": resume} if type(resume) is PagesResume else {}
         with phase("EDGE"):
             edge = publish_ech(owner, permit, EchDeployment(root, tools.esbuild, output / "edge", config.worker_name,
-                config.inventory), api_token=credentials["EASYPROXY_CLOUDFLARE_API_TOKEN"], ech_token=credentials["EASYPROXY_ECH_TOKEN"])
+                config.inventory), api_token=credentials["EASYPROXY_CLOUDFLARE_API_TOKEN"], ech_token=credentials["EASYPROXY_ECH_TOKEN"], **continuation)
         stage_checks(edge, {"ech-published", "ech-bindings-verified", "ech-version-verified"})
         require(edge.get("origin") == config.worker_origin and edge.get("sourceSha") == release["sourceSha"]
                 and edge.get("applicationVersion") == release["applicationVersion"])
         with phase("PAGES"):
             pages = publish_pages(owner, permit, PagesDeployment(root, tools.node, tools.npm_cli, output / "pages",
-                config.pages_name, config.inventory), api_token=credentials["EASYPROXY_CLOUDFLARE_API_TOKEN"], secrets=page_secrets)
+                config.pages_name, config.inventory), api_token=credentials["EASYPROXY_CLOUDFLARE_API_TOKEN"], secrets=page_secrets, **continuation)
         stage_checks(pages, {"pages-published", "pages-bindings-verified", "pages-version-verified"})
         require(pages.get("origin") == config.pages_origin and pages.get("sourceSha") == release["sourceSha"]
                 and pages.get("applicationVersion") == release["applicationVersion"])

@@ -100,6 +100,11 @@ class PagesAPI:
         require(type(value) is dict, "RESPONSE_UNKNOWN")
         return value
 
+    def deployments(self) -> list:
+        value = api_result(self._session, self._token, "GET", self.path + "/deployments", require)
+        require(type(value) is list and all(type(row) is dict for row in value), "RESPONSE_UNKNOWN")
+        return value
+
 
 def public_release(project: str) -> dict:
     session = secure_session()

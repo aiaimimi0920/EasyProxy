@@ -48,6 +48,11 @@ def _verify_environment(value: dict, expected: dict):
                   "analytics_engine_datasets", "vectorize_bindings", "ai_bindings", "mtls_certificates", "browsers"):
         require(value.get(field) in (None, {}, []), "BINDINGS")
     variables = value.get("env_vars", {})
+    # Pages represents an empty environment map as null. Only an explicitly
+    # empty expected map may accept that shape; required production bindings
+    # and falsey values of any other type must still fail closed.
+    if variables is None and expected["env_vars"] == {}:
+        variables = {}
     require(type(variables) is dict and set(variables) == set(expected["env_vars"]), "BINDINGS")
     for key, item in expected["env_vars"].items():
         observed = variables[key]
@@ -116,7 +121,8 @@ def _verify_public(project: str, release: dict):
     raise PagesError("EASYPROXY_SBA_PAGES_PUBLIC_VERSION_UNKNOWN")
 
 
-def publish_pages(owner: Coordinator, permit: Permit, settings: PagesDeployment, *, api_token: str, secrets: dict) -> dict:
+def publish_pages(owner: Coordinator, permit: Permit, settings: PagesDeployment, *, api_token: str, secrets: dict, resume=None) -> dict:
+    from pages_repair import PagesResume, PAGES_PARENT_RELEASE, PROJECT_ID
     state = owner.assert_owned(permit)
     require(permit.action in ("deploy", "update", "preview") and inventory_digest(settings.inventory) == owner.inventory_digest,
             "INVENTORY")
@@ -128,6 +134,9 @@ def publish_pages(owner: Coordinator, permit: Permit, settings: PagesDeployment,
             and buckets[0]["id"] == buckets[0]["name"] == owner.identity["bucket"],
             "IDENTITY")
     release = state["writer"]["candidate"]
+    if resume is not None:
+        require(type(resume) is PagesResume, "OWNERSHIP")
+        resume.assert_permit(owner, permit)
     expected = configuration(owner, release, settings.project_name, databases[0]["id"], secrets)
     api = PagesAPI(owner.identity["accountId"], settings.project_name, api_token)
     try:
@@ -135,7 +144,12 @@ def publish_pages(owner: Coordinator, permit: Permit, settings: PagesDeployment,
                                settings.node, settings.npm_cli, settings.workdir)
         existing = api.project()
         project_id = None
-        if permit.action == "update":
+        if resume is not None:
+            previous = configuration(owner, PAGES_PARENT_RELEASE, settings.project_name, databases[0]["id"], secrets)
+            project_id = _verify_project(existing, settings.project_name, previous, PROJECT_ID)
+            require(existing.get("latest_deployment") is None and existing.get("canonical_deployment") is None
+                    and api.deployments() == [], "DEPLOYMENT")
+        elif permit.action == "update":
             previous = configuration(owner, state["active"], settings.project_name, databases[0]["id"], secrets)
             project_id = _verify_project(existing, settings.project_name, previous)
             canonical = existing.get("canonical_deployment")

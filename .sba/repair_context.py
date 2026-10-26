@@ -15,3 +15,14 @@ GITHUB_CONTEXT = {
     "resultDigest": "b8aa25d210dbc5f2feb3df0c4d3a1f1dfad9f80b998603b7033e233becbfc03a",
     "errorCode": "EASYPROXY_SBA_GITHUB_UNKNOWN",
 }
+
+PAGES_REPAIR_ID = "continue-pages-initial-deployment"
+PAGES_PARENT_RELEASE = {"sourceSha": "cdc04e167e951850c00cb8b1fe0c44878c4a118e", "applicationVersion": "1.0.2"}
+PAGES_CONTEXT = {
+    "repairId": PAGES_REPAIR_ID,
+    "parentTaskId": "dc-c982bc121b8548d78474848a8065b296",
+    "parentRunId": 40280908267,
+    "requestDigest": "8165c2e348839267a8693e8a06f1d110e53be2047406be9d6aec3ec32f74345a",
+    "resultDigest": "0e6d8cc8b2e6dd1a15f64ddcfffc308a2a9d5b753cd8f8ea273a7b33495265a1",
+    "errorCode": "EASYPROXY_SBA_PAGES_UNKNOWN",
+}
