@@ -1,8 +1,12 @@
 package pool
 
 import (
+	"fmt"
 	"net"
 
+	"easy_proxies/internal/monitor"
+
+	"github.com/sagernet/sing-box/adapter"
 	N "github.com/sagernet/sing/common/network"
 )
 
@@ -10,7 +14,17 @@ func (p *poolOutbound) shouldSkipProbeTLSVerify() bool {
 	return p != nil && p.monitor != nil && p.monitor.SkipCertVerify()
 }
 
+func upstreamProxyError(outbound adapter.Outbound, cause error) error {
+	// sing's HTTP client returns this exact error only for a CONNECT 407.
+	// Do not classify destination 401/403 responses or arbitrary auth messages.
+	if outbound != nil && outbound.Type() == "http" && cause != nil && cause.Error() == "authentication required" {
+		return fmt.Errorf("%w: %v", monitor.ErrUpstreamAuthenticationRequired, cause)
+	}
+	return cause
+}
+
 func (p *poolOutbound) recordFailure(member *memberState, network string, cause error, destination string) {
+	cause = upstreamProxyError(member.outbound, cause)
 	if member.shared == nil {
 		p.logger.Warn("proxy ", member.tag, " failure (no shared state): ", cause)
 		return

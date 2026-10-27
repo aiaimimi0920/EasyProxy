@@ -12,6 +12,17 @@ func (h *EntryHandle) RecordFailure(err error, destination string) {
 	h.ref.recordFailure(err, destination)
 }
 
+// UpstreamAuthFailed reports the hard authentication quarantine without copying
+// a node's traffic counters or timeline on each pool-selection attempt.
+func (h *EntryHandle) UpstreamAuthFailed() bool {
+	if h == nil || h.ref == nil {
+		return false
+	}
+	h.ref.mu.RLock()
+	defer h.ref.mu.RUnlock()
+	return h.ref.upstreamAuthFailed
+}
+
 // RecordObservationFailure appends a failed timeline event without degrading
 // hard route-failure counters. This is used for business failures that do not
 // prove the proxy route itself is unhealthy.

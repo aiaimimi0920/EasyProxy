@@ -140,6 +140,11 @@ func (p *poolOutbound) availableMembersLocked(
 		if _, skip := excluded[member.tag]; skip {
 			continue
 		}
+		// Authentication rejection must survive source/secondary fail-open and
+		// blacklist release. Only a fresh successful member probe can recover it.
+		if member.entry.UpstreamAuthFailed() {
+			continue
+		}
 		// Check blacklist via shared state (auto-clears if expired)
 		if member.shared != nil && member.shared.isTransportBlacklisted(network, now) {
 			continue

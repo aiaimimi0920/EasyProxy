@@ -184,6 +184,7 @@ func (s *Server) handleDebug(w http.ResponseWriter, r *http.Request) {
 			"active_connections":    snap.ActiveConnections,
 			"initial_check_done":    snap.InitialCheckDone,
 			"available":             snap.Available,
+			"upstream_auth_failed":  snap.UpstreamAuthFailed,
 			"effective_available":   snap.EffectiveAvailable,
 			"traffic_proven_usable": snap.TrafficProvenUsable,
 			"availability_source":   snap.AvailabilitySource,

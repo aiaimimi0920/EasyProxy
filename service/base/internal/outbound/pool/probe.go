@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -73,6 +74,9 @@ func httpProbeTargetContext(ctx context.Context, conn net.Conn, target monitor.P
 	firstDuration, firstStatus, err := performHTTPProbeRequest(ctx, probeConn, reader, req)
 	if err != nil {
 		return 0, err
+	}
+	if firstStatus == 407 {
+		return 0, validateProbeStatus(target, firstStatus)
 	}
 	secondDuration, secondStatus, secondErr := performHTTPProbeRequest(ctx, probeConn, reader, req)
 	if secondErr == nil {
@@ -147,6 +151,9 @@ func nextProbeTargetContext(parent context.Context, remainingTargets int) (conte
 }
 
 func validateProbeStatus(target monitor.ProbeTargetSpec, status int) error {
+	if status == 407 {
+		return fmt.Errorf("%w: HTTP status %d from %s", monitor.ErrUpstreamAuthenticationRequired, status, target.Original)
+	}
 	if probeTargetRequiresStrictSuccessStatus(target) {
 		if status < 200 || status >= 400 {
 			return fmt.Errorf("unexpected HTTP status %d from %s", status, target.Original)
@@ -321,6 +328,9 @@ func connectHTTPProxy(ctx context.Context, conn net.Conn, target monitor.ProbeTa
 		return fmt.Errorf("parse CONNECT status %q: %w", strings.TrimSpace(statusLine), err)
 	}
 	if status < 200 || status >= 300 {
+		if status == 407 {
+			return fmt.Errorf("%w: CONNECT status %d for %s", monitor.ErrUpstreamAuthenticationRequired, status, authority)
+		}
 		return fmt.Errorf("unexpected CONNECT status %d for %s", status, authority)
 	}
 	for {
@@ -355,6 +365,9 @@ func (p *poolOutbound) runProbeTargetsViaHTTPProxy(ctx context.Context, proxyAdd
 		if err != nil {
 			conn.Close()
 			cancel()
+			if errors.Is(err, monitor.ErrUpstreamAuthenticationRequired) {
+				return 0, err
+			}
 			errs = append(errs, fmt.Sprintf("%s proxy connect: %v", target.Original, err))
 			continue
 		}
@@ -367,6 +380,9 @@ func (p *poolOutbound) runProbeTargetsViaHTTPProxy(ctx context.Context, proxyAdd
 		conn.Close()
 		cancel()
 		if err != nil {
+			if errors.Is(err, monitor.ErrUpstreamAuthenticationRequired) {
+				return 0, err
+			}
 			errs = append(errs, fmt.Sprintf("%s proxy probe: %v", target.Original, err))
 			continue
 		}
@@ -387,6 +403,9 @@ func (p *poolOutbound) runProbeTargets(ctx context.Context, outbound adapter.Out
 		conn, err := outbound.DialContext(targetCtx, N.NetworkTCP, target.Dst)
 		if err != nil {
 			cancel()
+			if classified := upstreamProxyError(outbound, err); errors.Is(classified, monitor.ErrUpstreamAuthenticationRequired) {
+				return 0, classified
+			}
 			errs = append(errs, fmt.Sprintf("%s dial: %v", target.Original, err))
 			continue
 		}
@@ -399,6 +418,9 @@ func (p *poolOutbound) runProbeTargets(ctx context.Context, outbound adapter.Out
 		conn.Close()
 		cancel()
 		if err != nil {
+			if errors.Is(err, monitor.ErrUpstreamAuthenticationRequired) {
+				return 0, err
+			}
 			errs = append(errs, fmt.Sprintf("%s probe: %v", target.Original, err))
 			continue
 		}

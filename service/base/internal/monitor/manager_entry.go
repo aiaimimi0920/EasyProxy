@@ -102,6 +102,7 @@ func (e *entry) snapshot() Snapshot {
 		LastProbeLatency:          e.lastProbe,
 		LastLatencyMs:             latencyMs,
 		Available:                 e.healthGen == e.reloadGen && e.available,
+		UpstreamAuthFailed:        e.upstreamAuthFailed,
 		InitialCheckDone:          e.healthGen == e.reloadGen && e.initialCheckDone,
 		TotalUpload:               e.totalUpload.Load(),
 		TotalDownload:             e.totalDownload.Load(),
@@ -148,7 +149,7 @@ func reportedSuccessRate(success, failure int64) float64 {
 }
 
 func (e *entry) trafficProvenUsableLocked(now time.Time) bool {
-	if e.blacklist || e.lastTrafficOK.IsZero() {
+	if e.blacklist || e.upstreamAuthFailed || e.lastTrafficOK.IsZero() {
 		return false
 	}
 	if e.lastFailureSeq > 0 && e.lastTrafficSeq > 0 {
@@ -202,9 +203,19 @@ func (e *entry) recordFailure(err error, destination string) {
 	e.failure++
 	e.lastError = errStr
 	e.lastFail = time.Now()
-	// 注意：不修改 available/initialCheckDone
-	// 流量失败不代表节点不可用（可能是目标网站的问题）
-	// available 只由探测操作控制
+	// Ordinary traffic failures may belong to the destination, so they do not
+	// invalidate probe health. A confirmed upstream authentication rejection is
+	// different: no destination is usable until a fresh probe proves recovery.
+	if errors.Is(err, ErrUpstreamAuthenticationRequired) {
+		e.upstreamAuthFailed = true
+		e.available = false
+		e.initialCheckDone = true
+		e.healthGen = e.reloadGen
+		if e.owner != nil {
+			// A probe started before this rejection cannot revive stale health.
+			e.lastProbeSeq = e.owner.nextProbeSeq.Add(1)
+		}
+	}
 	e.appendTimelineLocked(false, 0, errStr, destination)
 }
 
@@ -246,6 +257,7 @@ func (e *entry) recordSuccessWithLatency(latency time.Duration) {
 	e.lastProbeOK = now
 	e.lastProbe = latency
 	e.available = true
+	e.upstreamAuthFailed = false
 	e.initialCheckDone = true
 	e.healthGen = e.reloadGen
 	latencyMs := latency.Milliseconds()

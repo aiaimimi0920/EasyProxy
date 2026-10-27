@@ -35,6 +35,7 @@ func (m *Manager) createBox(ctx context.Context, cfg *config.Config) (*box.Box, 
 	}
 
 	inboundRegistry := include.InboundRegistry()
+	registerAuthRedactingInbounds(inboundRegistry)
 	outboundRegistry := include.OutboundRegistry()
 	pool.Register(outboundRegistry)
 	gatewayroute.Register(outboundRegistry)

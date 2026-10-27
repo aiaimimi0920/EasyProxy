@@ -266,6 +266,9 @@ func (m *Manager) applyProbeResult(
 		entry.lastFail = now
 		entry.lastProbe = 0
 		entry.available = false
+		if errors.Is(probeErr, ErrUpstreamAuthenticationRequired) {
+			entry.upstreamAuthFailed = true
+		}
 		entry.appendTimelineLocked(false, 0, errText, "health-probe")
 		return true
 	}
@@ -276,6 +279,7 @@ func (m *Manager) applyProbeResult(
 	entry.lastProbeOK = now
 	entry.lastProbe = latency
 	entry.available = true
+	entry.upstreamAuthFailed = false
 	latencyMs := latency.Milliseconds()
 	if latencyMs == 0 && latency > 0 {
 		latencyMs = 1

@@ -5,7 +5,7 @@ import "time"
 const trafficProvenSuccessWindow = 30 * time.Minute
 
 func isProbeAvailable(snap Snapshot) bool {
-	return snap.InitialCheckDone && snap.Available && !snap.Blacklisted
+	return snap.InitialCheckDone && snap.Available && !snap.Blacklisted && !snap.UpstreamAuthFailed
 }
 
 func isTrafficProvenUsable(snap Snapshot) bool {
@@ -13,7 +13,7 @@ func isTrafficProvenUsable(snap Snapshot) bool {
 }
 
 func isTrafficProvenUsableAt(snap Snapshot, now time.Time) bool {
-	if snap.Blacklisted || snap.LastTrafficSuccessAt.IsZero() {
+	if snap.Blacklisted || snap.UpstreamAuthFailed || snap.LastTrafficSuccessAt.IsZero() {
 		return false
 	}
 	if snap.FailureSeq > 0 && snap.TrafficSuccessSeq > 0 {

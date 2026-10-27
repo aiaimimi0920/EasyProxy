@@ -48,6 +48,10 @@ type ProbeSummary struct {
 // newer reload generation.
 var ErrStaleGeneration = errors.New("stale monitor generation")
 
+// ErrUpstreamAuthenticationRequired identifies a proxy-level authentication
+// rejection, not an HTTP authentication challenge from a destination website.
+var ErrUpstreamAuthenticationRequired = errors.New("upstream proxy authentication required")
+
 type ProbeTargetSpec struct {
 	Original string
 	Scheme   string
@@ -123,6 +127,7 @@ type Snapshot struct {
 	LastProbeLatency          time.Duration   `json:"last_probe_latency,omitempty"`
 	LastLatencyMs             int64           `json:"last_latency_ms"`
 	Available                 bool            `json:"available"`
+	UpstreamAuthFailed        bool            `json:"upstream_auth_failed"`
 	InitialCheckDone          bool            `json:"initial_check_done"`
 	TrafficProvenUsable       bool            `json:"traffic_proven_usable"`
 	EffectiveAvailable        bool            `json:"effective_available"`
@@ -277,6 +282,7 @@ type entry struct {
 	release            releaseFunc
 	initialCheckDone   bool
 	available          bool
+	upstreamAuthFailed bool
 	firstSeenAt        time.Time     // first registration time, used for long-lived uptime
 	longLivedMinUptime time.Duration // resolved long-lived min uptime threshold
 	longLivedMinRate   float64       // resolved long-lived min success-rate threshold
