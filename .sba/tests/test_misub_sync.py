@@ -138,10 +138,12 @@ def wire(monkeypatch):
     assert not thread.is_alive() and record["errors"] == []
 
 
-def held():
-    owner = Coordinator(MemoryStore(), IDENTITY, inventory_digest(INVENTORY))
+def held(inventory=INVENTORY, worker_origin=None):
+    owner = Coordinator(MemoryStore(), IDENTITY, inventory_digest(inventory))
     permit = owner.begin("deploy", OLD)
     public = Public(None)
+    if worker_origin is not None:
+        public.origin = worker_origin + "/aggregator"
     return owner, permit, public, Candidate(permit.operation_id, BODIES), audit(permit, public)
 
 
@@ -220,3 +222,25 @@ def test_verification_placeholders_and_invalid_credentials_never_make_requests(v
     monkeypatch.setattr(requests.Session, "send", lambda *args, **kwargs: pytest.fail("must not make requests"))
     with pytest.raises(sync.MiSubError, match="CREDENTIALS"):
         sync.MiSubAPI(PROJECT, value, "fixture-manifest")
+
+
+def test_custom_public_origins_never_receive_management_secrets_even_after_dns_drift(wire):
+    inventory = [*INVENTORY, {"kind": "domain", "name": PROJECT, "id": "https://app.example.com"},
+                 {"kind": "domain", "name": WORKER, "id": "https://edge.example.com"}]
+    args = held(inventory, "https://edge.example.com")
+
+    def execute(values):
+        owner, permit, public, candidate, receipt = values
+        return sync.sync_misub(owner, permit, candidate, receipt, public, ROOT, inventory,
+            admin_password="fixture-admin", manifest_token="fixture-manifest", ech_token="fixture-ech")
+
+    execute(args)
+    args[0].commit_verified(args[1], CHECKS["deploy"])
+    permit = args[0].begin("refresh", OLD, previous=OLD)
+    # Custom DNS is deliberately not consulted: both deploy and later refresh
+    # management calls remain on the provider project host asserted by wire.
+    execute((args[0], permit, args[2], Candidate(permit.operation_id, BODIES), audit(permit, args[2])))
+    assert len(wire["saves"]) == 2
+    assert all(headers["Origin"] == "https://" + PROJECT + ".pages.dev" for _, _, headers in wire["requests"])
+    connectors = [row for row in wire["data"]["subscriptions"] if row["id"].startswith(sync.ECH_PREFIX)]
+    assert connectors and all("edge.example.com" in json.dumps(row) for row in connectors)

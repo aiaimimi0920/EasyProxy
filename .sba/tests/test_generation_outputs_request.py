@@ -57,7 +57,7 @@ def test_failed_candidate_and_resource_version_cannot_be_confused(previous):
 def test_manifest_only_appends_one_exact_scope_and_keeps_all_old_scopes_and_secrets():
     root = Path(__file__).resolve().parents[2]
     manifest = json.loads((root / ".sba/manifest.json").read_bytes())
-    assert manifest["version"] == "1.0.10" and len(manifest["repairs"]) == 8
+    assert manifest["version"] == "1.0.11" and len(manifest["repairs"]) == 8
     assert manifest["repairs"][-2]["id"] == CONTEXT["repairId"]
     assert manifest["repairs"][-2]["fromErrorCodes"] == [CONTEXT["errorCode"]]
     assert set(manifest["repairs"][-2]["secretNames"]) == SECRETS

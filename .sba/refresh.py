@@ -37,7 +37,8 @@ def refresh_suite(config: SuiteConfig, release: dict, root: Path, image: AuditIm
         owner = Coordinator(store, config.identity("production"), config.inventory_digest)
         require(owner.current_release() == release)
         output.mkdir(mode=0o700, parents=True, exist_ok=False)
-        public = PublicArtifacts(config.worker_origin + "/aggregator")
+        public = PublicArtifacts(config.worker_origin + "/aggregator",
+            **({"inventory": config.inventory} if config.custom_worker_origin is not None else {}))
         # Recheck and acquire atomically after all local preparation. An update
         # between selector and here must reject, never refresh the new SHA using old code.
         permit = owner.begin("refresh", release, previous=release)

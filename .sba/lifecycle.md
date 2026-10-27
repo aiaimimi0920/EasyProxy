@@ -2,21 +2,21 @@
 
 ## 当前状态（2026-10-27）
 
-最新1.0.9任务`dc-61ea1053fb0d425a9c755531a9e998af`在Pages资产验证UNKNOWN，
-已停止写入；现场Worker/Pages配置为1.0.9，Pages零deployment，writer非空、active=null。
-当前1.0.10实施准确协议窄修及`continue-pages-asset-protocol-deployment`：资源父版本
-也为1.0.9，核16对象/15正文，先证据后单次CAS；旧七入口、十一秘密及全部UNKNOWN保留。
-这不是部署成功，最终仍以正常SpringBok回执、独立verify和本地真实代理业务为准。
+1.0.10 已完成正常 SpringBok 恢复、独立 verify 和本地双来源真实 TLS 业务验收：
+repair `dc-9e968056fd18416a915a2f220b1bf81e`，verify
+`dc-9f85e79bf52a4570b0cdc313ba93159d`。旧失败回执仍保留；历史 UNKNOWN 不改写。
 
-五动作应用入口、实例周期刷新、manifest v3 与 deployment v2 已实现；1.0.5 的准确恢复任务
-`dc-7affcab05da84f4f938d4430aa9b4799` / run `40323259410` 在 Pages 返回 UNKNOWN。
-只读核实 `active=null`、writer 锁定 1.0.5、R2 十三对象及原九阶段对象保持；Worker 公开
-版本与 Pages 配置均为 1.0.5，但 Pages 零 deployment。D1/GitHub 保持，后续发布未进入。
-此后1.0.7 task `dc-d8fbaaa6c7404904928900e9f6a8c9f1` / run `40358960520`
-在生成输出返回UNKNOWN，未进入writer移交。十三对象和原资源经新鲜只读核对仍保持。
-首次任务和历次独立repair均未完成，未自动重放、未清锁。应用尚未通过
-SpringBok 正式部署，不能把本地合同测试、构建或平台 SUITE-03 上线当作应用上线。
-旧手动部署和旧工作流仍保留，不被本套件隐式接管。
+1.0.11 正在准备独立新实例的自定义域名支持，尚未发布、停旧服务或提交新部署。
+先按准确清单冻结旧 writers 并完成最终备份，再清理旧资源，最后经 SpringBok new deploy
+新建。只有整条流程和真实代理测试通过才删除本任务备份副本；源码、凭据原件和审计保留。
+
+新建的自定义域名必须归属同一活跃 zone/account，DNS 与 Worker/Pages association 均为空；
+部署单次创建绑定和必要 DNS，成功读回 domain/zone/DNS ID 并保存证据；未知回执不重放。
+update 仅核既有绑定，不修改或接管域名。传播等待有界且只发 GET。
+公开地址可自定义，但自动管理密码、Cookie 和 manifest token 始终只发往准确项目的
+`pages.dev`；升级备份同样固定管理地址，不因公开域名漂移向其他接收端发送秘密。
+隔离 preview 继续使用 provider origins，可从自定义公开地址的正式源复制；自定义 preview
+在云操作之前拒绝，destroy-preview 不用于正式套件退役或删除自定义域名。
 
 云端是一套部署：MiSub Pages/Functions、ECH Worker 与 GitHub Actions Aggregator；
 D1 和私有 R2 是该套件的数据资源。`/aggregator/` 复用 ECH Worker，不增加常驻服务。
@@ -32,7 +32,9 @@ runtime 为 Ubuntu 24.04 / PowerShell 7.6.9 / Python 3.12 / Node 22。
 公开配置恰有 11 键：accountId、repository、pagesName、workerName、workersSubdomain、
 databaseId、databaseName、bucketName、refreshTarget、pagesOrigin、workerOrigin。
 名称由 `ep-{instance}-...` 模板产生；不允许改成旧手动资源名或其他实例资源。
-平台清单含 D1、R2、Worker、Pages、Actions environment 和两个 provider origin，共七项。
+平台清单含 D1、R2、Worker、Pages、Actions environment 和两个公开 origin，共七项。
+应用内部 provider-only inventory 仍为原五项；自定义配置才追加对应服务的 domain 行，
+因此旧配置的 digest 不变，新配置的 digest 绑定准确公开 origin。
 秘密只引用 manifest 的 11 个名称；不得放进公开配置、日志或回执。
 
 所有动作业务预算为 3300 秒，父进程另留 120 秒子进程清理，平台上限 3600 秒。

@@ -62,4 +62,4 @@ def prepare_migration(config: SuiteConfig, release: dict, root: Path, tools: Lin
     return MiSubMigration(root=root, executable=executable, node=tools.node,
         wrangler=project / "node_modules/wrangler/bin/wrangler.js", topology=path, manifest=manifest,
         wrangler_config=wrangler_config, workdir=output / "operation", database_id=config.database_id,
-        base_url=config.pages_origin, allow_direct_d1_fallback=True, wrangler_dir=project)
+        base_url=f"https://{config.pages_name}.pages.dev", allow_direct_d1_fallback=True, wrangler_dir=project)

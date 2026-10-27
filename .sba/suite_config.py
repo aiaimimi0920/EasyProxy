@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import re
 
 from coordination import inventory_digest
+from origins import approved_origin
 
 
 CONFIG_KEYS = {"accountId", "repository", "pagesName", "workerName", "workersSubdomain", "databaseId",
@@ -35,22 +36,30 @@ class SuiteConfig:
     database_name: str
     bucket: str
     refresh_target: str
+    custom_pages_origin: str | None = None
+    custom_worker_origin: str | None = None
 
     @property
     def pages_origin(self) -> str:
-        return f"https://{self.pages_name}.pages.dev"
+        return self.custom_pages_origin or f"https://{self.pages_name}.pages.dev"
 
     @property
     def worker_origin(self) -> str:
-        return f"https://{self.worker_name}.{self.workers_subdomain}.workers.dev"
+        return self.custom_worker_origin or f"https://{self.worker_name}.{self.workers_subdomain}.workers.dev"
 
     @property
     def inventory(self) -> list[dict]:
-        return [{"kind": "d1", "name": self.database_name, "id": self.database_id},
+        rows = [{"kind": "d1", "name": self.database_name, "id": self.database_id},
                 {"kind": "r2", "name": self.bucket, "id": self.bucket},
                 {"kind": "pages", "name": self.pages_name, "id": self.pages_name},
                 {"kind": "worker", "name": self.worker_name, "id": self.worker_name},
                 {"kind": "github-actions", "name": self.refresh_target, "id": self.refresh_target}]
+        # Old provider-only configurations retain their exact inventory digest.
+        for service, origin in ((self.pages_name, self.custom_pages_origin),
+                                (self.worker_name, self.custom_worker_origin)):
+            if origin is not None:
+                rows.append({"kind": "domain", "name": service, "id": origin})
+        return rows
 
     @property
     def inventory_digest(self) -> str:
@@ -94,9 +103,14 @@ def parse_configuration(value: dict, *, repository: str, environment: str) -> Su
     expected = {"pagesName": f"ep-{environment}-misub", "workerName": f"ep-{environment}-edge",
                 "databaseName": f"ep-{environment}-misub", "bucketName": f"ep-{environment}-store"}
     require(all(NAME.fullmatch(value[key]) is not None and value[key] == name for key, name in expected.items())
-            and value["refreshTarget"] == WORKFLOW + "@" + environment
-            and value["pagesOrigin"] == f"https://{value['pagesName']}.pages.dev"
-            and value["workerOrigin"] == f"https://{value['workerName']}.{value['workersSubdomain']}.workers.dev")
+            and value["refreshTarget"] == WORKFLOW + "@" + environment)
+    pages_provider = f"https://{value['pagesName']}.pages.dev"
+    worker_provider = f"https://{value['workerName']}.{value['workersSubdomain']}.workers.dev"
+    require(approved_origin(value["pagesOrigin"], pages_provider)
+            and approved_origin(value["workerOrigin"], worker_provider)
+            and value["pagesOrigin"] != value["workerOrigin"])
     return SuiteConfig(value["accountId"], repository.lower(), environment, value["pagesName"], value["workerName"],
                        value["workersSubdomain"], value["databaseId"], value["databaseName"], value["bucketName"],
-                       value["refreshTarget"])
+                       value["refreshTarget"],
+                       None if value["pagesOrigin"] == pages_provider else value["pagesOrigin"],
+                       None if value["workerOrigin"] == worker_provider else value["workerOrigin"])

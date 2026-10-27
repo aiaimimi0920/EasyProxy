@@ -155,8 +155,9 @@ def api_wire(monkeypatch):
             assert target.path.startswith(f"/client/v4/accounts/{IDENTITY['accountId']}/workers/")
             assert request.headers["Authorization"] == "Bearer fixture-api-token"
         else:
-            assert target.netloc == WORKER + ".fixture-account.workers.dev"
+            assert target.netloc == WORKER + ".fixture-account.workers.dev" or target.netloc == record.get("customHost")
             assert "Authorization" not in request.headers and "Cookie" not in request.headers
+            record.setdefault("publicHosts", []).append(target.netloc)
         request.url = f"http://127.0.0.1:{server.server_port}" + target.path
         return original_send(adapter, request, **kwargs)
 
@@ -199,6 +200,36 @@ def held(release, action="deploy", inventory=None):
 
 def publish(owner, permit, settings):
     return ech.publish_ech(owner, permit, settings, api_token="fixture-api-token", ech_token=ECH_TOKEN)
+
+
+@pytest.mark.parametrize("action", ["deploy", "update", "unknown"])
+def test_custom_origin_publication_verifies_provider_then_binds_then_custom(candidate, api_wire, monkeypatch, action):
+    release, settings = candidate
+    origin = "https://edge.example.com"
+    inventory = [*settings.inventory, {"kind": "domain", "name": WORKER, "id": origin}]
+    settings = replace(settings, inventory=inventory)
+    owner, permit, store, old = held(release, "update" if action == "update" else "deploy", inventory)
+    api_wire["customHost"] = "edge.example.com"
+    if action == "update": api_wire["settings"] = ech.metadata(owner, old, ECH_TOKEN)
+    calls = []
+
+    def bind(current, permission, selected, service, kind, token):
+        assert current is owner and permission is permit and selected == inventory
+        assert (service, kind, token) == (WORKER, "worker", "fixture-api-token")
+        assert api_wire["publicHosts"] == [WORKER + ".fixture-account.workers.dev"]
+        owner.assert_owned(permit)
+        calls.append("bind")
+        if action == "unknown": raise RuntimeError("FIXTURE_DOMAIN_UNKNOWN")
+
+    monkeypatch.setattr(ech, "bind_domain", bind)
+    if action == "unknown":
+        with pytest.raises(RuntimeError, match="FIXTURE_DOMAIN_UNKNOWN"): publish(owner, permit, settings)
+        assert api_wire["publicHosts"] == [WORKER + ".fixture-account.workers.dev"]
+    else:
+        result = publish(owner, permit, settings)
+        assert result["origin"] == origin and result["aggregatorBaseUrl"] == origin + "/aggregator"
+        assert api_wire["publicHosts"] == [WORKER + ".fixture-account.workers.dev", "edge.example.com"]
+    assert calls == ["bind"] and json.loads(store.body)["writer"] is not None
 
 
 @pytest.mark.parametrize("code", [10007, 10000, 10090])

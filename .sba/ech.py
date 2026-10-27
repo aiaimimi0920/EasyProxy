@@ -13,6 +13,8 @@ import sys
 import time
 
 from coordination import Coordinator, Permit, inventory_digest
+from domains import bind_domain
+from origins import inventory_origin
 from sources import inspect_checkout
 from worker_api import WorkerAPI, WorkerError, credential, public_release, require
 
@@ -181,8 +183,13 @@ def publish_ech(owner: Coordinator, permit: Permit, settings: EchDeployment, *, 
             api.enable_subdomain(settings.worker_name)
         owner.assert_owned(permit)
         api.script_subdomain(settings.worker_name)
-        origin = f"https://{settings.worker_name}.{subdomain}.workers.dev"
-        _verify_public(origin, release)
+        provider_origin = f"https://{settings.worker_name}.{subdomain}.workers.dev"
+        _verify_public(provider_origin, release)
+        origin = inventory_origin(settings.inventory, settings.worker_name, provider_origin)
+        if origin != provider_origin:
+            require(resume is None, "OWNERSHIP")
+            bind_domain(owner, permit, settings.inventory, settings.worker_name, "worker", api_token)
+            _verify_public(origin, release)
         owner.assert_owned(permit)
         return {"checks": {"ech-published": True, "ech-bindings-verified": True, "ech-version-verified": True},
                 "worker": settings.worker_name, "origin": origin, "aggregatorBaseUrl": origin + "/aggregator",

@@ -1,5 +1,6 @@
 """真实 SQLite 副本/隔离加真实 Coordinator；云阶段替身不冒充线上演练。"""
 import json
+from dataclasses import replace
 from pathlib import Path
 import sys
 
@@ -21,9 +22,17 @@ from test_request import fixture, parse
 
 
 @pytest.fixture
-def sandbox(prepared, monkeypatch):
+def sandbox(prepared, monkeypatch, request):
+    custom_source = getattr(request, "param", False)
     _, root, tools, image, sealer, output, values, store, record = prepared
-    request = parse(fixture("preview"))
+    raw = fixture("preview")
+    if custom_source:
+        repository = parse(raw).config.repository
+        raw["context"]["source"]["configuration"].update(pagesOrigin="https://app.example.com", workerOrigin="https://edge.example.com")
+        selected = raw["context"]["source"]
+        selected["resources"] = parse_configuration(selected["configuration"], repository=repository,
+            environment=selected["environment"]).platform_inventory
+    request = parse(raw)
     original = parse_configuration(request.context["source"]["configuration"], repository=request.config.repository, environment="production")
     source_store = MemoryStore()
     source_store.bucket = original.bucket
@@ -124,3 +133,20 @@ def test_concurrent_source_change_prevents_a_successful_preview_receipt(sandbox)
     with pytest.raises(RuntimeError, match="REFRESH_REJECTED"):
         run(sandbox)
     assert state(sandbox[7])["writer"] is not None and state(sandbox[7])["active"] is None
+
+
+@pytest.mark.parametrize("sandbox", [True], indirect=True)
+def test_provider_preview_accepts_custom_production_source_without_using_its_domains(sandbox):
+    assert run(sandbox)["checks"] == CHECKS["preview"]
+    assert capture(sandbox[9]).digest == sandbox[11]
+    assert sandbox[0].config.custom_worker_origin is None and sandbox[0].config.custom_pages_origin is None
+
+
+def test_custom_preview_rejects_before_any_provider_client_or_write(sandbox, monkeypatch):
+    values = list(sandbox)
+    request = values[0]
+    values[0] = replace(request, config=replace(request.config, custom_pages_origin="https://preview.example.com"))
+    monkeypatch.setattr(preview, "r2_store", lambda *_: pytest.fail("no cloud client before domain rejection"))
+    with pytest.raises(RuntimeError, match="REFRESH_REJECTED"):
+        run(values)
+    assert not sandbox[8]["order"] and sandbox[7].writes == []

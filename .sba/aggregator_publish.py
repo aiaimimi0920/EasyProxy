@@ -16,6 +16,7 @@ import yaml
 from artifact_store import ArtifactError, ArtifactStore, MAX_BYTES, Object, require
 from cloudflare_http import decode_object, secure_session
 from coordination import Coordinator, Permit, SHA, _encode
+from origins import approved_origin, inventory_origin
 from sources import inspect_checkout
 
 
@@ -43,10 +44,17 @@ class Candidate:
 
 
 class PublicArtifacts:
-    def __init__(self, origin: str):
+    def __init__(self, origin: str, *, inventory: list[dict] | None = None):
         require(isinstance(origin, str), "ORIGIN")
         url = urlsplit(origin)
-        require(url.scheme == "https" and re.fullmatch(r"[a-z0-9-]+\.[a-z0-9-]+\.workers\.dev", url.netloc) is not None
+        provider = re.fullmatch(r"[a-z0-9-]+\.[a-z0-9-]+\.workers\.dev", url.netloc) is not None
+        if inventory is not None:
+            require(type(inventory) is list and all(type(row) is dict for row in inventory), "ORIGIN")
+            workers = [row for row in inventory if row.get("kind") == "worker"]
+            require(len(workers) == 1 and type(workers[0].get("name")) is str, "ORIGIN")
+            selected = inventory_origin(inventory, workers[0]["name"], "")
+            require(approved_origin(selected, "") and origin == selected + "/aggregator", "ORIGIN")
+        require(url.scheme == "https" and (provider or inventory is not None)
                 and url.path == "/aggregator" and not url.query and not url.fragment, "ORIGIN")
         self.origin = origin
         self.session = secure_session()

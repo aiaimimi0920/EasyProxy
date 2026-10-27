@@ -1,5 +1,6 @@
 """销毁编排的准确清单、preflight、顺序及 UNKNOWN 不重放；不连接云账号。"""
 import copy
+from dataclasses import replace
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -176,6 +177,16 @@ def sandbox(tmp_path, monkeypatch):
     root = tmp_path / "source"
     root.mkdir()
     return request, root, tmp_path / "output", credentials, stores, record
+
+
+def test_custom_preview_destroy_rejects_before_source_or_cloud_access(sandbox, monkeypatch):
+    request, root, output, credentials, _, record = sandbox
+    request = replace(request, config=replace(request.config, custom_pages_origin="https://preview.example.com"))
+    monkeypatch.setattr(destroy, "inspect_checkout", lambda *_: pytest.fail("source must not be read"))
+    monkeypatch.setattr(destroy, "r2_store", lambda *_: pytest.fail("cloud must not be accessed"))
+    with pytest.raises(RuntimeError, match="REFRESH_REJECTED"):
+        destroy.destroy_preview(request, root, output, credentials=credentials)
+    assert not record["events"] and not output.exists()
 
 
 def run(sandbox):

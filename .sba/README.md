@@ -2,7 +2,29 @@
 
 ## 当前状态（2026-10-27）
 
-### EP-SBA-21：Pages 资产协议窄修与准确 1.0.9 恢复（实施中）
+1.0.10 已经正常 SpringBok 恢复、独立 verify 及本地双来源真实 TLS 消费验收。
+准确部署任务为 `dc-9e968056fd18416a915a2f220b1bf81e`，独立验证任务为
+`dc-9f85e79bf52a4570b0cdc313ba93159d`。原 UNKNOWN 回执保留，不改写成成功。
+
+当前 1.0.11 正在准备全新部署的自定义域名支持，尚未发布或上线。复用 SpringBok
+已有 zone/subdomain 选择器，配置仍为 11 键；仅自定义域名配置追加准确 domain inventory，
+旧 provider-only inventory/digest 与八项准确 repair 合同保持。先真实核对账号、活跃 zone、
+DNS 和 association，空闲域名单次绑定，传播等待仅 GET；UNKNOWN 停写并保留 writer。
+
+公开 MiSub/Worker 入口可使用同账号子域名，Pages callback/public URL 随公开入口配置。
+自动 managed-sync、周期 refresh 与升级备份的管理密码、Cookie、manifest token 始终发往
+准确项目的 `pages.dev` 管理地址，不跟随可变的自定义 DNS；订阅和 ECH connector 使用
+批准的公开 Worker 地址。自定义公开产物地址必须与对应 Worker inventory 精确匹配。
+
+隔离 preview 仍使用 provider origins；其正式源可以使用自定义域名。自定义域名 preview
+及其清理在任何云操作前拒绝，不声称已经支持正式套件的域名删除。旧资源清理按本轮已批准
+的准确清单另行执行，不隐式接管或覆盖旧资源。新部署与真实测试全部通过前不删除备份。
+
+## 历史实施记录
+
+以下是各阶段当时状态，不代表当前线上仍停在对应 UNKNOWN。
+
+### EP-SBA-21：Pages 资产协议窄修与准确 1.0.9 恢复（历史，已完成）
 
 1.0.9准确任务`dc-61ea1053fb0d425a9c755531a9e998af` / run`40396870242`已在
 `PAGES_ASSET_VERIFY`返回UNKNOWN，尚未形成Pages deployment；不是套件上线成功。
