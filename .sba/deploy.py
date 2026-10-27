@@ -12,6 +12,9 @@ from coordination import Coordinator, r2_store
 from d1_init import initialize_d1
 from diagnostics import phase
 from domains import preflight_domains
+from fresh_domain_repair import begin_recovery as begin_fresh_domain_recovery
+from fresh_domain_resources import verify_configured as verify_fresh_configured
+from fresh_domain_resume import FreshDomainResume
 from ech import EchDeployment, metadata as worker_metadata, publish_ech
 from github_environment import REFRESH_SECRETS, configure_environment, reviewed_workflow
 from github_repair import begin_recovery, verify_initialized
@@ -25,6 +28,7 @@ from pages_repair import PagesResume, begin_recovery as begin_pages_recovery, ve
 from pages_diagnostic_repair import begin_recovery as begin_pages_diagnostic_recovery
 from repair_context import PAGES_REPAIR_ID, ASSETS_REPAIR_ID, GENERATION_REPAIR_ID, PAGES_DIAGNOSTIC_REPAIR_ID
 from repair_context import GENERATION_OUTPUTS_REPAIR_ID, PAGES_ASSET_PROTOCOL_REPAIR_ID
+from repair_context import FRESH_DOMAIN_REPAIR_ID
 from request import ApplicationRequest, SECRETS
 from sealed_box import Sealer, secret_value
 from sources import inspect_checkout
@@ -74,8 +78,10 @@ def deploy_suite(request: ApplicationRequest, root: Path, tools: LinuxTools, ima
     bodies = dict(bodies)
     inspect_checkout(root, config.repository, release["sourceSha"])
     reviewed_workflow(root)  # Missing schedule is a preflight rejection, not a successful suite.
+    fresh_domain = recovery_request is not None and recovery_request.context.get("repairId") == FRESH_DOMAIN_REPAIR_ID
     with phase("DOMAINS"):
-        preflight_domains(config, credentials["EASYPROXY_CLOUDFLARE_API_TOKEN"], existing=request.action == "update")
+        if not fresh_domain:
+            preflight_domains(config, credentials["EASYPROXY_CLOUDFLARE_API_TOKEN"], existing=request.action == "update")
     if migration_settings is not None:
         require(migration_settings.root == root and migration_settings.database_id == config.database_id
                 and migration_settings.base_url == f"https://{config.pages_name}.pages.dev")
@@ -101,6 +107,7 @@ def deploy_suite(request: ApplicationRequest, root: Path, tools: LinuxTools, ima
                 permit = owner.begin(request.action, release, previous=request.previous)
             else:
                 begin = {PAGES_REPAIR_ID: begin_pages_recovery, ASSETS_REPAIR_ID: begin_assets_recovery,
+                         FRESH_DOMAIN_REPAIR_ID: begin_fresh_domain_recovery,
                          GENERATION_REPAIR_ID: begin_generation_recovery,
                          GENERATION_OUTPUTS_REPAIR_ID: begin_generation_outputs_recovery,
                          PAGES_ASSET_PROTOCOL_REPAIR_ID: begin_pages_asset_protocol_recovery,
@@ -124,7 +131,10 @@ def deploy_suite(request: ApplicationRequest, root: Path, tools: LinuxTools, ima
                     "EASYPROXY_BACKUP_PASSPHRASE": credentials["EASYPROXY_BACKUP_PASSPHRASE"]})
             stage_checks(migration, {"backup-created", "data-preserved", "migration-verified"})
         with phase("GITHUB"):
-            if type(resume) is PagesResume:
+            if type(resume) is FreshDomainResume:
+                resume.assert_permit(owner, permit)
+                github = verify_fresh_configured(owner, config, root, credentials["EASYPROXY_GITHUB_TOKEN"])
+            elif type(resume) is PagesResume:
                 resume.assert_permit(owner, permit)
                 github = verify_configured(owner, config, root, credentials["EASYPROXY_GITHUB_TOKEN"],
                                            parent_release=resume.parent_release)
@@ -133,7 +143,7 @@ def deploy_suite(request: ApplicationRequest, root: Path, tools: LinuxTools, ima
                     secrets={name: credentials[name] for name in REFRESH_SECRETS}, sealer=sealer, resume=resume)
         stage_checks(github, {"github-environment-configured", "github-environment-verified", "github-workflow-verified"})
         require(github.get("refreshEnabled") is True)
-        continuation = {"resume": resume} if type(resume) is PagesResume else {}
+        continuation = {"resume": resume} if type(resume) in (PagesResume, FreshDomainResume) else {}
         with phase("EDGE"):
             edge = publish_ech(owner, permit, EchDeployment(root, tools.esbuild, output / "edge", config.worker_name,
                 config.inventory), api_token=credentials["EASYPROXY_CLOUDFLARE_API_TOKEN"], ech_token=credentials["EASYPROXY_ECH_TOKEN"], **continuation)
@@ -142,7 +152,8 @@ def deploy_suite(request: ApplicationRequest, root: Path, tools: LinuxTools, ima
                 and edge.get("applicationVersion") == release["applicationVersion"])
         with phase("PAGES"):
             pages = publish_pages(owner, permit, PagesDeployment(root, tools.node, tools.npm_cli, output / "pages",
-                config.pages_name, config.inventory), api_token=credentials["EASYPROXY_CLOUDFLARE_API_TOKEN"], secrets=page_secrets, **continuation)
+                config.pages_name, config.inventory), api_token=credentials["EASYPROXY_CLOUDFLARE_API_TOKEN"], secrets=page_secrets,
+                **({} if type(resume) is FreshDomainResume else continuation))
         stage_checks(pages, {"pages-published", "pages-bindings-verified", "pages-version-verified"})
         require(pages.get("origin") == config.pages_origin and pages.get("sourceSha") == release["sourceSha"]
                 and pages.get("applicationVersion") == release["applicationVersion"])

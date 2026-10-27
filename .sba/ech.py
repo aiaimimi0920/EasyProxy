@@ -146,6 +146,9 @@ def build_bundle(root: Path, esbuild: Path, workdir: Path) -> bytes:
 
 def publish_ech(owner: Coordinator, permit: Permit, settings: EchDeployment, *, api_token: str, ech_token: str, resume=None) -> dict:
     from pages_repair import PagesResume, WORKER_BUNDLE_SHA256, worker_bundle_digest
+    from fresh_domain_resume import FreshDomainResume
+    from fresh_domain_resources import record_worker_domain, verify_worker_domain
+    from repair_context import FRESH_DOMAIN_PARENT_RELEASE
     state = owner.assert_owned(permit)
     require(permit.action in ("deploy", "update", "preview"), "OWNERSHIP")
     require(inventory_digest(settings.inventory) == owner.inventory_digest, "INVENTORY")
@@ -154,7 +157,7 @@ def publish_ech(owner: Coordinator, permit: Permit, settings: EchDeployment, *, 
     require(len(workers) == len(buckets) == 1 and workers[0]["id"] == workers[0]["name"] == settings.worker_name
             and buckets[0]["id"] == buckets[0]["name"] == owner.identity["bucket"], "IDENTITY")
     if resume is not None:
-        require(type(resume) is PagesResume, "OWNERSHIP")
+        require(type(resume) in (PagesResume, FreshDomainResume), "OWNERSHIP")
         resume.assert_permit(owner, permit)
     release = state["writer"]["candidate"]
     expected = metadata(owner, release, ech_token)
@@ -167,9 +170,16 @@ def publish_ech(owner: Coordinator, permit: Permit, settings: EchDeployment, *, 
         existing = [row for row in api.list_workers() if row["id"] == settings.worker_name]
         if resume is not None:
             require(len(existing) == 1 and hashlib.sha256(bundle).hexdigest() == WORKER_BUNDLE_SHA256, "OWNERSHIP")
-            _verify_settings(api.settings(settings.worker_name), metadata(owner, resume.parent_release, ech_token))
+            parent_release = FRESH_DOMAIN_PARENT_RELEASE if type(resume) is FreshDomainResume else resume.parent_release
+            _verify_settings(api.settings(settings.worker_name), metadata(owner, parent_release, ech_token))
             require(worker_bundle_digest(api, settings.worker_name) == WORKER_BUNDLE_SHA256, "OWNERSHIP")
             api.script_subdomain(settings.worker_name)
+            if type(resume) is FreshDomainResume:
+                require(subdomain == resume.workers_subdomain, "OWNERSHIP")
+                verify_worker_domain(owner, settings.inventory, api_token)
+                _verify_public(f"https://{settings.worker_name}.{subdomain}.workers.dev", parent_release)
+                _verify_public(inventory_origin(settings.inventory, settings.worker_name,
+                    f"https://{settings.worker_name}.{subdomain}.workers.dev"), parent_release)
         elif permit.action == "update":
             require(len(existing) == 1, "OWNERSHIP")
             _verify_settings(api.settings(settings.worker_name), metadata(owner, state["active"], ech_token))
@@ -187,8 +197,11 @@ def publish_ech(owner: Coordinator, permit: Permit, settings: EchDeployment, *, 
         _verify_public(provider_origin, release)
         origin = inventory_origin(settings.inventory, settings.worker_name, provider_origin)
         if origin != provider_origin:
-            require(resume is None, "OWNERSHIP")
-            bind_domain(owner, permit, settings.inventory, settings.worker_name, "worker", api_token)
+            if type(resume) is FreshDomainResume:
+                record_worker_domain(owner, permit, settings.inventory, api_token)
+            else:
+                require(resume is None, "OWNERSHIP")
+                bind_domain(owner, permit, settings.inventory, settings.worker_name, "worker", api_token)
             _verify_public(origin, release)
         owner.assert_owned(permit)
         return {"checks": {"ech-published": True, "ech-bindings-verified": True, "ech-version-verified": True},

@@ -111,10 +111,13 @@ class DomainAPI:
                 return matches
         require(False, "ASSOCIATION")
 
-    def _worker(self, row, target, zone):
-        require(type(row) is dict and row.get("hostname") == target.hostname
+    def _worker(self, row, target, zone, *, attach_response=False):
+        # Script-based PUT can return "" for this deprecated field. GET must
+        # still prove canonical production ownership before durable evidence.
+        require(type(attach_response) is bool and type(row) is dict and row.get("hostname") == target.hostname
                 and row.get("service") == target.service and row.get("zone_id") == zone["id"]
-                and row.get("zone_name") == zone["name"] and row.get("environment") == "production"
+                and row.get("zone_name") == zone["name"]
+                and (row.get("environment") == "production" or attach_response and row.get("environment") == "")
                 and row.get("enabled") is True and row.get("previews_enabled") is False, "OWNERSHIP")
         return _id(row.get("id"), worker=True)
 
@@ -161,7 +164,7 @@ class DomainAPI:
             result = self._request("PUT", f"/accounts/{self.account}/workers/domains", json={
                 "hostname": target.hostname, "service": target.service, "zone_id": zone["id"],
                 "enabled": True, "previews_enabled": False})
-            identity = self._worker(result, target, zone)
+            identity = self._worker(result, target, zone, attach_response=True)
         else:
             path = f"/accounts/{self.account}/pages/projects/{target.service}/domains"
             result = self._request("POST", path, json={"name": target.hostname})

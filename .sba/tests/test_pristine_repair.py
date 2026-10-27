@@ -154,4 +154,4 @@ def test_manifest_repair_scope_and_fixed_parent_match_parser():
     manifest = json.loads((Path(__file__).resolve().parents[1] / "manifest.json").read_bytes())
     scope = next(row for row in manifest["repairs"] if row["id"] == REPAIR_ID)
     assert scope["id"] == REPAIR_ID and scope["fromErrorCodes"] == [PARENT_ERROR]
-    assert set(scope["secretNames"]) == SECRETS and manifest["version"] == "1.0.12"
+    assert set(scope["secretNames"]) == SECRETS and manifest["version"] == "1.0.13"

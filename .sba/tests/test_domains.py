@@ -44,6 +44,7 @@ def cloud(monkeypatch):
             self.requests, self.writes = [], []
             self.dns, self.workers, self.pages = {}, {}, {}
             self.mode, self.pending_reads = "normal", 0
+            self.attach_environment, self.read_environment = "production", "production"
 
         def request(self, session, method, url, **options):
             assert session.trust_env is False
@@ -74,6 +75,7 @@ def cloud(monkeypatch):
                         "name": body["hostname"], "proxied": True}
                 else:
                     result = [self.workers[query["hostname"]]] if query["hostname"] in self.workers else []
+                    result = [{**row, "environment": self.read_environment} for row in result]
             elif path.endswith("/pages/projects"):
                 result = [{"name": PAGES, "domains": [PAGES + ".pages.dev", *self.pages]}]
                 if self.mode == "foreign-pages": result[0]["name"] = "foreign-project"
@@ -93,6 +95,10 @@ def cloud(monkeypatch):
                 raise requests.ConnectionError("PRIVATE_PROVIDER_TOKEN")
             if method != "GET" and self.mode == "wrong-write-identity":
                 result = {**result, "id": "invalid", "service": "foreign"}
+            if method == "PUT" and path.endswith("/workers/domains"):
+                # Script-based attach can return a blank deprecated environment;
+                # subsequent GET still returns the canonical production value.
+                result = {**result, "environment": self.attach_environment}
             raw = json.dumps({"success": True, "errors": None if "/workers/domains" in path else [],
                 "result": result}).encode()
             if self.mode == "direct-worker-domain" and method == "PUT" and path.endswith("/workers/domains"):
@@ -243,6 +249,38 @@ def test_documented_direct_worker_domain_put_response_still_requires_exact_owner
     domains.bind_domain(owner, permit, config().inventory, WORKER, "worker", "fixture-api-token")
     assert len(cloud.writes) == 1
     assert json.loads(store.stages[(permit.operation_id, "worker-domain-owned")])["domainId"] == "a" * 40
+
+
+@pytest.mark.parametrize("mode", ["normal", "direct-worker-domain"])
+def test_worker_domain_empty_attach_environment_requires_strict_production_readback(cloud, mode):
+    cloud.mode, cloud.attach_environment = mode, ""
+    owner, permit, store = held()
+    domains.bind_domain(owner, permit, config().inventory, WORKER, "worker", "fixture-api-token")
+    assert len(cloud.writes) == 1
+    assert json.loads(store.stages[(permit.operation_id, "worker-domain-owned")])["domainId"] == "a" * 40
+    assert json.loads(store.body)["writer"] is not None
+
+
+@pytest.mark.parametrize("environment", [None, False, True, 0, "staging", "prod"])
+def test_worker_domain_attach_rejects_foreign_or_untyped_environment_without_replay(cloud, environment):
+    cloud.attach_environment = environment
+    owner, permit, store = held()
+    with pytest.raises(domains.DomainError, match="OWNERSHIP"):
+        domains.bind_domain(owner, permit, config().inventory, WORKER, "worker", "fixture-api-token")
+    assert len(cloud.writes) == 1
+    assert (permit.operation_id, "worker-domain-owned") not in store.stages
+    assert json.loads(store.body)["writer"] is not None
+
+
+@pytest.mark.parametrize("environment", ["", None, False, "staging"])
+def test_worker_domain_get_never_accepts_blank_or_foreign_environment(cloud, environment):
+    cloud.read_environment = environment
+    owner, permit, store = held()
+    with pytest.raises(domains.DomainError, match="OWNERSHIP"):
+        domains.bind_domain(owner, permit, config().inventory, WORKER, "worker", "fixture-api-token")
+    assert len(cloud.writes) == 1
+    assert (permit.operation_id, "worker-domain-owned") not in store.stages
+    assert json.loads(store.body)["writer"] is not None
 
 
 def test_documented_direct_pages_domain_response_has_single_create_and_verified_dns(cloud):
