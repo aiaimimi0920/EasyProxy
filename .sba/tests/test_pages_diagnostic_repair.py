@@ -265,7 +265,7 @@ def test_two_cas_contenders_cannot_both_get_permits(partial, monkeypatch):
 
 def test_manifest_has_six_exact_scopes_and_unchanged_secret_set():
     manifest = json.loads((Path(__file__).resolve().parents[1] / "manifest.json").read_bytes())
-    assert manifest["version"] == "1.0.11" and len(manifest["repairs"]) == 8
+    assert manifest["version"] == "1.0.12" and len(manifest["repairs"]) == 9
     scope = next(row for row in manifest["repairs"] if row["id"] == CONTEXT["repairId"])
     assert scope["fromErrorCodes"] == [CONTEXT["errorCode"]] and set(scope["secretNames"]) == SECRETS
 

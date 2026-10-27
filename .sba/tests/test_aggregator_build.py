@@ -89,6 +89,70 @@ def test_configured_private_seed_is_preserved_and_unknown_secret_names_are_rejec
         build.configured_seed_secrets({"CLOUDFLARE_API_TOKEN": "fixture"})
 
 
+def test_candidate_generation_defers_liveness_to_required_real_easyproxy_audit(tmp_path, monkeypatch):
+    from test_generation_diagnostics import fixture
+    root, output, calls = fixture(tmp_path, monkeypatch)
+    original_run, observed = build._run, []
+
+    def run(args, cwd, env, label, timeout):
+        if label == "generation":
+            observed.append(list(args))
+            assert not any(name in env for name in ("CLOUDFLARE_API_TOKEN", "GITHUB_TOKEN", "SKIP_ALIVE_CHECK"))
+        return original_run(args, cwd, env, label, timeout)
+
+    monkeypatch.setattr(build, "_run", run)
+    bodies = build.build_aggregator(root, "owner/repo", "a" * 40, output,
+        seed_secrets=dict.fromkeys(build.SEED_SECRETS, build.DISABLED_SEED))
+    assert set(bodies) == build.RAW and calls == ["config", "generation"]
+    args, = observed
+    assert args.count("--skip-alive-check") == 1
+    assert all(args.count(flag) == 1 for flag in ("--overwrite", "--skip-remark", "--invisible", "--server", "--environment"))
+    assert "--no-skip-alive-check" not in args
+
+
+def test_approved_legacy_liveness_can_remove_all_uri_exportable_candidates_without_network(tmp_path):
+    # HTTP 节点可保留但旧 mixed 转换器不导出；候选集合不能先被旧内核的瞬时连通性裁剪。
+    sha = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, check=True).stdout.decode().strip()
+    row = next(row for row in read_gitlinks(ROOT, sha) if row["path"] == "upstreams/aggregator")
+    approved = tmp_path / "approved"
+    checkout = approved / row["path"]
+    checkout.mkdir(parents=True)
+    _materialize_gitlink(row, checkout, ROOT.resolve())
+    inspect_gitlink_checkout(approved.resolve(), row)
+    script = '''import copy, pathlib, socket, sys
+def forbidden(*a, **k):
+    raise RuntimeError("NETWORK_FORBIDDEN")
+socket.socket.connect = forbidden
+socket.create_connection = forbidden
+sys.path.insert(0, sys.argv[1])
+import pipeline
+pipeline.time.sleep = lambda *_: None
+pipeline.utils.chmod = lambda *_: None
+class Process:
+    def __init__(self, *_a, **_k): pass
+    def terminate(self): pass
+pipeline.subprocess.Popen = Process
+pipeline.utils.multi_thread_run = lambda **kwargs: [False for _ in kwargs["tasks"]]
+nodes = [
+    {"name":"synthetic-http", "type":"http", "server":"127.0.0.1", "port":9, "liveness":False},
+    {"name":"synthetic-ss", "type":"ss", "server":"127.0.0.1", "port":10,
+     "cipher":"aes-128-gcm", "password":"synthetic-test-only", "liveness":True},
+]
+root = pathlib.Path(sys.argv[2])
+legacy = pipeline.check_alive_proxies(copy.deepcopy(nodes), "unused", str(root / "legacy"), display=False)
+assert [node["type"] for node in legacy] == ["http"]
+candidates = pipeline.check_alive_proxies(copy.deepcopy(nodes), "unused", str(root / "candidates"), skip=True, display=False)
+assert sorted(node["type"] for node in candidates) == ["http", "ss"]
+print("APPROVED_CANDIDATES_PRESERVED_WITHOUT_NETWORK")
+'''
+    env_root = tmp_path / "environment"
+    env_root.mkdir()
+    result = subprocess.run([sys.executable, "-c", script, str(checkout / "subscribe"), str(tmp_path)],
+        cwd=tmp_path, env=build._environment(env_root), capture_output=True, timeout=30)
+    assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+    assert b"APPROVED_CANDIDATES_PRESERVED_WITHOUT_NETWORK" in result.stdout
+
+
 def test_actual_approved_upstream_local_backend_writes_and_reads_without_network(tmp_path):
     # Worktree root may contain unrelated edits; only the accurate gitlink is the source of this backend test.
     sha = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, check=True).stdout.decode().strip()

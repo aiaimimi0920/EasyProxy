@@ -6,7 +6,10 @@
 准确部署任务为 `dc-9e968056fd18416a915a2f220b1bf81e`，独立验证任务为
 `dc-9f85e79bf52a4570b0cdc313ba93159d`。原 UNKNOWN 回执保留，不改写成成功。
 
-当前 1.0.11 正在准备全新部署的自定义域名支持，尚未发布或上线。复用 SpringBok
+1.0.11 已正常发布，但全新部署任务 `dc-92bbbbc744784ec6adf13a37ddd68f97` 返回
+`EASYPROXY_SBA_GENERATION_OUTPUTS_UNKNOWN`，没有上线成功。旧部署已按批准清单清理；
+新 D1/R2 已预创建，R2 为空、无 control/writer，Worker/Pages/GitHub environment 尚不存在。
+全部备份继续保留。下述自定义域名支持复用 SpringBok
 已有 zone/subdomain 选择器，配置仍为 11 键；仅自定义域名配置追加准确 domain inventory，
 旧 provider-only inventory/digest 与八项准确 repair 合同保持。先真实核对账号、活跃 zone、
 DNS 和 association，空闲域名单次绑定，传播等待仅 GET；UNKNOWN 停写并保留 writer。
@@ -15,6 +18,24 @@ DNS 和 association，空闲域名单次绑定，传播等待仅 GET；UNKNOWN �
 自动 managed-sync、周期 refresh 与升级备份的管理密码、Cookie、manifest token 始终发往
 准确项目的 `pages.dev` 管理地址，不跟随可变的自定义 DNS；订阅和 ECH connector 使用
 批准的公开 Worker 地址。自定义公开产物地址必须与对应 Worker inventory 精确匹配。
+
+1.0.12 候选修复隔离生成的职责边界：这里只收集、去重和格式转换，不先用 upstream 的
+旧 Clash 内核裁剪候选。当前准确 main 的无凭据 hosted 预检和本地生成均复现
+`public-mixed.artifact` 缺失；本地输出仅剩 HTTP 节点，旧转换器无法把它们导出为 mixed。
+对照实验仅取消旧内核预筛即可生成全部必需格式。使用明确的 `--skip-alive-check`，
+不继承环境开关、不添加假节点、不补空文件、不放宽 TLS 或格式校验。
+这不代表候选可用：后续准确 EasyProxy 镜像的真实消费审计、有效节点数量、晋级、同步和
+独立公开验证仍是原有硬门禁；审计失败不得发布稳定版本或提交套件版本。
+当前修复尚未发布、未提交恢复任务，也没有执行新实例 verify 或真实双来源消费验收。
+
+针对这个准确新 deploy，已获批准准备独立 `continue-fresh-pristine-deployment`，只接受原
+1.0.11 task/run/请求与结果摘要及完整配置摘要（含同一 D1/R2 与两个批准公开域名）。
+这不是八个历史 repair 的泛化：先只读核原 executor/原 ZIP 回执、R2 零对象且无 control、
+D1 身份和空 schema、Worker/Pages/environment 不存在、空刷新 registry、可用 workflow、
+活跃 zone 与空 DNS/association；本地构建后、首次写入前再完整重核一次。任一漂移停写。
+没有旧 writer，因此只走首次 `begin("deploy")`，不 CAS、不清锁、不删除或重建资源，
+不重写原 UNKNOWN。仅执行此前尚未发生的初始化与完整发布审计；再次 UNKNOWN 不自动恢复。
+完成正常发布、无部署凭据预检和新鲜现场核对后，才经 SpringBok 正常 UI 单次执行。
 
 隔离 preview 仍使用 provider origins；其正式源可以使用自定义域名。自定义域名 preview
 及其清理在任何云操作前拒绝，不声称已经支持正式套件的域名删除。旧资源清理按本轮已批准

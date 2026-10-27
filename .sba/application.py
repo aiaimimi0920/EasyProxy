@@ -9,6 +9,7 @@ from audit_image import build_image, build_runtime
 from deploy import deploy_suite
 from destroy_preview import destroy_preview
 from diagnostics import phase
+from fresh_pristine_repair import assert_fresh_pristine
 from migration_prepare import prepare_migration
 from preview import preview_suite
 from pristine_repair import assert_pristine
@@ -17,6 +18,7 @@ from request import ApplicationRequest
 from repair_context import REPAIR_ID, GITHUB_REPAIR_ID, PAGES_REPAIR_ID, ASSETS_REPAIR_ID
 from repair_context import GENERATION_REPAIR_ID, PAGES_DIAGNOSTIC_REPAIR_ID
 from repair_context import GENERATION_OUTPUTS_REPAIR_ID, PAGES_ASSET_PROTOCOL_REPAIR_ID
+from repair_context import FRESH_PRISTINE_REPAIR_ID
 from sealed_box import build_sealer
 from sources import inspect_checkout
 from toolchain import build_cli, prepare_linux_tools
@@ -46,6 +48,10 @@ def execute(request: ApplicationRequest, root: Path, output: Path, *, environmen
     if request.action == "repair" and request.context.get("repairId") == REPAIR_ID:
         with phase("PRISTINE"):
             assert_pristine(request, values)
+    fresh_pristine = request.action == "repair" and request.context.get("repairId") == FRESH_PRISTINE_REPAIR_ID
+    if fresh_pristine:
+        with phase("FRESH_PRISTINE"):
+            assert_fresh_pristine(request, values)
     with phase("TOOLS"):
         tools = prepare_linux_tools(output / "tools")
     with phase("RUNTIME"):
@@ -67,6 +73,10 @@ def execute(request: ApplicationRequest, root: Path, output: Path, *, environmen
             migration = prepare_migration(request.config, request.candidate, root, tools, executable, output / "migration")
     deployment = replace(request, action="deploy", previous=None, context=None) if request.action == "repair" else request
     recovery = {"recovery_request": request} if request.action == "repair" and request.context.get("repairId") in (GITHUB_REPAIR_ID, PAGES_REPAIR_ID, ASSETS_REPAIR_ID, GENERATION_REPAIR_ID, PAGES_DIAGNOSTIC_REPAIR_ID, GENERATION_OUTPUTS_REPAIR_ID, PAGES_ASSET_PROTOCOL_REPAIR_ID) else {}
+    if fresh_pristine:
+        # 长时间本地构建后、首次写入前重核全部空现场；不使用旧 writer 恢复路径。
+        with phase("FRESH_PRISTINE"):
+            assert_fresh_pristine(request, values)
     with phase("PUBLISH"):
         result = deploy_suite(deployment, root, tools, image, sealer, bodies, output / "publish",
                               credentials=values, migration_settings=migration, **recovery)

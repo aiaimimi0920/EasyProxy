@@ -6,6 +6,7 @@ import json
 import re
 
 from coordination import SHA, VERSION
+from fresh_pristine_config import configuration_matches
 from sealed_box import secret_value
 from repair_context import CONTEXT_FIELDS, PARENT_ERROR, PARENT_RELEASE, REPAIR_ID, GITHUB_CONTEXT, GITHUB_PARENT_RELEASE
 from repair_context import PAGES_CONTEXT, PAGES_PARENT_RELEASE, ASSETS_CONTEXT, ASSETS_PARENT_RELEASE
@@ -13,6 +14,7 @@ from repair_context import GENERATION_CONTEXT, GENERATION_PARENT_RELEASE
 from repair_context import PAGES_DIAGNOSTIC_CONTEXT, PAGES_DIAGNOSTIC_PARENT_RELEASE
 from repair_context import GENERATION_OUTPUTS_CONTEXT, GENERATION_OUTPUTS_PARENT_RELEASE
 from repair_context import PAGES_ASSET_PROTOCOL_CONTEXT, PAGES_ASSET_PROTOCOL_PARENT_RELEASE
+from repair_context import FRESH_PRISTINE_CONTEXT, FRESH_PRISTINE_PARENT_RELEASE
 from suite_config import ConfigurationError, SuiteConfig, parse_configuration
 
 
@@ -73,6 +75,10 @@ def repair_context(value, config):
     exact(context, CONTEXT_FIELDS)
     task(context["parentTaskId"])
     require(config.repository == "aiaimimi0920/easyproxy" and context["parentTaskId"] != value["taskId"])
+    if context["repairId"] == FRESH_PRISTINE_CONTEXT["repairId"]:
+        require(type(context["parentRunId"]) is int and context == FRESH_PRISTINE_CONTEXT
+                and value["previous"] == FRESH_PRISTINE_PARENT_RELEASE and configuration_matches(config))
+        return
     if context["repairId"] == GITHUB_CONTEXT["repairId"]:
         require(context == GITHUB_CONTEXT and value["previous"] == GITHUB_PARENT_RELEASE)
         return

@@ -164,7 +164,9 @@ def build_aggregator(root: Path, repository: str, source_sha: str, output: Path,
         config_path.write_text(json.dumps(config, ensure_ascii=False), encoding="utf-8")
         empty_env.write_text("", encoding="utf-8")
     with phase("GENERATION_COLLECT"):
-        _run([sys.executable, "-u", "subscribe/process.py", "--overwrite", "--skip-remark", "--invisible",
+        # 这里只收集/转换候选；旧 Clash 的瞬时预筛不能删光某格式的节点。
+        # 是否可发布仍由后续准确 EasyProxy 镜像的真实消费审计与晋级门禁决定。
+        _run([sys.executable, "-u", "subscribe/process.py", "--overwrite", "--skip-remark", "--invisible", "--skip-alive-check",
               "--environment", str(empty_env), "--server", str(config_path)], workspace, env, "generation", 2400)
     with phase("GENERATION_READBACK"):
         verify_runtime(workspace, runtime)
