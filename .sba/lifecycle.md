@@ -8,10 +8,16 @@ repair `dc-9e968056fd18416a915a2f220b1bf81e`，verify
 
 1.0.11 已发布，旧服务已按批准清单备份、冻结并清理；SpringBok 全新 deploy 任务
 `dc-92bbbbc744784ec6adf13a37ddd68f97` 在生成输出阶段 UNKNOWN，尚未上线。
-新 R2 为空、无 control/writer，Worker/Pages/GitHub environment 尚不存在。
-1.0.12 候选只修生成职责：候选阶段明确跳过旧 Clash 连通性预筛，保留格式与 TLS 检查；
+1.0.12 已正常发布，准确 main CI 与 hosted 无部署凭据预检通过；正常 UI 单次继续任务
+`dc-730884501d3a4bea85ebea4795196e81` / run `40480678166` 在 Edge 阶段 UNKNOWN。
+新 D1 已初始化、GitHub 配置完成、Worker 和其自定义域名已建；Pages 未建，R2 五个对象、
+非空 writer 与 `active=null` 均保留。停止所有后续云写入，不能用空现场继续入口重发。
+1.0.12 修复生成职责：候选阶段明确跳过旧 Clash 连通性预筛，保留格式与 TLS 检查；
 真正可发布性仍由准确 EasyProxy 镜像的消费审计、有效节点数量和全部晋级门禁决定。
-生成修复本身不授权重放生产任务、清锁或通用接管。只有整条流程和真实代理测试通过才删除本任务
+已证实新 Edge 失败机制为域名创建响应的 deprecated environment 空字符串与随后 GET 的
+production 不一致；旧校验在创建已成功后拒绝。后续本地窄修只兼容 PUT 的空字符串，GET
+仍严格要求 production 和同一完整归属。修复尚未发布，也未新增恢复或移交 writer。
+生成或域名修复本身不授权重放生产任务、清锁或通用接管。只有整条流程和真实代理测试通过才删除本任务
 备份副本；源码、凭据原件和审计保留。
 
 新建的自定义域名必须归属同一活跃 zone/account，DNS 与 Worker/Pages association 均为空；
@@ -123,12 +129,31 @@ run `40468362650` 的准确 deploy UNKNOWN；previous 为准确 1.0.11，原结�
 完整公开配置摘要绑定 `easyproxy-main`、同一预创建 D1/R2 及批准的两个 `yamiyu.com`
 origin。八个历史入口不变，不能把其他生成失败或另一实例路由到本入口。
 
+该入口已单次执行并在后续 Edge 阶段 UNKNOWN，批准已消费；现在的同一实例已不是空现场，
+不允许再次使用本入口。保留新 UNKNOWN、原五个对象及全部资源，不自动重试或清锁。
+
 正常源码发布及无部署凭据预检后，经正常 UI 单次继续；构建前与首次写入前均只读核原
 executor 终态、固定 ZIP 摘要和严格回执，D1 空 schema、R2 全空/无 control，Worker、Pages、
 environment 不存在，registry 为空，workflow active，zone 活跃且 DNS/association 空闲。
 任一漂移拒绝。没有非空 writer，不执行移交、清锁、CAS 或资源删除/重建；随后仅首次
 初始化与完整发布/真实审计。原 UNKNOWN 保留；再次 UNKNOWN 停写，不自动再次继续。
 成功后仍须独立 verify 与真实双来源 TLS 消费，不能以 executor 成功代替业务通过。
+
+### 独立 repair：准确 1.0.12 域名成功响应中断点
+
+用户已另行批准 `continue-fresh-domain-ack-deployment`；仅接受
+`dc-730884501d3a4bea85ebea4795196e81` / run `40480678166` 的准确 repair UNKNOWN，
+固定其旧 executor、ZIP/回执摘要、完整配置和原 control/ETag 及五对象正文/ETag。
+先完整只读重核同一 D1 已初始化且业务为空、准确 GitHub environment/策略/变量/秘密名称/
+workflow/唯一 registry、Worker业务bundle/两个公开origin及准确domain/DNS identity，Pages和
+其domain/DNS仍不存在。任一漂移停止；先create-only新移交证据，再单次CAS移交仍非空writer。
+九历史入口和原五对象/UNKNOWN不改，不清锁、不改平台数据库、不删或重建资源。
+
+D1/GitHub只读不重做；Worker只做同bundle新版本单次upload，跳过enable-subdomain，已建
+domain/DNS只读、不attach，在新operation记录独立归属证据；Pages/domain仅执行首次发布。
+后续真实消费审计、数量、晋级、同步、公开读回和套件commit保持。正常PR/mainCI、平台及
+固定Linux executor发布、完整原生验证和无部署凭据预检后才单次提交；新UNKNOWN停写，
+不自动再恢复或回滚。独立verify和真实双来源TLS消费另验，全部通过前保留任务备份。
 
 ### 独立 repair：准确 GitHub 创建响应中断点
 

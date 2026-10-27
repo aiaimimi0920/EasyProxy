@@ -48,11 +48,11 @@ def test_old_resource_version_and_unreviewed_parents_are_rejected(previous):
 
 def test_manifest_keeps_all_seven_old_scopes_and_all_secrets():
     manifest = json.loads((Path(__file__).resolve().parents[1] / "manifest.json").read_bytes())
-    assert manifest["version"] == "1.0.12" and len(manifest["repairs"]) == 9
-    scope = manifest["repairs"][-2]
+    assert manifest["version"] == "1.0.13" and len(manifest["repairs"]) == 10
+    scope = manifest["repairs"][7]
     assert scope["id"] == CONTEXT["repairId"] and scope["fromErrorCodes"] == [CONTEXT["errorCode"]]
     assert set(scope["secretNames"]) == SECRETS
-    old = {**manifest, "version": "1.0.9", "repairs": manifest["repairs"][:-2]}
+    old = {**manifest, "version": "1.0.9", "repairs": manifest["repairs"][:7]}
     assert hashlib.sha256(json.dumps(old, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest() == "376198a879a1c1980e46a3e87da2ab56c0b1cabc1023507f8af66aee92f302a2"
 
 

@@ -97,3 +97,15 @@ FRESH_PRISTINE_CONTEXT = {
     "resultDigest": "e9cdf761766d40155f42cbd070622fb08e02e18dfe8880c76976d6e34939ef6f",
     "errorCode": "EASYPROXY_SBA_GENERATION_OUTPUTS_UNKNOWN",
 }
+
+# 本次首次域名 PUT 已成功，只有响应解析失败；不得再 attach 或重放已完成阶段。
+FRESH_DOMAIN_REPAIR_ID = "continue-fresh-domain-ack-deployment"
+FRESH_DOMAIN_PARENT_RELEASE = {"sourceSha": "b502f88e04958611467c187c0fa42784a944c08a", "applicationVersion": "1.0.12"}
+FRESH_DOMAIN_CONTEXT = {
+    "repairId": FRESH_DOMAIN_REPAIR_ID,
+    "parentTaskId": "dc-730884501d3a4bea85ebea4795196e81",
+    "parentRunId": 40480678166,
+    "requestDigest": "89084772a738ae2c9bab1e91e40b73bc6e0a87d019161d50ab9ccfc6aa9e3f32",
+    "resultDigest": "e5f92456a43f07d8b6735919996921168eb67458f183bf5193cd3b30ec18d914",
+    "errorCode": "EASYPROXY_SBA_EDGE_UNKNOWN",
+}

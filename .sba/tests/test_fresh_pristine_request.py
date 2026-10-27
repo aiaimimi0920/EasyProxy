@@ -87,11 +87,11 @@ def test_even_another_well_formed_instance_with_same_parent_is_refused(approved)
 
 def test_manifest_preserves_all_eight_old_repairs_and_all_other_contracts():
     manifest = json.loads((Path(__file__).resolve().parents[1] / "manifest.json").read_bytes())
-    assert manifest["version"] == "1.0.12" and len(manifest["repairs"]) == 9
-    scope = manifest["repairs"][-1]
+    assert manifest["version"] == "1.0.13" and len(manifest["repairs"]) == 10
+    scope = manifest["repairs"][8]
     assert scope["id"] == CONTEXT["repairId"] and scope["fromErrorCodes"] == [CONTEXT["errorCode"]]
     assert set(scope["secretNames"]) == SECRETS
-    old = {**manifest, "version": "1.0.11", "repairs": manifest["repairs"][:-1]}
+    old = {**manifest, "version": "1.0.11", "repairs": manifest["repairs"][:8]}
     # Full reviewed previous manifest; no historical scope or secret is weakened.
     assert hashlib.sha256(json.dumps(old, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest() == "3e0c5c4144a6e7df74188b7c9040e3eb270660d00775a4d0ea1e60f38f6213fc"
 
