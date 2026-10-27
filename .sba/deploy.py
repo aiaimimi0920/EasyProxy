@@ -11,6 +11,7 @@ from assets_repair import begin_recovery as begin_assets_recovery
 from coordination import Coordinator, r2_store
 from d1_init import initialize_d1
 from diagnostics import phase
+from domains import preflight_domains
 from ech import EchDeployment, metadata as worker_metadata, publish_ech
 from github_environment import REFRESH_SECRETS, configure_environment, reviewed_workflow
 from github_repair import begin_recovery, verify_initialized
@@ -73,9 +74,11 @@ def deploy_suite(request: ApplicationRequest, root: Path, tools: LinuxTools, ima
     bodies = dict(bodies)
     inspect_checkout(root, config.repository, release["sourceSha"])
     reviewed_workflow(root)  # Missing schedule is a preflight rejection, not a successful suite.
+    with phase("DOMAINS"):
+        preflight_domains(config, credentials["EASYPROXY_CLOUDFLARE_API_TOKEN"], existing=request.action == "update")
     if migration_settings is not None:
         require(migration_settings.root == root and migration_settings.database_id == config.database_id
-                and migration_settings.base_url == config.pages_origin)
+                and migration_settings.base_url == f"https://{config.pages_name}.pages.dev")
     with phase("WRITER"):
         store = r2_store(config.account_id, config.bucket, credentials["EASYPROXY_R2_ACCESS_KEY_ID"],
                          credentials["EASYPROXY_R2_SECRET_ACCESS_KEY"])
@@ -87,10 +90,12 @@ def deploy_suite(request: ApplicationRequest, root: Path, tools: LinuxTools, ima
                             "COOKIE_SECRET": credentials["EASYPROXY_MISUB_COOKIE_SECRET"],
                             "MANIFEST_TOKEN": credentials["EASYPROXY_MANIFEST_TOKEN"]}
             # Validate formats before even acquiring the durable writer.
-            pages_configuration(owner, release, config.pages_name, config.database_id, page_secrets)
+            pages_configuration(owner, release, config.pages_name, config.database_id, page_secrets,
+                                **({"origin": config.pages_origin} if config.custom_pages_origin is not None else {}))
             worker_metadata(owner, release, credentials["EASYPROXY_ECH_TOKEN"])
             output.mkdir(mode=0o700, parents=True, exist_ok=False)
-            public = PublicArtifacts(config.worker_origin + "/aggregator")
+            public = PublicArtifacts(config.worker_origin + "/aggregator",
+                **({"inventory": config.inventory} if config.custom_worker_origin is not None else {}))
             resume = None
             if recovery_request is None:
                 permit = owner.begin(request.action, release, previous=request.previous)

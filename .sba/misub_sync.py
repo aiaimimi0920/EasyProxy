@@ -37,6 +37,8 @@ class MiSubAPI:
     def __init__(self, project: str, admin_password: str, manifest_token: str):
         require(isinstance(project, str) and re.fullmatch(r"[a-z][a-z0-9-]{1,57}[a-z0-9]", project) is not None, "IDENTITY")
         require(credential(admin_password) and credential(manifest_token), "CREDENTIALS")
+        # Management secrets never follow mutable custom DNS. The upstream CSRF
+        # middleware accepts the request's own origin, independently of public URLs.
         self.origin = "https://" + project + ".pages.dev"
         self.session = secure_session()
         self.manifest_token = manifest_token
@@ -163,7 +165,9 @@ def sync_misub(owner: Coordinator, permit: Permit, candidate: Candidate, audit, 
     require(len(projects) == len(workers) == 1 and projects[0]["id"] == projects[0]["name"]
             and workers[0]["id"] == workers[0]["name"], "IDENTITY")
     ech_origin = public.origin.removesuffix("/aggregator")
-    require(ech_origin.startswith("https://" + workers[0]["name"] + "."), "IDENTITY")
+    domains = [row for row in inventory if row["kind"] == "domain" and row["name"] == workers[0]["name"]]
+    require((len(domains) == 1 and ech_origin == domains[0]["id"]) if domains else
+            ech_origin.startswith("https://" + workers[0]["name"] + "."), "IDENTITY")
     api = MiSubAPI(projects[0]["name"], admin_password, manifest_token)
     try:
         baseline = api.snapshot()

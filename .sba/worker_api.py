@@ -7,6 +7,7 @@ import re
 import requests
 
 from cloudflare_http import api_result, decode_object, secure_session
+from origins import https_origin
 
 
 class WorkerError(RuntimeError):
@@ -95,8 +96,7 @@ class WorkerAPI:
 
 def public_release(origin: str) -> dict:
     """公开版本读回不携带 Cloudflare API token，也不继承 netrc/proxy 凭据。"""
-    require(isinstance(origin, str) and re.fullmatch(r"https://[a-z0-9-]+\.[a-z0-9-]+\.workers\.dev", origin) is not None,
-            "IDENTITY")
+    require(https_origin(origin), "IDENTITY")
     session = secure_session()
     try:
         with session.get(origin + "/.well-known/easyproxy-release.json", timeout=(10, 30),

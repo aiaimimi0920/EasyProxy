@@ -8,6 +8,8 @@ import time
 
 from coordination import Coordinator, Permit, inventory_digest
 from diagnostics import phase
+from domains import bind_domain
+from origins import approved_origin, inventory_origin
 from pages_api import PagesAPI, PagesError, credential, identifier, name, public_release, require
 from pages_build import COMPATIBILITY_DATE, build_pages
 
@@ -22,10 +24,12 @@ class PagesDeployment:
     inventory: list[dict]
 
 
-def configuration(owner: Coordinator, release: dict, project: str, database: str, secrets: dict) -> dict:
+def configuration(owner: Coordinator, release: dict, project: str, database: str, secrets: dict, *, origin: str | None = None) -> dict:
     require(type(secrets) is dict and set(secrets) == {"ADMIN_PASSWORD", "COOKIE_SECRET", "MANIFEST_TOKEN"}
             and all(credential(value) for value in secrets.values()), "BUSINESS_CREDENTIALS")
-    origin = f"https://{name(project)}.pages.dev"
+    provider = f"https://{name(project)}.pages.dev"
+    origin = provider if origin is None else origin
+    require(approved_origin(origin, provider), "IDENTITY")
     plain = {"MISUB_PUBLIC_URL": origin, "MISUB_CALLBACK_URL": origin,
              "EASYPROXY_DEPLOYMENT_NAME": owner.identity["environment"], "CF_PAGES_PROJECT_NAME": project,
              "EASYPROXY_MISUB_D1_DATABASE_ID": identifier(database), "SBA_INVENTORY_DIGEST": owner.inventory_digest,
@@ -109,10 +113,10 @@ def _wait_deployment(api: PagesAPI, initial: dict, project_id: str, release: dic
     raise PagesError("EASYPROXY_SBA_PAGES_DEPLOYMENT_UNKNOWN")
 
 
-def _verify_public(project: str, release: dict):
+def _verify_public(project: str, release: dict, *, origin: str | None = None):
     for attempt in range(12):
         try:
-            value = public_release(project)
+            value = public_release(project, origin=origin) if origin is not None else public_release(project)
             if type(value.get("schemaVersion")) is int and value == {"schemaVersion": 1, "applicationId": "easyproxy-cloud", **release}:
                 return
         except PagesError:
@@ -138,7 +142,11 @@ def publish_pages(owner: Coordinator, permit: Permit, settings: PagesDeployment,
     if resume is not None:
         require(type(resume) is PagesResume, "OWNERSHIP")
         resume.assert_permit(owner, permit)
-    expected = configuration(owner, release, settings.project_name, databases[0]["id"], secrets)
+    provider_origin = f"https://{settings.project_name}.pages.dev"
+    origin = inventory_origin(settings.inventory, settings.project_name, provider_origin)
+    origin_option = {"origin": origin} if origin != provider_origin else {}
+    require(not origin_option or resume is None, "OWNERSHIP")
+    expected = configuration(owner, release, settings.project_name, databases[0]["id"], secrets, **origin_option)
     api = PagesAPI(owner.identity["accountId"], settings.project_name, api_token)
     try:
         with phase("PAGES_BUILD"):
@@ -154,7 +162,7 @@ def publish_pages(owner: Coordinator, permit: Permit, settings: PagesDeployment,
                         and api.deployments() == [], "DEPLOYMENT")
         elif permit.action == "update":
             with phase("PAGES_PARENT_VERIFY"):
-                previous = configuration(owner, state["active"], settings.project_name, databases[0]["id"], secrets)
+                previous = configuration(owner, state["active"], settings.project_name, databases[0]["id"], secrets, **origin_option)
                 project_id = _verify_project(existing, settings.project_name, previous)
                 canonical = existing.get("canonical_deployment")
                 _verify_deployment(canonical, settings.project_name, project_id, state["active"])
@@ -187,11 +195,15 @@ def publish_pages(owner: Coordinator, permit: Permit, settings: PagesDeployment,
             _verify_deployment(project.get("canonical_deployment"), settings.project_name, project_id, release, deployment_id)
         with phase("PAGES_PUBLIC_VERIFY"):
             _verify_public(settings.project_name, release)
+            if origin_option:
+                with phase("DOMAINS"):
+                    bind_domain(owner, permit, settings.inventory, settings.project_name, "pages", api_token)
+                _verify_public(settings.project_name, release, **origin_option)
         with phase("PAGES_FINAL_OWNER"):
             owner.assert_owned(permit)
         return {"checks": {"pages-published": True, "pages-bindings-verified": True, "pages-version-verified": True},
                 "project": settings.project_name, "deploymentId": deployment_id,
-                "origin": f"https://{settings.project_name}.pages.dev", "sourceSha": release["sourceSha"],
+                "origin": origin, "sourceSha": release["sourceSha"],
                 "applicationVersion": release["applicationVersion"], "assetCount": len(artifact.assets),
                 "workerBundleSha256": hashlib.sha256(artifact.worker_bundle).hexdigest()}
     finally:

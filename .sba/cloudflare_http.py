@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -45,7 +46,7 @@ def decode_object(raw: bytes, require) -> dict:
 
 
 def api_result(session: requests.Session, token: str, method: str, path: str, require, *, missing_code=None,
-               pages_asset_response=False, diagnostic=None, **kwargs):
+               pages_asset_response=False, worker_domain_response=False, pages_domain_response=False, diagnostic=None, **kwargs):
     require(diagnostic is None or type(diagnostic) is ResponseDiagnostic, "IDENTITY")
     _mark(diagnostic, None)
     # Only typed provider clients construct paths. There is no configurable host.
@@ -54,6 +55,14 @@ def api_result(session: requests.Session, token: str, method: str, path: str, re
     # omit result. Scope these wire exceptions to exact asset POST endpoints.
     require(type(pages_asset_response) is bool and (not pages_asset_response or method == "POST"
             and path in ("/pages/assets/check-missing", "/pages/assets/upload", "/pages/assets/upsert-hashes")), "IDENTITY")
+    # Workers Domains GET uses nullable errors; its documented PUT response can
+    # be a direct domain object. Neither exception applies to Worker uploads.
+    require(type(worker_domain_response) is bool and (not worker_domain_response or
+            method in ("GET", "PUT") and re.fullmatch(r"/accounts/[a-f0-9]{32}/workers/domains", path) is not None), "IDENTITY")
+    pages_domain_path = re.fullmatch(r"/accounts/[a-f0-9]{32}/pages/projects/[a-z0-9-]+/domains(/[^/]+)?", path)
+    require(type(pages_domain_response) is bool and (not pages_domain_response or pages_domain_path is not None
+            and ((method == "POST" and pages_domain_path[1] is None) or
+                 (method == "GET" and pages_domain_path[1] is not None))), "IDENTITY")
     try:
         with session.request(method, "https://api.cloudflare.com/client/v4" + path,
                              headers={"Authorization": "Bearer " + token}, timeout=(10, 60),
@@ -79,7 +88,15 @@ def api_result(session: requests.Session, token: str, method: str, path: str, re
                 _mark(diagnostic, None)
                 return None
             require(200 <= response.status_code < 300, "REQUEST_UNKNOWN")
-            require(payload.get("success") is True and payload.get("errors", [] if pages_asset_response else None) == []
+            if (worker_domain_response and method == "PUT" or pages_domain_response) and "success" not in payload:
+                fields = ({"id", "hostname", "service", "zone_id", "zone_name", "environment", "enabled", "previews_enabled"}
+                          if worker_domain_response else {"id", "domain_id", "name", "zone_tag", "status"})
+                require(not {"errors", "messages", "result"}.intersection(payload) and
+                        fields.issubset(payload), "RESPONSE_UNKNOWN")
+                _mark(diagnostic, None)
+                return payload  # DomainAPI must still validate the exact owning target.
+            errors = payload.get("errors", [] if pages_asset_response else None)
+            require(payload.get("success") is True and (errors == [] or worker_domain_response and errors is None)
                     and ("result" in payload or pages_asset_response and path in
                          ("/pages/assets/upload", "/pages/assets/upsert-hashes")),
                     "RESPONSE_UNKNOWN")

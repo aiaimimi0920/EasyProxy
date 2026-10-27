@@ -9,6 +9,7 @@ import requests
 
 from cloudflare_http import api_result, decode_object, secure_session
 from diagnostics import pages_phase
+from origins import approved_origin
 from worker_api import credential
 
 
@@ -121,10 +122,13 @@ class PagesAPI:
             return value
 
 
-def public_release(project: str) -> dict:
+def public_release(project: str, *, origin: str | None = None) -> dict:
+    provider = f"https://{name(project)}.pages.dev"
+    origin = provider if origin is None else origin
+    require(approved_origin(origin, provider), "IDENTITY")
     session = secure_session()
     try:
-        with session.get(f"https://{name(project)}.pages.dev/.well-known/easyproxy-release.json",
+        with session.get(origin + "/.well-known/easyproxy-release.json",
                          headers={"Cache-Control": "no-cache"}, timeout=(10, 30), allow_redirects=False, stream=True) as response:
             require(response.status_code == 200, "PUBLIC_VERSION")
             raw = bytearray()

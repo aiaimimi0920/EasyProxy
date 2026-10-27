@@ -143,7 +143,8 @@ def migrate_misub(owner: Coordinator, permit: Permit, settings: MiSubMigration, 
     pages = [item for item in manifest["resources"] if item.get("kind") == "pages"]
     _require(len(pages) == 1 and isinstance(pages[0].get("name"), str) and
              re.fullmatch(r"[a-z][a-z0-9-]{1,57}[a-z0-9]", pages[0]["name"]) is not None and
-             pages[0].get("id") == pages[0]["name"] and settings.base_url == f"https://{pages[0]['name']}.pages.dev", "IDENTITY")
+             pages[0].get("id") == pages[0]["name"] and
+             settings.base_url == f"https://{pages[0]['name']}.pages.dev", "IDENTITY")
     settings.workdir.mkdir(parents=True, exist_ok=False)
     names = {"PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "COMSPEC", "SYSTEMDRIVE"}
     secret_names = {"CLOUDFLARE_API_TOKEN", "MISUB_ADMIN_PASSWORD", "EASYPROXY_BACKUP_PASSPHRASE"}

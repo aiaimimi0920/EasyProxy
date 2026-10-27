@@ -75,6 +75,8 @@ def preview_suite(request: ApplicationRequest, root: Path, tools: LinuxTools, im
     require(type(request) is ApplicationRequest and request.action == "preview" and type(tools) is LinuxTools
             and type(image) is AuditImage and type(sealer) is Sealer and request.context is not None)
     config, release = request.config, request.candidate
+    # Isolated rehearsals use provider origins; no custom DNS cleanup contract.
+    require(config.custom_pages_origin is None and config.custom_worker_origin is None)
     source = request.context["source"]
     original = parse_configuration(source["configuration"], repository=config.repository, environment=source["environment"])
     require(root.is_absolute() and root.resolve(strict=True) == root and output.is_absolute()

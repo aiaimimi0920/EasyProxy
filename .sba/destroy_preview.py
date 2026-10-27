@@ -30,6 +30,7 @@ def destroy_preview(request: ApplicationRequest, root: Path, output: Path, *, cr
     require(root.is_absolute() and root.resolve(strict=True) == root and output.is_absolute()
             and output.resolve() == output and not output.exists() and root != output and root not in output.parents)
     config = request.config
+    require(config.custom_pages_origin is None and config.custom_worker_origin is None)
     inspect_checkout(root, config.repository, request.source_sha)
     clients, stores = [], []
     try:

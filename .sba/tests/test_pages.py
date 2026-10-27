@@ -248,8 +248,9 @@ def api_wire(monkeypatch):
                 assert target.path.startswith(f"/client/v4/accounts/{IDENTITY['accountId']}/pages/")
                 assert request.headers["Authorization"] == "Bearer fixture-api-token"
         else:
-            assert target.netloc == PROJECT + ".pages.dev"
+            assert target.netloc == PROJECT + ".pages.dev" or target.netloc == record.get("customHost")
             assert "Authorization" not in request.headers and "Cookie" not in request.headers
+            record.setdefault("publicHosts", []).append(target.netloc)
         request.url = f"http://127.0.0.1:{server.server_port}" + target.path
         return original_send(adapter, request, **kwargs)
 
