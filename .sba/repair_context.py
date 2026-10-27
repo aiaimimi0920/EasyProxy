@@ -85,3 +85,15 @@ PAGES_ASSET_PROTOCOL_CONTEXT = {
     "resultDigest": "f20967ee8d4eaa1ea9621ce18ffecbb1dcb9862c4981d8f31596864666397474",
     "errorCode": "EASYPROXY_SBA_PAGES_ASSET_VERIFY_UNKNOWN",
 }
+
+# 全新实例在生成阶段失败，尚无 writer；不复用旧实例的移交入口。
+FRESH_PRISTINE_REPAIR_ID = "continue-fresh-pristine-deployment"
+FRESH_PRISTINE_PARENT_RELEASE = {"sourceSha": "105e7128da842f738501c48866a5b6dfe597a827", "applicationVersion": "1.0.11"}
+FRESH_PRISTINE_CONTEXT = {
+    "repairId": FRESH_PRISTINE_REPAIR_ID,
+    "parentTaskId": "dc-92bbbbc744784ec6adf13a37ddd68f97",
+    "parentRunId": 40468362650,
+    "requestDigest": "7719f5c388120908e7bcab7041f64238b70a3d560cdf253629432e0eede60f75",
+    "resultDigest": "e9cdf761766d40155f42cbd070622fb08e02e18dfe8880c76976d6e34939ef6f",
+    "errorCode": "EASYPROXY_SBA_GENERATION_OUTPUTS_UNKNOWN",
+}

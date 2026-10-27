@@ -57,12 +57,12 @@ def test_failed_candidate_and_resource_version_cannot_be_confused(previous):
 def test_manifest_only_appends_one_exact_scope_and_keeps_all_old_scopes_and_secrets():
     root = Path(__file__).resolve().parents[2]
     manifest = json.loads((root / ".sba/manifest.json").read_bytes())
-    assert manifest["version"] == "1.0.11" and len(manifest["repairs"]) == 8
-    assert manifest["repairs"][-2]["id"] == CONTEXT["repairId"]
-    assert manifest["repairs"][-2]["fromErrorCodes"] == [CONTEXT["errorCode"]]
-    assert set(manifest["repairs"][-2]["secretNames"]) == SECRETS
+    assert manifest["version"] == "1.0.12" and len(manifest["repairs"]) == 9
+    assert manifest["repairs"][-3]["id"] == CONTEXT["repairId"]
+    assert manifest["repairs"][-3]["fromErrorCodes"] == [CONTEXT["errorCode"]]
+    assert set(manifest["repairs"][-3]["secretNames"]) == SECRETS
     # Canonical old manifest from reviewed 7df6b7d; also works in shallow checkouts.
-    old_shape = {**manifest, "version": "1.0.8", "repairs": manifest["repairs"][:-2]}
+    old_shape = {**manifest, "version": "1.0.8", "repairs": manifest["repairs"][:-3]}
     raw = json.dumps(old_shape, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
     assert hashlib.sha256(raw).hexdigest() == "55b82f088c765627c0a9fcffc9b526d97b865b90fefc04424b92ebf778a59d2b"
 

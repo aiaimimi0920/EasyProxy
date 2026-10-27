@@ -6,9 +6,13 @@
 repair `dc-9e968056fd18416a915a2f220b1bf81e`，verify
 `dc-9f85e79bf52a4570b0cdc313ba93159d`。旧失败回执仍保留；历史 UNKNOWN 不改写。
 
-1.0.11 正在准备独立新实例的自定义域名支持，尚未发布、停旧服务或提交新部署。
-先按准确清单冻结旧 writers 并完成最终备份，再清理旧资源，最后经 SpringBok new deploy
-新建。只有整条流程和真实代理测试通过才删除本任务备份副本；源码、凭据原件和审计保留。
+1.0.11 已发布，旧服务已按批准清单备份、冻结并清理；SpringBok 全新 deploy 任务
+`dc-92bbbbc744784ec6adf13a37ddd68f97` 在生成输出阶段 UNKNOWN，尚未上线。
+新 R2 为空、无 control/writer，Worker/Pages/GitHub environment 尚不存在。
+1.0.12 候选只修生成职责：候选阶段明确跳过旧 Clash 连通性预筛，保留格式与 TLS 检查；
+真正可发布性仍由准确 EasyProxy 镜像的消费审计、有效节点数量和全部晋级门禁决定。
+生成修复本身不授权重放生产任务、清锁或通用接管。只有整条流程和真实代理测试通过才删除本任务
+备份副本；源码、凭据原件和审计保留。
 
 新建的自定义域名必须归属同一活跃 zone/account，DNS 与 Worker/Pages association 均为空；
 部署单次创建绑定和必要 DNS，成功读回 domain/zone/DNS ID 并保存证据；未知回执不重放。
@@ -111,6 +115,20 @@ hosted预检通过，后者已禁网复现并修复真实进程池整批丢结�
 `service-ready`；外层 action 为 repair，原 UNKNOWN 回执不变。全部 provider 发布仍有自身
 归属/单次写入检查；外部竞态或新故障仍可能 UNKNOWN，不能再次自动 repair 或换环境绕过。
 修复完成后仍须固定修复 SHA/version/config 的独立无写凭据 verify，再做本地真实消费验收。
+
+### 独立 repair：准确 1.0.11 新实例空现场继续
+
+`continue-fresh-pristine-deployment` 只接受 `dc-92bbbbc744784ec6adf13a37ddd68f97` /
+run `40468362650` 的准确 deploy UNKNOWN；previous 为准确 1.0.11，原结果 checks 为空。
+完整公开配置摘要绑定 `easyproxy-main`、同一预创建 D1/R2 及批准的两个 `yamiyu.com`
+origin。八个历史入口不变，不能把其他生成失败或另一实例路由到本入口。
+
+正常源码发布及无部署凭据预检后，经正常 UI 单次继续；构建前与首次写入前均只读核原
+executor 终态、固定 ZIP 摘要和严格回执，D1 空 schema、R2 全空/无 control，Worker、Pages、
+environment 不存在，registry 为空，workflow active，zone 活跃且 DNS/association 空闲。
+任一漂移拒绝。没有非空 writer，不执行移交、清锁、CAS 或资源删除/重建；随后仅首次
+初始化与完整发布/真实审计。原 UNKNOWN 保留；再次 UNKNOWN 停写，不自动再次继续。
+成功后仍须独立 verify 与真实双来源 TLS 消费，不能以 executor 成功代替业务通过。
 
 ### 独立 repair：准确 GitHub 创建响应中断点
 
