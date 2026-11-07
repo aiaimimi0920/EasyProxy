@@ -2,6 +2,61 @@
 
 ## 本轮状态
 
+### 1.0.18 已完成云端恢复与 NAS 更新（2026-11-07 15:08Z）
+
+当前唯一活动套件为 `easyproxy-main`，实例
+`dc-92bbbbc744784ec6adf13a37ddd68f97`；旧 `easyproxy-prod` 登记已退役且保留历史。
+以下旧章节中的“候选”“尚未完成”和旧版本状态均为当时停点，不代表当前运行状态。
+
+本次正常 SpringBok UI 单次提交 task `dc-5f6ec14105a240c297f82ec9c953db8b`，
+run `42383041122` / job `128434527264`，执行器仍为
+`de26192f0be5c1f4df23e82e3ac3104ab59bcf30`。认证 artifact `13578438272` 的业务结果为
+`succeeded`，`data-preserved`、`repair-completed`、`service-ready` 和
+`unchanged-resources-verified` 四项通过，不只是 Actions 外层 success。
+
+运行源码为 `b3c796c15cbf3aab52b5ba0f81e4d846739b3dae`，套件版本 **1.0.18**。
+恢复前再次零写预检全部通过，随后 create-only 消费证据和原 ETag 单次 CAS 移交到新
+operation `616960d156c0400f84432f8d430d6b93`，未清锁或重放旧任务。15:02Z 独立
+GET/HEAD/SELECT 读回确认：
+
+- active、Worker/Pages 公开版本及 provider 配置均为 1.0.18，writer 为 `null`。
+- 七项 stable、immutable release 与公开下载的正文和摘要一致；stable manifest SHA256 为
+  `0a2e79af33cde1c702a16b4bad54ee32bcced8d4bc85f902d33a58191f3b7294`。
+- 本次新审计得到 49 个有效节点、28 个生成来源；MiSub 保存 49 个托管节点和 1 个 ECH
+  connector，公开 runtime manifest 为 50 个来源，节点均绑定本次审计。
+- D1 为 50 subscriptions / 1 profile / 0 settings / 0 cron_executions，migration 1/2 不变；
+  非托管业务行、其他设置及 profile 用户字段与恢复前完整快照一致。
+- 新私有备份 `_sba/backups/616960d156c0400f84432f8d430d6b93/misub.age` 已回读，11876 字节，
+  SHA256 `cb714f622f82549291daf241f380277022fc64c101fdd5b59a61d9d099626539`。
+
+NAS 当前容器 `7833874e754a547cca3fa6830ffa365f5941e8bcf96e77cf0eeb5ed8398c9b6f`，
+完整镜像 `easyproxy/nas:1.0.18-b3c796c15cbf`，NAS image ID
+`sha256:37d122790ffd1c7ccc47471086a81e80c0847f999d08134f189a11ce02dcfd8f`。
+导入前后完整 Config/RootFS/OS/Architecture 一致，二进制 SHA256 为
+`e85b5f1db810e50b7f429715902c2aaef7a58217dd99bcca9ac13b027015c875`。
+切换前在线 SQLite 备份与停止态完整私密备份均通过 integrity_check；停止态包 533417 字节，
+SHA256 `3c1a7c5d0b6579bbe28a69f506fb6ae1c0984f8692b373c94a570242a049c1ed`，并留有本机
+DPAPI 副本。持久 data/config 挂载不变，使用独立 compose project `easyproxy-gateway-1-0-18`，
+配置文件 `/opt/easyproxy-gateway/compose/docker-compose.current-1.0.18.json`。
+
+15:05Z 收敛后真实 HTTP CONNECT TLS 与 SOCKS5 TLS 均返回 204，TUN enabled/applied/ready，
+NAS 保持原 IPv4 开启、IPv6 关闭策略；manifest healthy、fallback false、50 sources / 1
+connector / 6 connector instances。容器 running、RestartCount=0，无 OOM/panic/fatal。
+启动首次同步约 102 秒后才启动代理和管理监听，期间的连接拒绝不是容器崩溃。
+
+验证包括准确源码 Validate run `42381800401` 两项 success、Linux SBA 全套 1969 passed /
+51 skipped、Windows 相关 227 passed / 45 skipped，以及准确完整 NAS 镜像原生双栈 TUN、
+QUIC 和 SOCKS5 UDP `ALL_TUN_E2E_PASS`。Windows bind-mount 的 CRLF 和并发构建负载曾
+导致本地测试环境失败；改用批准 Git 字节、结束并发构建后完整通过，未放宽生产校验。
+65 秒云端日志样本 Edge/Pages 各 1 次 `ok`、0 exception，临时 tail 均关闭；此短窗口不代表
+所有第三方节点长期可用。15:07Z NAS 55 个实例中 32 个第三方节点返回上游鉴权失败，
+均不报告 available/effective_available；当前有效链路实测通过，不伪造坏源可用性。
+
+运行版本已统一，但冗余物理副本清理尚待针对准确清单的删除批准。只读清单锁定 NAS
+7 个停止态旧容器、8 个旧镜像、20 个旧 compose/env 文件及 3 个已导入镜像上传目录；
+当前容器、镜像、compose、data/config、全部备份及云端 UNKNOWN/已写对象均保留。
+未执行任何清理删除，也不把备份或恢复证据误当作冗余运行副本。
+
 ### 1.0.17 的准确结果与 1.0.18 候选
 
 1.0.17 源码 `7b36a847bc5d527a34e79f498feb783026594a09` 已推送，Validate run

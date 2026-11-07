@@ -4,7 +4,12 @@
 > [运行核查与刷新恢复](../docs/operations-repair-2026-11-06.md)。下文保留历史阶段回执，
 > 不能据旧成功任务认定对应云资源仍在运行；当前 Worker/Pages 部分更新也不代表整套成功。
 >
-> 最新 1.0.18 候选仅对 control GET 的临时 HTTP 错误重读一次，并保留固定协调错误分类。
+> 2026-11-07：1.0.18 已经由 SpringBok 单次恢复成功，active、Worker/Pages、stable 聚合订阅
+> 与 NAS 均已统一到源码 `b3c796c15cbf3aab52b5ba0f81e4d846739b3dae`。认证业务回执、独立
+> 云端数据/产物读回及 NAS TLS/TUN 验收已通过；准确证据见 `docs/operations-repair-2026-11-06.md`。
+> 冗余 NAS 副本清理另待准确清单批准，UNKNOWN、备份与恢复证据不删除。
+>
+> 以下为本次已消费入口的历史设计：1.0.18 仅对 control GET 的临时 HTTP 错误重读一次，并保留固定协调错误分类。
 > 当前 manifest 只声明准确 1.0.17 首个 immutable 副本后 UNKNOWN 的一次恢复；固定所有
 > 旧对象、D1 全行摘要、provider 1.0.17 与 active/stable 1.0.13，不重放旧晋级、不删除控制键。
 > 先持久新加密备份，再重新生成/审计和完整晋级同步，最后才 commit；候选不等于上线。
