@@ -109,3 +109,16 @@ FRESH_DOMAIN_CONTEXT = {
     "resultDigest": "e5f92456a43f07d8b6735919996921168eb67458f183bf5193cd3b30ec18d914",
     "errorCode": "EASYPROXY_SBA_EDGE_UNKNOWN",
 }
+
+# 仅本次普通升级在持久备份前失败；不能用于已尝试迁移或发布的 UNKNOWN。
+MIGRATION_REPAIR_ID = "continue-update-before-backup"
+MIGRATION_PARENT_RELEASE = {"sourceSha": "bd79f3330e846673b5c77e1fe582060895bb90cf", "applicationVersion": "1.0.14"}
+MIGRATION_ACTIVE_RELEASE = {"sourceSha": "24b26417b57bd3fc4ffd3f3fb0334c3155373460", "applicationVersion": "1.0.13"}
+MIGRATION_CONTEXT = {
+    "repairId": MIGRATION_REPAIR_ID,
+    "parentTaskId": "dc-441fc65dc20e4b63b58ba65920159a7f",
+    "parentRunId": 42360503031,
+    "requestDigest": "80f490aa182b9da0c406e47e8bd403d25b544d5428635a95b064379548d876fb",
+    "resultDigest": "58e0240c6234d88a581023e294e178cd78bd87ec9e088796045af3302929019e",
+    "errorCode": "EASYPROXY_SBA_MIGRATION_UNKNOWN",
+}

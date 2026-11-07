@@ -1,7 +1,15 @@
 # EasyProxy SBA 实施边界与验证记录
 
 本文件按时间追加实施证据；早期的“尚未实现”是当时停点，不代表当前状态。当前入口、
-五动作、刷新与声明见 [生命周期合同](lifecycle.md)。应用尚未正式上线；负责人均为主 AI。
+五动作、刷新与声明见 [生命周期合同](lifecycle.md)。实际版本和部署回执以最新运行核查为准；负责人均为主 AI。
+
+## 2026-11-07：普通升级备份前失败的限定恢复候选
+
+已定位 direct-D1 fallback 只读 main 聚合行与当前逐项 collection 不匹配。真实 SELECT-only
+对照：旧 reader 0/0，候选完整读出 44 sources / 1 profile，逻辑备份 checksum 校验通过。
+读取器支持逐项对象与历史数组，拒绝无效项和冲突重复 ID，完整 SQL 备份仍保留物理行。
+新增准确父 UNKNOWN 的一次性 update writer 移交，约束和未验证边界见生命周期与运行核查。
+不绕过原 backup retention/migration/publish/commit 检查；并非通用解锁或旧任务重放。
 
 ## EP-SBA-02：R2 单写入者
 

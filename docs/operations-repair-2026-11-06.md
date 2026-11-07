@@ -3,8 +3,9 @@
 ## 本轮状态
 
 用户于 2026-11-07 明确恢复本任务，并批准仅退役旧 `easyproxy-prod` 登记、保留历史任务
-与回执，不触碰 main、NAS 数据或备份。已完成线上核查、本地修复候选和聚焦验证；旧失败
-writer 已按独立证据恢复为空。**EasyProxy 1.0.14 尚未更新部署，旧登记尚未实际退役**。
+与回执，不触碰 main、NAS 数据或备份。旧 refresh writer 已按独立证据恢复；随后普通
+1.0.14 update 产生新的 MIGRATION UNKNOWN，保留新的非空 writer。**生产仍是 1.0.13，
+1.0.15 恢复候选尚未部署；旧 prod 登记已实际退役**。
 不得把本文的修复候选当作已上线，也不得据历史部署成功卡片重新创建一套资源。
 
 ## 为什么显示两套云服务
@@ -23,6 +24,41 @@ SpringBok 显示两个不同实例，而不是同一实例的两次任务：
 当前 SpringBok 的正式删除不支持同时含 Pages 和 GitHub Actions 的混合套件，因此删除
 按钮禁用。不得仅放宽 Worker 删除门禁或直接删历史任务：前者可能遗留数据与后台刷新，
 后者会破坏回执/归属证据。应仅退役准确旧实例登记并保留历史，不触碰 main、NAS 和备份。
+
+2026-11-07 已经正常 owner UI 执行旧登记退役。平台 PR #139/#140/#141 经精确 head 审阅、
+七项 PR/main CI 和控制面发布后，修复仓库大小写 scope 与历史连接 revision 导致的入口
+拒绝。退役计划逐项确认旧 D1（UUID `523a9578-9880-4e9a-8554-10051d3abb6f`）、R2、
+Worker、Pages、GitHub environment 全不存在，刷新 registry 只引用 main；单次确认后
+页面显示“旧服务登记已退役”，活动列表仅一套 EasyProxy。保留历史与 claims，不发资源删除。
+
+## 1.0.14 普通升级与 1.0.15 限定恢复
+
+已提交推送 `bd79f3330e846673b5c77e1fe582060895bb90cf`，完整 Validate run `42359569341`
+两项 job 均通过。正常 UI 单次 update 任务 `dc-441fc65dc20e4b63b58ba65920159a7f` / run
+`42360503031` 虽 executor success，认证业务回执为 `EASYPROXY_SBA_MIGRATION_UNKNOWN`，
+因此不能称升级成功。新 R2 writer 为 `daba9f8f380441cbb5ae64f8bbe6b792`。
+
+只读核对：原 operation 完整阶段列表为空，准确 `misub.age` key HEAD 404；D1 migration
+编号仍为 1/2，公开 Worker/Pages 和 active 都是 1.0.13，stable 字节/ETag 与原记录一致。
+未持久备份意味着当前代码正常路径尚不能执行 migrate；不把“阶段为空”单独当无写入证明。
+
+确定问题：CLI 直接 D1 逻辑备份只取 `subscriptions/profiles.id='main'`。线上分别是 44/1
+条逐项行，没有 main 行；API debug export 和 WebDAV export 也不是 CLI 所需格式。
+已用同一生产 D1 的 SELECT-only 对照复现旧 reader 0/0；候选读取全部 collection 行，
+完整取得 44/1，逻辑备份校验通过，未调用生产 backup/migrate、未写数据或上传备份。
+
+用户已另行明确批准仅本次 UNKNOWN 的恢复更新。1.0.15 候选在原 operation 固定键保存
+不可变消费证据后单次条件移交 writer，绑定完整父 context、配置、原 control SHA/ETag、
+无备份/无阶段、旧公开版本和稳定七产物及 D1 schema/history/44/1/0/0。正常新 update
+仍先 age 加密全库备份、R2 留存并完整读回，再迁移、发布和提交。未知结果不得重放。
+本段记录候选与批准，不等于已执行移交或新版本上线。
+
+候选验证：Linux 相关 13 个测试文件共 464 passed，包括新恢复入口、真实 update 编排、
+备份迁移及旧修复请求。首次扩大验证有 3 项旧索引断言失败，原因是新 manifest 入口插在
+原入口之前；已将新入口追加至末尾，保留原 10 项顺序，未放宽旧断言。容器测试最初因
+只读根目录及 Windows bind-mount 的临时文件语义在启动阶段失败；改用容器内 tmpfs 后
+全部执行通过。Go CLI 全模块 84 passed（11 packages），同范围 `go vet ./...` 通过。
+生产只读恢复预检已通过，尚未写入移交证据或新 writer。
 
 ## 云端刷新持续失败
 
@@ -67,6 +103,11 @@ TUN enabled/applied/ready；manifest healthy、无 fallback，订阅同步没有
 502/503 等错误。不能通过清 blacklist 或把 LAN 密码用于第三方上游来“恢复”它们。
 同一当前凭据经 NAS 显式代理访问 Google 返回 HTTPS 204、空正文，TLS 验证启用；
 这只证明一次真实传输成功，不代表全部节点或所有目标长期健康。
+
+10:10Z 新的有界探测中，SOCKS5 用户认证加 TLS 访问 Google 仍返回 204；HTTP CONNECT
+客户端报 `ConnectionError`，尚需在云更新后检查有限错误分类，不能称两种协议均通过。
+TUN IPv4 ready、IPv6 未就绪；manifest healthy、无 fallback，订阅源为 44、connector
+源为 1、实例为 6。容器仍未重启、无 OOM，最近 15 分钟日志未发现 panic/fatal。
 
 Cloudflare 官方 TCP sockets 文档明确禁止连接 Cloudflare IP、localhost 和私网地址；
 `proxy request failed, cannot connect to the specified address` 是该限制的准确错误。

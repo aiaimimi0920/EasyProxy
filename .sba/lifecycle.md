@@ -1,6 +1,25 @@
 # EasyProxy 标准套件生命周期与调度
 
-## 当前状态（2026-10-27）
+## 当前状态（2026-11-07）
+
+当前生产 active 为 1.0.13；1.0.14 普通 update 在 MIGRATION 阶段 UNKNOWN，未完成升级。
+旧 prod 登记已在 SpringBok 正常 owner UI 退役，仅从活动投影移除，历史/资源 claims 保留。
+准确任务和证据见 [运行核查](../docs/operations-repair-2026-11-06.md)。
+
+1.0.15 候选仅新增 `continue-update-before-backup`，绑定本次 1.0.14 父任务/回执、完整
+配置、control SHA/ETag 和 inventory。原 run/jobs 已结束且无在途 refresh；旧加密备份
+不存在、原 operation/releases 无阶段；D1 身份/schema/history/计数及旧公开版本、稳定
+manifest 和七项产物一致时，才在原 operation 固定键 create-only 保存一次性移交证据，
+读回后单次 CAS 移交新 update writer。active 不变，不清锁、不重放旧任务、十个旧入口不变。
+marker/CAS 未知保持现场，不能再次移交。此入口不支持未来版本或迁移已开始的 UNKNOWN。
+
+恢复仍执行正常 update：逐项对象/旧数组的 D1 逻辑备份、全库 SQL 的 age 加密、私有 R2
+create-only 留存及完整回读校验先于迁移；迁移和发布检查全部通过后才提交新 active。
+HTTP debug export 与当前 WebDAV export 均不是受保护 CLI 所需的逻辑备份格式，明确授权
+的 direct-D1 fallback 仍保留；没有通过放宽校验或替换 API 地址冒充完整备份。
+恢复仅是获批方案；源码验证、提交推送、实际执行和业务验收分别记录，不以此段宣称上线。
+
+## 历史状态（2026-10-27）
 
 1.0.10 已完成正常 SpringBok 恢复、独立 verify 和本地双来源真实 TLS 业务验收：
 repair `dc-9e968056fd18416a915a2f220b1bf81e`，verify

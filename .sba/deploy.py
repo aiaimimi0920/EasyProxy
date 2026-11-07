@@ -23,6 +23,8 @@ from generation_outputs_repair import begin_recovery as begin_generation_outputs
 from pages_asset_protocol_repair import begin_recovery as begin_pages_asset_protocol_recovery
 from misub_sync import sync_misub
 from migration import MiSubMigration, migrate_misub
+from migration_repair import begin_recovery as begin_migration_recovery
+from repair_context import MIGRATION_REPAIR_ID
 from pages import PagesDeployment, configuration as pages_configuration, publish_pages
 from pages_repair import PagesResume, begin_recovery as begin_pages_recovery, verify_configured
 from pages_diagnostic_repair import begin_recovery as begin_pages_diagnostic_recovery
@@ -61,7 +63,8 @@ def deploy_suite(request: ApplicationRequest, root: Path, tools: LinuxTools, ima
             and (request.previous is None) == (request.action == "deploy")
             and type(tools) is LinuxTools and type(image) is AuditImage and type(sealer) is Sealer)
     require(recovery_request is None or type(recovery_request) is ApplicationRequest
-            and recovery_request.action == "repair" and request.action == "deploy"
+            and recovery_request.action == "repair" and (request.action == "deploy" or
+                request.action == "update" and recovery_request.context.get("repairId") == MIGRATION_REPAIR_ID)
             and recovery_request.task_id == request.task_id
             and recovery_request.candidate == request.candidate and recovery_request.config == request.config)
     require(root.is_absolute() and root.resolve(strict=True) == root
@@ -107,6 +110,7 @@ def deploy_suite(request: ApplicationRequest, root: Path, tools: LinuxTools, ima
                 permit = owner.begin(request.action, release, previous=request.previous)
             else:
                 begin = {PAGES_REPAIR_ID: begin_pages_recovery, ASSETS_REPAIR_ID: begin_assets_recovery,
+                         MIGRATION_REPAIR_ID: begin_migration_recovery,
                          FRESH_DOMAIN_REPAIR_ID: begin_fresh_domain_recovery,
                          GENERATION_REPAIR_ID: begin_generation_recovery,
                          GENERATION_OUTPUTS_REPAIR_ID: begin_generation_outputs_recovery,

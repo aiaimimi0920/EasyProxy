@@ -247,3 +247,35 @@ def test_invalid_local_inputs_fail_before_cloud_client_or_writer(prepared, mutat
     with pytest.raises(orchestration.DeploymentError):
         run(values)
     assert prepared[-1]["clients"] == 0 and not prepared[-2].writes
+
+
+def test_migration_recovery_uses_update_stages_and_commits_only_after_backup_and_preservation(prepared, monkeypatch):
+    from coordination import Coordinator
+    from migration import MiSubMigration
+    from repair_context import MIGRATION_REPAIR_ID, MIGRATION_ACTIVE_RELEASE
+    request, root, tools, image, sealer, output, credentials, store, record = prepared
+    owner = Coordinator(store, request.config.identity("production"), request.config.inventory_digest)
+    initial = owner.begin("deploy", MIGRATION_ACTIVE_RELEASE)
+    owner.commit_verified(initial, {"suite-published": True, "service-ready": True})
+    current = replace(request, action="update", previous=MIGRATION_ACTIVE_RELEASE)
+    recovery = replace(request, action="repair", previous={"sourceSha": "d" * 40, "applicationVersion": "1.0.14"}, context={"repairId": MIGRATION_REPAIR_ID})
+    migration = MiSubMigration(root=root, executable=root / "cli", node=root / "node", wrangler=root / "wrangler", topology=root / "topology", manifest=root / "manifest", wrangler_config=root / "config", workdir=root / "work", database_id=request.config.database_id, base_url=f"https://{request.config.pages_name}.pages.dev")
+    def begin(owner, received, source, values):
+        assert received is recovery and source == root and values is credentials
+        return owner.begin("update", request.candidate, previous=MIGRATION_ACTIVE_RELEASE), None
+    def migrate(owner, permit, settings, **_):
+        assert settings is migration and permit.action == "update"
+        owner.assert_owned(permit); record["order"].append("migration")
+        return {"checks": {"backup-created": True, "data-preserved": True, "migration-verified": True}}
+    def verify(*_):
+        assert state(store)["active"] == MIGRATION_ACTIVE_RELEASE and state(store)["writer"] is not None
+        record["order"].append("verify")
+        return {"checks": dict.fromkeys(("release-versions-verified", "published-subscriptions-verified", "pages-frontend-verified"), True), "runId": record["permit"].operation_id, "manifestSha256": "f" * 64, "counts": {"nodes": 1, "sources": 1}}
+    monkeypatch.setattr(orchestration, "begin_migration_recovery", begin)
+    monkeypatch.setattr(orchestration, "migrate_misub", migrate)
+    monkeypatch.setattr(orchestration, "initialize_d1", lambda *_args, **_kwargs: pytest.fail("update must not reinitialize D1"))
+    monkeypatch.setattr(orchestration, "verify_public", verify)
+    result = orchestration.deploy_suite(current, root, tools, image, sealer, BODIES, output, credentials=credentials, migration_settings=migration, recovery_request=recovery)
+    assert record["order"] == ["migration", *ORDER[1:]]
+    assert result == {"checks": {"suite-published": True, "service-ready": True, "backup-created": True, "data-preserved": True}}
+    assert state(store)["active"] == request.candidate and state(store)["writer"] is None

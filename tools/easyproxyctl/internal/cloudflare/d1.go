@@ -126,20 +126,33 @@ func (d D1) ReadMiSubStorage(ctx context.Context, database string) (MiSubStorage
 		target                             *json.RawMessage
 		present                            *bool
 	}{
-		{table: "subscriptions", keyColumn: "id", key: "main", valueColumn: "data"},
-		{table: "profiles", keyColumn: "id", key: "main", valueColumn: "data"},
 		{table: "settings", keyColumn: "key", key: "main", valueColumn: "value"},
 		{table: "cron_executions", keyColumn: "id", key: "last", valueColumn: "data"},
 	}
 	storage := MiSubStorage{}
-	queries[0].target = &storage.Sources
-	queries[0].present = &storage.SourcesPresent
-	queries[1].target = &storage.Profiles
-	queries[1].present = &storage.ProfilesPresent
-	queries[2].target = &storage.Settings
-	queries[2].present = &storage.SettingsPresent
-	queries[3].target = &storage.Cron
-	queries[3].present = &storage.CronPresent
+	// 当前 MiSub 按条目存储；旧版本的 main 行仍可能包含整个数组。
+	for _, collection := range []struct {
+		table   string
+		target  *json.RawMessage
+		present *bool
+	}{{"subscriptions", &storage.Sources, &storage.SourcesPresent}, {"profiles", &storage.Profiles, &storage.ProfilesPresent}} {
+		if !existing[collection.table] {
+			return MiSubStorage{}, fmt.Errorf("D1 is missing required table %s", collection.table)
+		}
+		rows, err := d.query(ctx, database, "SELECT data FROM "+collection.table+" ORDER BY id")
+		if err != nil {
+			return MiSubStorage{}, err
+		}
+		value, err := collectionData(rows)
+		if err != nil {
+			return MiSubStorage{}, fmt.Errorf("D1 %s collection is invalid: %w", collection.table, err)
+		}
+		*collection.target, *collection.present = value, len(rows) > 0
+	}
+	queries[0].target = &storage.Settings
+	queries[0].present = &storage.SettingsPresent
+	queries[1].target = &storage.Cron
+	queries[1].present = &storage.CronPresent
 	for _, query := range queries {
 		if !existing[query.table] {
 			if query.table == "cron_executions" {
@@ -172,6 +185,72 @@ func (d D1) ReadMiSubStorage(ctx context.Context, database string) (MiSubStorage
 		storage.Settings = json.RawMessage(`{}`)
 	}
 	return storage, nil
+}
+
+// 与 MiSub collection reader 一样合并逐项对象与旧数组；备份不能静默丢弃
+// 无效项或冲突副本。全库 SQL 备份仍保存每一物理行，此处仅构造逻辑集合。
+func collectionData(rows []map[string]interface{}) (json.RawMessage, error) {
+	type entry struct {
+		order float64
+		body  json.RawMessage
+	}
+	items := []entry{}
+	seen := map[string]json.RawMessage{}
+	for _, row := range rows {
+		raw, ok := row["data"].(string)
+		if !ok {
+			return nil, errors.New("data is not JSON text")
+		}
+		var value interface{}
+		decoder := json.NewDecoder(bytes.NewBufferString(raw))
+		decoder.UseNumber()
+		if !json.Valid([]byte(raw)) || decoder.Decode(&value) != nil {
+			return nil, errors.New("invalid JSON")
+		}
+		values, array := value.([]interface{})
+		if !array {
+			values = []interface{}{value}
+		}
+		for _, value := range values {
+			object, ok := value.(map[string]interface{})
+			if !ok {
+				return nil, errors.New("item is not an object")
+			}
+			id, ok := object["id"].(string)
+			if !ok || id == "" {
+				return nil, errors.New("item has no ID")
+			}
+			body, err := json.Marshal(object)
+			if err != nil {
+				return nil, err
+			}
+			if prior, exists := seen[id]; exists {
+				if !bytes.Equal(prior, body) {
+					return nil, errors.New("conflicting duplicate ID")
+				}
+				continue
+			}
+			order := 0.0
+			if rawOrder, exists := object["sortIndex"]; exists {
+				number, ok := rawOrder.(json.Number)
+				if !ok {
+					return nil, errors.New("invalid sortIndex")
+				}
+				order, err = number.Float64()
+				if err != nil {
+					return nil, errors.New("invalid sortIndex")
+				}
+			}
+			seen[id] = body
+			items = append(items, entry{order, body})
+		}
+	}
+	sort.SliceStable(items, func(i, j int) bool { return items[i].order < items[j].order })
+	result := make([]json.RawMessage, 0, len(items))
+	for _, item := range items {
+		result = append(result, item.body)
+	}
+	return json.Marshal(result)
 }
 
 func (d D1) query(ctx context.Context, database, statement string) ([]map[string]interface{}, error) {

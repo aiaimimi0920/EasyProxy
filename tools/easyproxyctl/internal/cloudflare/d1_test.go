@@ -2,6 +2,7 @@ package cloudflare
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -97,5 +98,50 @@ func TestD1ReadMiSubStorageDoesNotIgnoreCronQueryFailure(t *testing.T) {
 	})
 	if _, err := (D1{Runner: runner}).ReadMiSubStorage(context.Background(), "db"); err == nil {
 		t.Fatal("cron query error was ignored")
+	}
+}
+
+func TestD1ReadMiSubStorageReadsItemRowsAndLegacyArrays(t *testing.T) {
+	runner := RunnerFunc(func(_ context.Context, args ...string) ([]byte, error) {
+		statement := args[5]
+		var rows interface{}
+		switch statement {
+		case "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name":
+			rows = []map[string]string{{"name": "subscriptions"}, {"name": "profiles"}, {"name": "settings"}}
+		case "SELECT data FROM subscriptions ORDER BY id":
+			rows = []map[string]string{{"data": `{"id":"b","sortIndex":2}`}, {"data": `[{"id":"a","sortIndex":1},{"id":"b","sortIndex":2}]`}}
+		case "SELECT data FROM profiles ORDER BY id":
+			rows = []map[string]string{{"data": `{"id":"profile","subscriptions":["a","b"]}`}}
+		case "SELECT value FROM settings WHERE key = 'main'":
+			rows = []interface{}{}
+		default:
+			t.Fatalf("unexpected query (must not assume canonical main collection): %s", statement)
+		}
+		return json.Marshal([]interface{}{map[string]interface{}{"results": rows}})
+	})
+	value, err := (D1{Runner: runner}).ReadMiSubStorage(context.Background(), "db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(value.Sources) != `[{"id":"a","sortIndex":1},{"id":"b","sortIndex":2}]` || string(value.Profiles) != `[{"id":"profile","subscriptions":["a","b"]}]` || !value.SourcesPresent || !value.ProfilesPresent {
+		t.Fatalf("incomplete item-level logical backup: %+v", value)
+	}
+}
+
+func TestD1ReadMiSubStorageRejectsInvalidOrConflictingCollectionRows(t *testing.T) {
+	for _, values := range [][]string{{`not-json`}, {`null`}, {`{"url":"missing-id"}`}, {`{"id":"a","url":"one"}`, `{"id":"a","url":"two"}`}} {
+		runner := RunnerFunc(func(_ context.Context, args ...string) ([]byte, error) {
+			if strings.Contains(args[5], "sqlite_master") {
+				return []byte(`[{"results":[{"name":"subscriptions"},{"name":"profiles"},{"name":"settings"}]}]`), nil
+			}
+			rows := []map[string]string{}
+			for _, data := range values {
+				rows = append(rows, map[string]string{"data": data})
+			}
+			return json.Marshal([]interface{}{map[string]interface{}{"results": rows}})
+		})
+		if _, err := (D1{Runner: runner}).ReadMiSubStorage(context.Background(), "db"); err == nil {
+			t.Fatalf("invalid collection accepted: %v", values)
+		}
 	}
 }
