@@ -3,6 +3,17 @@
 本文件按时间追加实施证据；早期的“尚未实现”是当时停点，不代表当前状态。当前入口、
 五动作、刷新与声明见 [生命周期合同](lifecycle.md)。实际版本和部署回执以最新运行核查为准；负责人均为主 AI。
 
+## 2026-11-07：1.0.15 备份修复通过，新的晋级前 UNKNOWN 停写
+
+`87f6096` 已提交推送，Validate 两项 job 通过；正常 SpringBok 单次恢复 run
+`42365774495` 完成原 writer 移交、age 加密备份、迁移及 Worker/Pages 发布，但认证回执
+为 `EASYPROXY_SBA_PROMOTION_UNKNOWN`。active/stable 仍是 1.0.13、公开服务版本为
+1.0.15，新 writer 保留；无 promotion marker、无新 release 对象、stable 七项产物不变。
+完整加密备份回读通过；44 sources / 1 profile 的逻辑数据 checksum 与迁移前一致。
+本次许可已消费，不恢复或重放新的 UNKNOWN。有限错误缺少准确拒绝原因，后续须先补
+可验证诊断/审计证据再取得独立恢复授权，不把 raw 节点数当审计有效数、不猜测放宽门禁。
+完整证据和当前停止边界见运行核查。
+
 ## 2026-11-07：普通升级备份前失败的限定恢复候选
 
 已定位 direct-D1 fallback 只读 main 聚合行与当前逐项 collection 不匹配。真实 SELECT-only

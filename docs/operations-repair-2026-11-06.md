@@ -4,8 +4,10 @@
 
 用户于 2026-11-07 明确恢复本任务，并批准仅退役旧 `easyproxy-prod` 登记、保留历史任务
 与回执，不触碰 main、NAS 数据或备份。旧 refresh writer 已按独立证据恢复；随后普通
-1.0.14 update 产生新的 MIGRATION UNKNOWN，保留新的非空 writer。**生产仍是 1.0.13，
-1.0.15 恢复候选尚未部署；旧 prod 登记已实际退役**。
+1.0.14 update 产生新的 MIGRATION UNKNOWN；获批的 1.0.15 恢复已单次执行，解决备份
+漏读并完成持久加密备份及 Worker/Pages 发布，但在晋级前返回新的 PROMOTION UNKNOWN。
+**active/stable 仍是 1.0.13，Worker/Pages 是 1.0.15，新 writer 保留；旧 prod 登记已退役**。
+新的 UNKNOWN 不复用上次许可，已停止后续云写入；不能将部分更新称为整套上线成功。
 不得把本文的修复候选当作已上线，也不得据历史部署成功卡片重新创建一套资源。
 
 ## 为什么显示两套云服务
@@ -60,6 +62,45 @@ Worker、Pages、GitHub environment 全不存在，刷新 registry 只引用 mai
 全部执行通过。Go CLI 全模块 84 passed（11 packages），同范围 `go vet ./...` 通过。
 生产只读恢复预检已通过，尚未写入移交证据或新 writer。
 
+## 1.0.15 单次执行后的准确停点（2026-11-07）
+
+源码 `87f60967723e1fb11188ca375057dfaac52e93ab` 已提交推送并完成 Validate run
+`42364492504` 两项 job。SpringBok PR #142 将显式 repair 上限从 10 窄调为 11，
+保留末项完整验证与第十二项拒绝；精确 PR/main 七项 CI、控制面及固定 Linux executor
+发布均完成。源码发布为 `de26192f0be5c1f4df23e82e3ac3104ab59bcf30`，纯证据文档
+收尾 PR #143 的 main 为 `af1c5e14964e20c670d8ddaf5536f578228e95c5`，七项 CI 通过，
+未因此重复发布控制面或移动 pin。
+
+再次只读预检后，经正常 owner UI 准确计划单次提交 task
+`dc-d17eef8a70434871883f85d92219af62` / run `42365774495`。认证 artifact
+`13570719703` 的业务结果为 `EASYPROXY_SBA_PROMOTION_UNKNOWN`；executor success
+不等于应用成功。新 operation 为 `276a780cf1d649bf9bb5a7e6a0d4d983`，旧固定 marker
+已消费，原 UNKNOWN 与历史保留，不可重放该恢复或旧 update。
+
+11:04Z 的只读核查：
+
+- control SHA-256 `c040256342e7ac384eef4f779abc81f0217ec4719493143ee40e510e63d95a25`，
+  ETag `"bc38d2d127f38e019792a45124caad42"`；active 1.0.13，writer 为本次 update/1.0.15。
+- 私有 `_sba/backups/276a780cf1d649bf9bb5a7e6a0d4d983/misub.age` 为 11873 字节，
+  age 加密头、完整 GET 大小及 SHA-256 均校验：
+  `9a5efb5a25e3ab6afa59ee44bb62e18d02673d2f0127053ac6a3188a3e237163`。
+- D1 migration 仍为 1/2，subscriptions/profiles 为 44/1。迁移后重新执行固定 SELECT
+  的真实 reader，逻辑数据 SHA-256 仍为
+  `02232d0f21f5f9796bb4054e405049f8406b7ea153dd8b2c800900c6f6b98468`，与迁移前相同。
+- 持久阶段仅 candidate、audit、GitHub environment、ECH 和 Pages publication；没有
+  aggregator-promotion 或 MiSub sync，准确 releases 前缀完整列表为空。
+- stable SHA/ETag 仍为本文件前述旧值，七项 stable/immutable/public 字节全部一致。
+  Worker 与 Pages 的公开版本均为 1.0.15 / `87f6096...`，因此必须报告部分更新状态。
+- 候选五项 raw 产物格式通过，114 个 raw proxy、24 个来源；raw 数量不是审计有效数量。
+  65 秒运行日志中 Edge 23 个事件（8 ok、12 responseStreamDisconnected、3 canceled），
+  Pages 1 个 ok，均无 Worker exception。断流/取消不能直接等同 Worker 崩溃。
+
+现有 PROMOTION 顶层错误会丢弃内部有限拒绝原因，hosted 日志也没有保存原私有审计结果。
+虽然可以确认尚未到持久晋级写入，但不能唯一断言是无有效节点、40% 节点跌幅保护、
+审计身份/兼容探测或其他前置校验；不能通过猜测、降低门禁或使用旧审计结果继续。
+后续应先补可验证的有限诊断/审计证据，再为本次新父回执设计独立受限恢复并取得新授权。
+当前不清锁、不删除控制键、不回滚数据、不重发任何部署、晋级或刷新。
+
 ## 云端刷新持续失败
 
 GitHub Actions `SBA Aggregator Refresh` 在 2026-10-28 13:11:13Z 启动的 run
@@ -108,6 +149,13 @@ TUN enabled/applied/ready；manifest healthy、无 fallback，订阅同步没有
 客户端报 `ConnectionError`，尚需在云更新后检查有限错误分类，不能称两种协议均通过。
 TUN IPv4 ready、IPv6 未就绪；manifest healthy、无 fallback，订阅源为 44、connector
 源为 1、实例为 6。容器仍未重启、无 OOM，最近 15 分钟日志未发现 panic/fatal。
+
+后续已定位上述 HTTP 探测遗漏：`lan.proxy_url` 不内嵌凭据，用户名/密码独立保存；
+调查脚本未携带认证。改为正确编码并发送既有认证后，requests 与手工 CONNECT/TLS
+均返回 204，无需改生产网关或凭据。11:07Z 最终只读复查，HTTP CONNECT 与 SOCKS5/TLS
+均 204，TLS 验证开启；原容器 running、RestartCount=0、无 OOM，TUN IPv4 ready、
+IPv6 未就绪，manifest healthy、无 fallback、44 个订阅源及 1 个 connector 源/6 个实例。
+最近 15 分钟 1717 行日志无 panic/fatal；未重启 NAS 网关或其他消费者。
 
 Cloudflare 官方 TCP sockets 文档明确禁止连接 Cloudflare IP、localhost 和私网地址；
 `proxy request failed, cannot connect to the specified address` 是该限制的准确错误。

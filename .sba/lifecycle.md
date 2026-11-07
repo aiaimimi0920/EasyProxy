@@ -2,11 +2,13 @@
 
 ## 当前状态（2026-11-07）
 
-当前生产 active 为 1.0.13；1.0.14 普通 update 在 MIGRATION 阶段 UNKNOWN，未完成升级。
+当前生产 active/stable 为 1.0.13；1.0.14 备份前 UNKNOWN 的单次获批恢复已执行，
+1.0.15 在持久加密备份、迁移和 Worker/Pages 发布后出现新的 PROMOTION UNKNOWN。
+Worker/Pages 公开版本为 1.0.15，新 update writer 保留，整套升级仍未完成；不得重放。
 旧 prod 登记已在 SpringBok 正常 owner UI 退役，仅从活动投影移除，历史/资源 claims 保留。
 准确任务和证据见 [运行核查](../docs/operations-repair-2026-11-06.md)。
 
-1.0.15 候选仅新增 `continue-update-before-backup`，绑定本次 1.0.14 父任务/回执、完整
+1.0.15 新增的 `continue-update-before-backup` 已消费，绑定本次 1.0.14 父任务/回执、完整
 配置、control SHA/ETag 和 inventory。原 run/jobs 已结束且无在途 refresh；旧加密备份
 不存在、原 operation/releases 无阶段；D1 身份/schema/history/计数及旧公开版本、稳定
 manifest 和七项产物一致时，才在原 operation 固定键 create-only 保存一次性移交证据，
@@ -17,7 +19,10 @@ marker/CAS 未知保持现场，不能再次移交。此入口不支持未来版
 create-only 留存及完整回读校验先于迁移；迁移和发布检查全部通过后才提交新 active。
 HTTP debug export 与当前 WebDAV export 均不是受保护 CLI 所需的逻辑备份格式，明确授权
 的 direct-D1 fallback 仍保留；没有通过放宽校验或替换 API 地址冒充完整备份。
-恢复仅是获批方案；源码验证、提交推送、实际执行和业务验收分别记录，不以此段宣称上线。
+本次已真实执行并持久保存加密备份，迁移后逻辑数据 checksum 与此前一致、44/1 完整。
+但新回执为 `EASYPROXY_SBA_PROMOTION_UNKNOWN`，未到 promotion marker、stable 未变。
+原私有审计结果未被留存，不能唯一归因或复用旧许可继续；准确 SHA/ETag、run/artifact、
+备份校验和只读现场见运行核查。源码/CI/部分发布不等于整套业务验收，已停止后续云写入。
 
 ## 历史状态（2026-10-27）
 
