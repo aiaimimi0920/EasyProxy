@@ -257,7 +257,7 @@ func (s *sharedMemberState) isBlacklisted(now time.Time) bool {
 	defer s.entryMu.Unlock()
 
 	s.mu.Lock()
-	expired := s.blacklisted && now.After(s.blacklistedUntil)
+	expired := s.blacklisted && !s.blacklistedUntil.IsZero() && now.After(s.blacklistedUntil)
 	if expired {
 		s.blacklisted = false
 		s.blacklistedUntil = time.Time{}

@@ -7,8 +7,10 @@ from aggregator_audit import audit_candidate
 from aggregator_publish import RAW, PublicArtifacts, _validate, promote_candidate, publish_candidate
 from artifact_store import ArtifactStore
 from audit_image import AuditImage, image_identity
+from audit_runner import AuditStoppedError
 from coordination import Coordinator, r2_store
 from deploy import stage_checks
+from diagnostics import phase
 from misub_sync import sync_misub
 from refresh_context import REFRESH_SECRETS, require
 from sealed_box import secret_value
@@ -35,7 +37,8 @@ def refresh_suite(config: SuiteConfig, release: dict, root: Path, image: AuditIm
     public = None
     try:
         owner = Coordinator(store, config.identity("production"), config.inventory_digest)
-        require(owner.current_release() == release)
+        with phase("WRITER"):
+            require(owner.current_release() == release)
         output.mkdir(mode=0o700, parents=True, exist_ok=False)
         public = PublicArtifacts(config.worker_origin + "/aggregator",
             **({"inventory": config.inventory} if config.custom_worker_origin is not None else {}))
@@ -43,9 +46,27 @@ def refresh_suite(config: SuiteConfig, release: dict, root: Path, image: AuditIm
         # between selector and here must reject, never refresh the new SHA using old code.
         permit = owner.begin("refresh", release, previous=release)
         artifacts = ArtifactStore(store)
-        candidate = publish_candidate(owner, permit, artifacts, public, bodies)
-        audit = audit_candidate(owner, permit, candidate, public, root, output / "audit", image=image)
-        promoted = promote_candidate(owner, permit, artifacts, public, candidate, audit=audit, root=root)
+        audit_started = audit_stopped = False
+        try:
+            with phase("CANDIDATE"):
+                candidate = publish_candidate(owner, permit, artifacts, public, bodies)
+            with phase("AUDIT"):
+                audit_started = True
+                try:
+                    audit = audit_candidate(owner, permit, candidate, public, root, output / "audit", image=image)
+                except AuditStoppedError:
+                    audit_stopped = True
+                    raise
+        except Exception:
+            # Candidate keys are immutable and operation-scoped; neither stage
+            # writes stable subscriptions or MiSub. An audit with uncertain
+            # termination/cleanup must still retain the writer.
+            if not audit_started or audit_stopped:
+                with phase("REFRESH_ABORT"):
+                    owner.abort_unpublished_refresh(permit)
+            raise
+        with phase("PROMOTION"):
+            promoted = promote_candidate(owner, permit, artifacts, public, candidate, audit=audit, root=root)
         stage_checks(promoted, {"candidate-verified", "stable-verified"})
         synchronized = sync_misub(owner, permit, candidate, audit, public, root, config.inventory,
             admin_password=credentials["EASYPROXY_MISUB_ADMIN_PASSWORD"],

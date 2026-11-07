@@ -235,25 +235,34 @@ func (p *poolOutbound) memberMeetsLongLivedPolicy(member *memberState, directive
 }
 
 func (p *poolOutbound) releaseIfAllBlacklistedLocked(now time.Time, network string) bool {
-	if len(p.members) == 0 {
+	if len(p.members) == 0 || network == N.NetworkUDP {
 		return false
 	}
-	// Check if all members are blacklisted
+	// Quarantined members cannot serve traffic, regardless of their independent
+	// transport blacklist. They must neither block nor participate in recovery.
+	eligible := 0
 	for _, member := range p.members {
+		if member.entry != nil && member.entry.UpstreamAuthFailed() {
+			continue
+		}
+		eligible++
 		if member.shared == nil || !member.shared.isTransportBlacklisted(network, now) {
 			return false
 		}
 	}
-	if network == N.NetworkUDP {
+	if eligible == 0 {
 		return false
 	}
-	// All blacklisted, force release all
+	// Preserve the existing all-blacklisted retry for non-quarantined members.
 	for _, member := range p.members {
+		if member.entry != nil && member.entry.UpstreamAuthFailed() {
+			continue
+		}
 		if member.shared != nil {
 			member.shared.forceReleaseTransport(network)
 		}
 	}
-	p.logger.Warn("all upstream proxies were blacklisted, releasing them for retry")
+	p.logger.Warn("all non-quarantined upstream proxies were blacklisted, releasing them for retry")
 	return true
 }
 

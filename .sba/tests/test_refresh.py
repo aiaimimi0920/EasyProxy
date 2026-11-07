@@ -10,6 +10,7 @@ import deploy
 import refresh
 import refresh_select
 from coordination import Coordinator, CoordinationError
+from diagnostics import StageError
 from refresh_context import CONFIG_VARIABLE, OWNER_VARIABLE, REFRESH_SECRETS, RefreshError, context, manifest_release
 from refresh_registry import RegistryError, include_environment, parse_registry
 from suite_config import WORKFLOW
@@ -73,21 +74,51 @@ def test_refresh_commits_only_after_consumption_sync_and_exact_public_readback(r
 
 
 @pytest.mark.parametrize("stage", ORDER)
-def test_refresh_unknown_keeps_original_version_and_writer_and_never_replays(refreshed, stage):
+def test_refresh_failure_preserves_release_and_only_aborts_before_promotion(refreshed, stage):
     request, _, _, _, _, store, record, _ = refreshed
     record["fail"] = stage
-    with pytest.raises(RuntimeError, match="FIXTURE_UNKNOWN"):
+    expected = {"candidate": "CANDIDATE_UNKNOWN", "audit": "AUDIT_UNKNOWN", "promotion": "PROMOTION_UNKNOWN"}.get(stage, "FIXTURE_UNKNOWN")
+    with pytest.raises(RuntimeError, match=expected):
         run(refreshed)
     assert record["order"] == ORDER[:ORDER.index(stage) + 1]
-    assert state(store)["active"] == request.candidate and state(store)["writer"] is not None
-    assert len(store.writes) == 3 and record["storeClosed"] and record["publicClosed"]
+    aborted = stage == "candidate"
+    assert state(store)["active"] == request.candidate
+    assert (state(store)["writer"] is None) is aborted
+    assert len(store.writes) == (4 if aborted else 3) and record["storeClosed"] and record["publicClosed"]
+    assert ((record["permit"].operation_id, "refresh-aborted") in store.stages) is aborted
+
+
+def test_confirmed_stopped_audit_failure_can_abort_but_still_fails(refreshed, monkeypatch):
+    from audit_runner import AuditStoppedError
+    def stopped(owner, permit, *_args, **_kwargs):
+        owner.claim_stage(permit, "aggregator-audit")
+        raise AuditStoppedError("EASYPROXY_SBA_ARTIFACT_AUDIT_UNKNOWN")
+    monkeypatch.setattr(refresh, "audit_candidate", stopped)
+    with pytest.raises(StageError, match="AUDIT_UNKNOWN"):
+        run(refreshed)
+    assert state(refreshed[-3])["writer"] is None
+    assert "promotion" not in refreshed[-2]["order"]
+
+
+def test_abort_failure_reports_writer_uncertainty_not_audit_success(refreshed, monkeypatch):
+    from coordination import StoreUnknown
+    refreshed[-2]["fail"] = "candidate"
+    original = refreshed[-3].create_stage
+    def create(operation, stage, body):
+        if stage == "refresh-aborted":
+            raise StoreUnknown()
+        return original(operation, stage, body)
+    monkeypatch.setattr(refreshed[-3], "create_stage", create)
+    with pytest.raises(StageError, match="REFRESH_ABORT_UNKNOWN"):
+        run(refreshed)
+    assert state(refreshed[-3])["writer"] is not None
 
 
 def test_update_between_selection_and_refresh_rejects_before_candidate_write(refreshed):
     request, _, _, _, _, store, record, owner = refreshed
     permit = owner.begin("update", NEW, previous=request.candidate)
     owner.commit_verified(permit, CHECKS["update"])
-    with pytest.raises(RefreshError):
+    with pytest.raises(StageError, match="WRITER_UNKNOWN"):
         run(refreshed)
     assert not record["order"] and state(store)["active"] == NEW and state(store)["writer"] is None
 
@@ -95,7 +126,7 @@ def test_update_between_selection_and_refresh_rejects_before_candidate_write(ref
 def test_busy_upgrade_is_not_automatically_stolen(refreshed):
     request, _, _, _, _, store, record, owner = refreshed
     owner.begin("update", NEW, previous=request.candidate)
-    with pytest.raises(CoordinationError, match="BUSY"):
+    with pytest.raises(StageError, match="WRITER_UNKNOWN"):
         run(refreshed)
     assert not record["order"] and state(store)["writer"]["action"] == "update"
 

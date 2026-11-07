@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 
 from coordination import Coordinator, r2_store
+from diagnostics import phase, safe_error_code
 from refresh_context import context, credentials, manifest_release, require
 from sources import materialize_workspace
 from suite_config import WORKFLOW
@@ -22,7 +23,8 @@ def select_source(dispatch: Path, output: Path, *, environment) -> dict:
                      values["EASYPROXY_R2_SECRET_ACCESS_KEY"])
     try:
         owner = Coordinator(store, config.identity("production"), config.inventory_digest)
-        release = owner.current_release()
+        with phase("WRITER"):
+            release = owner.current_release()
         output.mkdir(mode=0o700, parents=True, exist_ok=False)
         root = output / "source"
         materialize_workspace(root, config.repository, release["sourceSha"], cache_root=dispatch)
@@ -45,8 +47,8 @@ def main():
     args = parser.parse_args()
     try:
         select_source(Path(__file__).resolve().parents[1], args.output, environment=os.environ)
-    except Exception:
-        raise SystemExit("EASYPROXY_SBA_REFRESH_SELECTION_FAILED") from None
+    except Exception as error:
+        raise SystemExit(safe_error_code(error)) from None
 
 
 if __name__ == "__main__":

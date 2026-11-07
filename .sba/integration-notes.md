@@ -37,6 +37,12 @@ src/content/docs/r2/api/s3/api.mdx 和 reference/consistency.mdx，保留本地�
 异步发布已经结束、所有子进程退出、所有要求的回读完成。不能只取得许可后继续后台
 写入，也不能在 finally、取消处理或失败路径中释放。该模块不是任意代码/凭据的沙箱。
 
+2026-11-07 修复追加一个窄例外：同进程捕获的 refresh 在尚未尝试 promotion/sync、且
+审计进程组已停止和准确容器已确认不存在时，可先保存不可变失败证据再以原 ETag 结束
+writer；仅候选阶段失败也适用。未知终止、未知清理和发布阶段仍保留 writer，不能在
+finally 通用释放，也不能跨进程接管。旧失败任务的独立恢复证据见
+`docs/operations-repair-2026-11-06.md`；本段不是当时原实现已经具有该能力的声明。
+
 ### 失败语义
 
 只有明确的 412 PreconditionFailed 视为已拒绝的冲突；网络中断、缺少 ETag、异常响应

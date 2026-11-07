@@ -31,6 +31,12 @@
 
 **多对象 canonical 更新不是原子事务。** 发生中断时可能已有部分 stable bytes 改变而
 manifest 仍旧，必须报告 UNKNOWN 并保留 writer，后续不得重放或把负读取当恢复授权。
+
+1.0.14 仅对周期刷新增加一个前晋级失败终止分支：候选发布失败，或审计失败但其进程组
+已确认终止、准确审计容器已确认不存在时，当前进程可先 create-only 保存 `refresh-aborted`
+失败证据，再以原 Permit/ETag 条件写结束本次刷新。只允许 candidate/audit 阶段，保留所有
+候选和历史证据，不改变 active、stable 或 MiSub，不将失败报告为成功。审计终止/清理未知、
+已尝试 promotion、归属漂移或终止记录/CAS 未知仍保留阻断；不新增跨任务抢锁或自动重放。
 只读消费者应以 manifest 指向的 immutable release 及其摘要为一致性依据。
 
 ## 验证边界与下一步

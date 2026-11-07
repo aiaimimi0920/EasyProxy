@@ -1,4 +1,4 @@
-"""套件升级与 Aggregator 刷新的共同持久栅栏；中断不自动释放、重试或夺锁。"""
+"""共同持久栅栏；未知发布不释放，刷新晋级前的已捕获失败可以记录后终止。"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -242,6 +242,26 @@ class Coordinator:
         value["writer"] = None
         value["revision"] = uuid.uuid4().hex  # 每次空闲状态仍具有不同 ETag，避免 ABA。
         self._write(value, permit.etag)
+
+    def abort_unpublished_refresh(self, permit: Permit) -> None:
+        """仅当前持有者可终止未尝试晋级的刷新；不是成功提交或跨任务清锁。"""
+        _require(type(permit) is Permit and permit.action == "refresh", "OWNERSHIP")
+        with permit._stage_mutex:
+            _require(permit._attempted_stages <= {"aggregator-candidate", "aggregator-audit"}, "SIDE_EFFECTS")
+            value = self.assert_owned(permit)
+            _require(value["active"] == value["writer"]["candidate"], "VERSION")
+            body = _encode({"operationId": permit.operation_id, "outcome": "failed-before-promotion",
+                            "permitSha256": hashlib.sha256(permit.state_bytes).hexdigest()})
+            try:
+                etag = self.store.create_stage(permit.operation_id, "refresh-aborted", body)
+            except StoreConflict:
+                raise CoordinationError("EASYPROXY_SBA_COORDINATION_STAGE_ALREADY_ATTEMPTED") from None
+            except StoreUnknown:
+                raise CoordinationError("EASYPROXY_SBA_COORDINATION_UNKNOWN") from None
+            _require(_matches(ETAG, etag), "UNKNOWN")
+            value["writer"] = None
+            value["revision"] = uuid.uuid4().hex
+            self._write(value, permit.etag)
 
     def claim_stage(self, permit: Permit, stage: str) -> None:
         """阶段级单次尝试；即使同一持有者误重入/并发，也不能再次发送业务写入。"""

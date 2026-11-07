@@ -197,6 +197,11 @@ func (p *poolOutbound) Start(stage adapter.StartStage) error {
 	}
 	p.mu.Lock()
 	err := p.initializeMembersLocked()
+	if err == nil {
+		for _, member := range p.members {
+			member.shared.hydrateFromMonitor()
+		}
+	}
 	p.mu.Unlock()
 	if err != nil {
 		return err

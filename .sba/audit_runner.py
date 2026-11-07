@@ -1,4 +1,4 @@
-"""审计专用子进程组与单次补清理；异常一律 UNKNOWN，不释放共同 writer。"""
+"""审计专用子进程组与单次补清理；区分已确认结束与终止/清理未知。"""
 from __future__ import annotations
 
 import importlib.util
@@ -9,6 +9,10 @@ import subprocess
 import time
 
 from artifact_store import ArtifactError, require
+
+
+class AuditStoppedError(ArtifactError):
+    """审计失败，但进程组已终止且准确审计容器已确认不存在。"""
 
 
 def _confirm_group_dead(group: int) -> None:
@@ -79,4 +83,8 @@ def run_audit(args: list[str], output: Path, env: dict, *, lifecycle, timeout: i
             lifecycle.cleanup()
         except (OSError, RuntimeError, subprocess.SubprocessError):
             pass
-    raise ArtifactError("EASYPROXY_SBA_ARTIFACT_AUDIT_UNKNOWN")
+    try:
+        lifecycle.assert_absent()
+    except (OSError, RuntimeError, subprocess.SubprocessError):
+        raise ArtifactError("EASYPROXY_SBA_ARTIFACT_AUDIT_CLEANUP_UNKNOWN") from None
+    raise AuditStoppedError("EASYPROXY_SBA_ARTIFACT_AUDIT_UNKNOWN")

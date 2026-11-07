@@ -59,7 +59,9 @@ def prepared(tmp_path, monkeypatch):
     def call(name, checks, extra=None):
         def stage(owner, permit, *_args, **_kwargs):
             owner.assert_owned(permit)
-            owner.claim_stage(permit, "fixture-" + ("database" if name == "d1" else name))
+            owner.claim_stage(permit, {"candidate": "aggregator-candidate", "audit": "aggregator-audit",
+                                      "promotion": "aggregator-promotion", "sync": "misub-managed-sync"}.get(
+                                          name, "fixture-" + ("database" if name == "d1" else name)))
             record["owner"], record["permit"] = owner, permit
             record["order"].append(name)
             if record["fail"] == name:

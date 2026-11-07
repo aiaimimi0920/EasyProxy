@@ -8,6 +8,7 @@ from pathlib import Path
 from aggregator_build import SEED_SECRETS, build_aggregator
 from audit_image import build_image, build_runtime
 from deadline import action_deadline
+from diagnostics import phase, safe_error_code
 from refresh import refresh_suite
 from refresh_context import context, credentials, manifest_release, object_json, require
 from sources import inspect_checkout
@@ -30,11 +31,15 @@ def execute(selection: Path, output: Path, *, environment):
     require(output.is_absolute() and output.resolve() == output and not output.exists()
             and root != output and root not in output.parents)
     output.mkdir(mode=0o700, parents=True, exist_ok=False)
-    tools = prepare_linux_tools(output / "tools")
-    runtime = build_runtime(root, config.repository, release["sourceSha"], tools, output / "runtime")
-    image = build_image(runtime, output / "image")
-    bodies = build_aggregator(root, config.repository, release["sourceSha"], output / "generation",
-                              seed_secrets={key: values[key] for key in SEED_SECRETS})
+    with phase("TOOLS"):
+        tools = prepare_linux_tools(output / "tools")
+    with phase("RUNTIME"):
+        runtime = build_runtime(root, config.repository, release["sourceSha"], tools, output / "runtime")
+    with phase("IMAGE"):
+        image = build_image(runtime, output / "image")
+    with phase("GENERATION"):
+        bodies = build_aggregator(root, config.repository, release["sourceSha"], output / "generation",
+                                  seed_secrets={key: values[key] for key in SEED_SECRETS})
     return refresh_suite(config, release, root, image, bodies, output / "publish", credentials=values)
 
 
@@ -47,8 +52,8 @@ def main():
     try:
         with action_deadline(args.deadline):
             execute(args.selection, args.output, environment=os.environ)
-    except Exception:
-        raise SystemExit("EASYPROXY_SBA_REFRESH_FAILED_OR_UNKNOWN") from None
+    except Exception as error:
+        raise SystemExit(safe_error_code(error)) from None
     print("EASYPROXY_SBA_REFRESH_VERIFIED")
 
 

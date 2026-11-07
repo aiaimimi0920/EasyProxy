@@ -187,21 +187,37 @@ def test_promotion_rejects_old_receipt_without_cleanup_proof(monkeypatch):
 
 @pytest.mark.skipif(os.name != "posix", reason="requires actual Linux process-group semantics")
 @pytest.mark.parametrize("claimed", [False, True])
-@pytest.mark.parametrize("termination", ["timeout", "nonzero", "signal"])
+@pytest.mark.parametrize("termination", ["timeout", "nonzero", "signal", "deadline"])
 def test_real_failure_kills_process_group_and_does_not_repeat_claimed_cleanup(tmp_path, claimed, termination):
-    lifecycle = Mock(journal=tmp_path / "attempt.json")
+    lifecycle = Mock(spec=AuditContainer, journal=tmp_path / "attempt.json")
     if claimed:
         lifecycle.journal.write_text("attempted", encoding="utf-8")
     child_pid = tmp_path / "descendant.pid"
     script = ("import subprocess,time,pathlib,sys; "
               "p=subprocess.Popen([sys.executable,'-c','import time;time.sleep(120)']); "
               "pathlib.Path(sys.argv[1]).write_text(str(p.pid)); ")
-    script += {"timeout": "time.sleep(120)", "nonzero": "sys.exit(1)",
+    script += {"timeout": "time.sleep(120)", "deadline": "time.sleep(120)", "nonzero": "sys.exit(1)",
                "signal": "import os,signal;os.kill(os.getpid(),signal.SIGTERM)"}[termination]
+    from contextlib import nullcontext
+    import time
+    from deadline import action_deadline
+    budget = action_deadline(time.monotonic() + .8) if termination == "deadline" else nullcontext()
     with pytest.raises(ArtifactError, match="AUDIT_UNKNOWN"):
-        audit_runner.run_audit([sys.executable, "-c", script, str(child_pid)], tmp_path, dict(os.environ),
-                               lifecycle=lifecycle, timeout=1)
+        with budget:
+            audit_runner.run_audit([sys.executable, "-c", script, str(child_pid)], tmp_path, dict(os.environ),
+                                   lifecycle=lifecycle, timeout=1)
     assert lifecycle.cleanup.call_count == (0 if claimed else 1)
+    lifecycle.assert_absent.assert_called_once()
     pid = int(child_pid.read_text())
     process = Path(f"/proc/{pid}/stat")
     assert not process.exists() or process.read_text().split()[2] == "Z"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="requires actual Linux process-group semantics")
+def test_cleanup_unknown_does_not_claim_audit_stopped(tmp_path):
+    lifecycle = Mock(spec=AuditContainer, journal=tmp_path / "attempt.json")
+    lifecycle.assert_absent.side_effect = RuntimeError("container still present")
+    with pytest.raises(ArtifactError, match="AUDIT_CLEANUP_UNKNOWN") as error:
+        audit_runner.run_audit([sys.executable, "-c", "raise SystemExit(1)"], tmp_path, dict(os.environ),
+                               lifecycle=lifecycle, timeout=1)
+    assert not isinstance(error.value, audit_runner.AuditStoppedError)

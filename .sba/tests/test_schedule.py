@@ -12,6 +12,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import schedule
 from deadline import ExecutionDeadline, MAX_SECONDS, action_deadline, remaining
+from diagnostics import StageError
 from refresh_context import CONFIG_VARIABLE, OWNER_VARIABLE, REFRESH_SECRETS, RefreshError
 from suite_config import parse_configuration
 from test_refresh import environment
@@ -74,9 +75,28 @@ def test_schedule_failure_stops_before_approved_runtime_or_publication(tmp_path,
     installs = []
     monkeypatch.setattr(schedule, "prepare_python", lambda lock, output: installs.append(lock) or SimpleNamespace(python=Path("/fake/python")))
     monkeypatch.setattr(schedule.subprocess, "run", lambda *_args, **_kwargs: SimpleNamespace(returncode=1))
-    with pytest.raises(RefreshError):
+    with pytest.raises(StageError, match="SOURCE_UNKNOWN"):
         schedule.run_schedule(environment={**values(), "RUNNER_TEMP": str(tmp_path)})
     assert len(installs) == 1
+
+
+@pytest.mark.parametrize("body, expected", [
+    ("private-password\nEASYPROXY_SBA_AUDIT_UNKNOWN\n", "AUDIT_UNKNOWN"),
+    ("private-password\nEASYPROXY_SBA_WRITER_UNKNOWN\n", "WRITER_UNKNOWN"),
+    ("EASYPROXY_SBA_private-password_UNKNOWN\n", "PUBLISH_UNKNOWN"),
+    ("prefix EASYPROXY_SBA_AUDIT_UNKNOWN suffix\n", "PUBLISH_UNKNOWN"),
+    ("Traceback: private-password\n", "PUBLISH_UNKNOWN"),
+])
+def test_child_failure_only_propagates_exact_enumerated_stage_codes(tmp_path, body, expected):
+    log = tmp_path / "private.log"
+    log.write_text(body, encoding="utf-8")
+    with pytest.raises(StageError, match=expected) as error:
+        schedule.check_child(SimpleNamespace(returncode=1), log, "PUBLISH")
+    assert "private-password" not in str(error.value)
+
+
+def test_success_does_not_read_private_child_output(tmp_path):
+    schedule.check_child(SimpleNamespace(returncode=0), tmp_path / "missing.log", "PUBLISH")
 
 
 @pytest.mark.parametrize("offset", [-1, 0, MAX_SECONDS + 1, float("inf"), float("nan")])
