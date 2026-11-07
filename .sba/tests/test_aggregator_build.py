@@ -153,7 +153,7 @@ print("APPROVED_CANDIDATES_PRESERVED_WITHOUT_NETWORK")
     assert b"APPROVED_CANDIDATES_PRESERVED_WITHOUT_NETWORK" in result.stdout
 
 
-def test_actual_approved_upstream_local_backend_writes_and_reads_without_network(tmp_path):
+def test_actual_approved_upstream_local_backend_writes_and_reads_without_network(tmp_path, monkeypatch):
     # Worktree root may contain unrelated edits; only the accurate gitlink is the source of this backend test.
     sha = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, check=True).stdout.decode().strip()
     row = next(row for row in read_gitlinks(ROOT, sha) if row["path"] == "upstreams/aggregator")
@@ -170,6 +170,9 @@ def test_actual_approved_upstream_local_backend_writes_and_reads_without_network
     env_root.mkdir()
     env = build._environment(env_root)
     config = build.local_config(template(), output.resolve())
+    import subscription_sources
+    monkeypatch.setattr(subscription_sources, "_download", lambda *_: b"registered-current-response")
+    subscription_sources.configure_registered(config, [{"id": "registered-fixture", "url": "https://fixture.invalid/sub", "user_agent": "clash.meta"}], tmp_path)
     (tmp_path / "config.json").write_text(json.dumps(config), encoding="utf-8")
     cache = {"https://fixture.invalid/previous-sub": {"origin": "TEMPORARY", "push_to": ["public"]}}
     (output / "crawledsubs.artifact").write_text(json.dumps(cache), encoding="utf-8")
@@ -190,6 +193,7 @@ assert load_records(backend, config.storage.items["crawledsubs"]) == {
 from config.models import SiteConfig, NodeInput
 import process
 from airport import AirPort
+assert AirPort._fetch_text(None, config.sites[-1].nodes.subscribe_list()[0], 1) == "registered-current-response"
 config.sites = [SiteConfig(name="fixture", nodes=NodeInput(uris=["ss://synthetic-test-only@127.0.0.1:9"]), push_to=["public"])]
 previous = "proxies: [{name: old-fixture, type: http, server: '127.0.0.1', port: 9}]\\n"
 assert backend.push_to(previous, config.storage.items["public-clash"])

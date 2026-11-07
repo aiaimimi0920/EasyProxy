@@ -87,7 +87,9 @@ def configure_registered(config: dict, sources: list[dict], output: Path) -> lis
             body = _download(session, source)
             downloaded.write_bytes(body)
             artifact = output / (group + ".private.yaml")
-            config["domains"].append({"name": group, "domain": "", "sub": [downloaded.as_uri()], "enable": True,
+            # The approved AirPort reader strips literal "file:///", unlike a
+            # standards-based URI decoder. Preserve the absolute leading slash.
+            config["domains"].append({"name": group, "domain": "", "sub": ["file:///" + str(downloaded)], "enable": True,
                 "push_to": ["public", group], "ignorede": True, "liveness": True, "secure": False})
             config["groups"][group] = {"emoji": True, "list": True, "targets": {"clash": group}, "regularize": {"enable": False}}
             config["storage"]["items"][group] = {"folder_id": str(output), "file_id": artifact.name}
