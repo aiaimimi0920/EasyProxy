@@ -52,10 +52,14 @@ QUIC 和 SOCKS5 UDP `ALL_TUN_E2E_PASS`。Windows bind-mount 的 CRLF 和并发�
 所有第三方节点长期可用。15:07Z NAS 55 个实例中 32 个第三方节点返回上游鉴权失败，
 均不报告 available/effective_available；当前有效链路实测通过，不伪造坏源可用性。
 
-运行版本已统一，但冗余物理副本清理尚待针对准确清单的删除批准。只读清单锁定 NAS
-7 个停止态旧容器、8 个旧镜像、20 个旧 compose/env 文件及 3 个已导入镜像上传目录；
-当前容器、镜像、compose、data/config、全部备份及云端 UNKNOWN/已写对象均保留。
-未执行任何清理删除，也不把备份或恢复证据误当作冗余运行副本。
+2026-11-07 23:26–23:27（Asia/Shanghai），用户明确“同意删除”后，按固定清单单次清理了
+NAS 7 个停止态旧容器、8 个旧镜像、20 个旧 compose/env 文件及 3 个已导入镜像上传目录。
+删除前逐项核对准确 ID、镜像引用、文件大小/摘要和目录边界；不使用 force、volume 删除
+或全局 prune。当前容器、镜像、compose、data/config、103 份备份文件及
+`compose/codex-backups` 内 3 份备份保留，云端零变更，UNKNOWN/已写对象均保留。
+清理后独立 inventory 确认只剩一个 EasyProxy 容器和一个镜像，版本均为 1.0.18；当前
+compose 校验通过，HTTP CONNECT/SOCKS5 TLS 均 204、TUN ready、manifest healthy、50 来源、
+fallback false，原容器 ID 不变、RestartCount=0，无 OOM/panic/fatal。清理已闭环，不再待批准。
 
 ### 1.0.17 的准确结果与 1.0.18 候选
 
