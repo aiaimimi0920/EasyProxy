@@ -182,6 +182,18 @@ def test_refresh_same_node_ids_still_binds_the_unchanged_managed_profile(wire):
     assert state(owner.store)["writer"]["operationId"] == permit.operation_id
 
 
+def test_registered_feeds_remain_independent_but_global_only_dispatches_audited_nodes_and_connectors(wire):
+    source = {"id": "user-live", "kind": "subscription", "enabled": True, "probe_status": "verified",
+              "input": "https://user.invalid/live", "url": "https://user.invalid/live"}
+    wire["data"]["subscriptions"].append(copy.deepcopy(source))
+    wire["data"]["profiles"][1]["subscriptions"] = [source["id"]]
+    run(held())
+    profile = wire["data"]["profiles"][1]
+    assert profile["subscriptions"] == []
+    assert set(profile["manualNodes"]) == {"proxy_runtime_node_1", "conn_ech_workers_pref_1", "user-connector"}
+    assert next(row for row in wire["data"]["subscriptions"] if row["id"] == source["id"]) == source
+
+
 @pytest.mark.parametrize("mode", ["lost", "redirect", "server-error", "data-drift", "wrong-manifest"])
 def test_unknown_never_retries_restores_or_releases_and_same_permit_cannot_save_again(wire, mode):
     wire["mode"] = mode

@@ -1,5 +1,9 @@
 # EasyProxy 云套件 SBA 接入
 
+普通订阅与 agg 共用云端审计可用池，ZenProxy/ECH 仅下发 connector 参数。
+1.0.19 候选的完整链路、轮换和六小时刷新语义见
+[云端可用池](../docs/cloud-usable-pool.md)；以下 1.0.18 为既有运行回执，不代表候选已上线。
+
 > 2026-11-07 运维核查、已消费的 1.0.14 受限恢复与新的 1.0.15 PROMOTION UNKNOWN 见
 > [运行核查与刷新恢复](../docs/operations-repair-2026-11-06.md)。下文保留历史阶段回执，
 > 不能据旧成功任务认定对应云资源仍在运行；当前 Worker/Pages 部分更新也不代表整套成功。

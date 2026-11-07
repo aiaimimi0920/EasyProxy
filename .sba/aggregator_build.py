@@ -134,7 +134,8 @@ def _run(args: list[str], cwd: Path, env: dict, label: str, timeout: int) -> Non
 
 
 def build_aggregator(root: Path, repository: str, source_sha: str, output: Path, *, seed_secrets: dict,
-                     previous_inputs: dict[str, bytes] | None = None) -> dict[str, bytes]:
+                     previous_inputs: dict[str, bytes] | None = None,
+                     registered_subscriptions: list[dict] | None = None) -> dict[str, bytes]:
     with phase("GENERATION_SOURCE"):
         root = root.resolve(strict=True)
         rows = inspect_checkout(root, repository, source_sha)
@@ -167,10 +168,13 @@ def build_aggregator(root: Path, repository: str, source_sha: str, output: Path,
         if previous_inputs is not None:
             # 仅把已提交稳定版作为候选；上游重新聚合，EasyProxy 必须重新检测全部节点。
             (artifacts / "crawledsubs.artifact").write_bytes(previous_inputs["internal/crawledsubs.json"])
-            (artifacts / "public-clash.artifact").write_bytes(previous_inputs["subs/clash.yaml"])
+            from subscription_sources import seed_without_registered
+            (artifacts / "public-clash.artifact").write_bytes(seed_without_registered(previous_inputs["subs/clash.yaml"]))
             seeded = (artifacts / "public-clash.artifact").stat()
             previous_clash_stamp = (seeded.st_mtime_ns, seeded.st_ctime_ns, seeded.st_size)
         config = local_config(json.loads(materialized.read_text(encoding="utf-8")), artifacts)
+        from subscription_sources import configure_registered
+        registered = configure_registered(config, registered_subscriptions or [], output)
         config_path, empty_env = output / "runtime.private.json", output / "empty.env"
         config_path.write_text(json.dumps(config, ensure_ascii=False), encoding="utf-8")
         empty_env.write_text("", encoding="utf-8")
@@ -193,6 +197,8 @@ def build_aggregator(root: Path, repository: str, source_sha: str, output: Path,
             generated = (artifacts / "public-clash.artifact").stat()
             require((generated.st_mtime_ns, generated.st_ctime_ns, generated.st_size) != previous_clash_stamp,
                     "OUTPUT_REFRESH")
+        from subscription_sources import record_registered
+        bodies["subs/clash.yaml"] = record_registered(bodies["subs/clash.yaml"], registered, output)
     with phase("GENERATION_CONVERSION"):
         # 复用纯转换函数，不调用 R2 publish/main 入口。
         spec = importlib.util.spec_from_file_location("sba_v2ray_converter", root / "scripts/publish-aggregator-v2ray.py")

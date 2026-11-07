@@ -11,6 +11,7 @@ from destroy_preview import destroy_preview
 from diagnostics import phase
 from fresh_pristine_repair import assert_fresh_pristine
 from generation_sources import load_previous_inputs
+from subscription_sources import load_registered_subscriptions
 from migration_prepare import prepare_migration
 from preview import preview_suite
 from pristine_repair import assert_pristine
@@ -69,8 +70,10 @@ def execute(request: ApplicationRequest, root: Path, output: Path, *, environmen
         promotion_recovery = request.action == "repair" and request.context.get("repairId") in (PROMOTION_REPAIR_ID, EDGE_REPAIR_ID, PROMOTION_COPY_REPAIR_ID)
         source_release = MIGRATION_ACTIVE_RELEASE if promotion_recovery else request.previous
         previous_inputs = load_previous_inputs(request.config, source_release, values) if request.action == "update" or promotion_recovery else None
+        registered = load_registered_subscriptions(request.config, values) if request.action == "update" else []
         bodies = build_aggregator(root, request.config.repository, request.source_sha, output / "generation",
-                                  seed_secrets={key: values[key] for key in SEED_SECRETS}, previous_inputs=previous_inputs)
+                                  seed_secrets={key: values[key] for key in SEED_SECRETS}, previous_inputs=previous_inputs,
+                                  registered_subscriptions=registered)
     if request.action == "preview":
         with phase("PUBLISH"):
             return preview_suite(request, root, tools, image, sealer, bodies, output / "publish", credentials=values)

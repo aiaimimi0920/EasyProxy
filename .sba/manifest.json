@@ -2,7 +2,7 @@
   "schemaVersion": 3,
   "id": "easyproxy-cloud",
   "name": "EasyProxy 云套件",
-  "version": "1.0.18",
+  "version": "1.0.19",
   "entrypoint": "springbok.ps1",
   "runtime": {
     "runner": "ubuntu-24.04",
@@ -30,31 +30,7 @@
       "timeoutSeconds": 3600
     }
   },
-  "repairs": [
-    {
-      "id": "continue-update-after-first-release-copy",
-      "name": "恢复本次首个发布副本后的升级",
-      "fromErrorCodes": [
-        "EASYPROXY_SBA_PROMOTION_UNKNOWN"
-      ],
-      "secretNames": [
-        "EASYPROXY_CLOUDFLARE_API_TOKEN",
-        "EASYPROXY_GITHUB_TOKEN",
-        "EASYPROXY_R2_ACCESS_KEY_ID",
-        "EASYPROXY_R2_SECRET_ACCESS_KEY",
-        "EASYPROXY_MISUB_ADMIN_PASSWORD",
-        "EASYPROXY_MISUB_COOKIE_SECRET",
-        "EASYPROXY_MANIFEST_TOKEN",
-        "EASYPROXY_ECH_TOKEN",
-        "EASYPROXY_BACKUP_PASSPHRASE",
-        "EASYPROXY_AGGREGATOR_SHARED_TOKEN",
-        "EASYPROXY_AGGREGATOR_ISSUE91_SUB_URL_B64"
-      ],
-      "fromActions": [
-        "repair"
-      ]
-    }
-  ],
+  "repairs": [],
   "secrets": [
     "EASYPROXY_CLOUDFLARE_API_TOKEN",
     "EASYPROXY_GITHUB_TOKEN",

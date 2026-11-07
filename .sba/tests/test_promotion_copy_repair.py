@@ -164,8 +164,8 @@ def test_application_uses_old_stable_inputs_and_new_backed_up_update(approved, t
     assert calls.index('previous') < calls.index('generation')
 
 
-def test_current_manifest_exposes_only_exact_first_copy_recovery():
-    manifest = json.loads((Path(__file__).parents[1] / 'manifest.json').read_bytes())
+def test_historical_manifest_exposes_only_exact_first_copy_recovery():
+    manifest = json.loads((Path(__file__).parent / 'fixtures/manifest-1.0.18.json').read_bytes())
     assert manifest['version'] == '1.0.18'
     row, = manifest['repairs']
     assert row['id'] == PROMOTION_COPY_CONTEXT['repairId'] and row['fromErrorCodes'] == [PROMOTION_COPY_CONTEXT['errorCode']]

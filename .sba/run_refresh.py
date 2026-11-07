@@ -10,6 +10,7 @@ from audit_image import build_image, build_runtime
 from deadline import action_deadline
 from diagnostics import phase, safe_error_code
 from generation_sources import load_previous_inputs
+from subscription_sources import load_registered_subscriptions
 from refresh import refresh_suite
 from refresh_context import context, credentials, manifest_release, object_json, require
 from sources import inspect_checkout
@@ -40,8 +41,10 @@ def execute(selection: Path, output: Path, *, environment):
         image = build_image(runtime, output / "image")
     with phase("GENERATION"):
         previous_inputs = load_previous_inputs(config, release, values)
+        registered = load_registered_subscriptions(config, values)
         bodies = build_aggregator(root, config.repository, release["sourceSha"], output / "generation",
-                                  seed_secrets={key: values[key] for key in SEED_SECRETS}, previous_inputs=previous_inputs)
+                                  seed_secrets={key: values[key] for key in SEED_SECRETS}, previous_inputs=previous_inputs,
+                                  registered_subscriptions=registered)
     return refresh_suite(config, release, root, image, bodies, output / "publish", credentials=values)
 
 
