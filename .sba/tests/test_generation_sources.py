@@ -1,4 +1,4 @@
-"""来源缓存只来自完整验证的旧稳定版；严格只读，不复用健康数据。"""
+"""来源与节点候选只来自完整验证的旧稳定版；严格只读，不复用健康数据。"""
 import json
 from pathlib import Path
 import sys
@@ -47,8 +47,22 @@ def test_load_requires_owned_stable_integrity_and_unchanged_control_and_never_wr
     credentials = dict.fromkeys(("EASYPROXY_R2_ACCESS_KEY_ID", "EASYPROXY_R2_SECRET_ACCESS_KEY"), "fixture")
     if drift:
         with pytest.raises(ArtifactError):
-            sources.load_previous_sources(config, expected, credentials)
+            sources.load_previous_inputs(config, expected, credentials)
     else:
-        assert sources.load_previous_sources(config, expected, credentials) == objects.get("internal/crawledsubs.json").body
+        assert sources.load_previous_inputs(config, expected, credentials) == {
+            key: objects.get(key).body for key in ("internal/crawledsubs.json", "subs/clash.yaml")}
     assert before == (owner.store.writes, objects.writes, owner.store.stages)
     assert "store" in closed and (drift == "version" or "public" in closed)
+
+
+@pytest.mark.parametrize("mutation", ["missing", "extra", "bad-clash", "empty-clash", "bad-cache"])
+def test_previous_inputs_cannot_inject_health_results_or_unvalidated_candidate_data(mutation):
+    inputs = {"internal/crawledsubs.json": b'{"https://fixture.invalid/sub":{}}',
+              "subs/clash.yaml": b'proxies: [{name: fixture, type: http, server: "127.0.0.1", port: 9}]\n'}
+    sources.validate_inputs(inputs)
+    if mutation == "missing": inputs.pop("subs/clash.yaml")
+    elif mutation == "extra": inputs["subs/effective.json"] = b'{"healthy":true}'
+    elif mutation == "bad-clash": inputs["subs/clash.yaml"] = b'not: proxies'
+    elif mutation == "empty-clash": inputs["subs/clash.yaml"] = b'proxies: []'
+    else: inputs["internal/crawledsubs.json"] = b'{"file:///private":{}}'
+    with pytest.raises(ArtifactError): sources.validate_inputs(inputs)

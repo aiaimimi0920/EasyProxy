@@ -82,9 +82,10 @@ def test_production_configuration_digest_is_not_the_synthetic_fixture():
     with pytest.raises(RequestError): parse(recovery_request())
 
 
-def test_manifest_preserves_all_nine_prior_repairs_and_eleven_secrets():
-    value = json.loads((Path(__file__).parents[1] / "manifest.json").read_bytes())
-    assert value["version"] == "1.0.13" and len(value["repairs"]) == 10
+def test_historical_manifest_preserves_all_nine_prior_repairs_and_eleven_secrets():
+    frozen = json.loads((Path(__file__).parent / "fixtures/manifest-1.0.15.json").read_bytes())
+    assert frozen["version"] == "1.0.15" and len(frozen["repairs"]) == 11
+    value = {**frozen, "version": "1.0.13", "repairs": frozen["repairs"][:10]}
     scope = value["repairs"][-1]
     assert scope["id"] == CONTEXT["repairId"] and scope["fromErrorCodes"] == [CONTEXT["errorCode"]]
     assert set(scope["secretNames"]) == SECRETS

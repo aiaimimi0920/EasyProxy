@@ -125,7 +125,7 @@ def test_unknown_writes_never_replay_or_clear_writer(partial, monkeypatch, failu
     assert before == (len(store.writes), len(store.stages))
 
 
-def test_application_seeds_previous_sources_and_routes_to_backed_up_update(approved, tmp_path, monkeypatch):
+def test_application_seeds_previous_inputs_and_routes_to_backed_up_update(approved, tmp_path, monkeypatch):
     request = parse(approved); calls = []
     monkeypatch.setattr(application, "inspect_checkout", lambda *_: [])
     for name in ("prepare_linux_tools", "build_runtime", "build_image", "build_sealer", "build_cli"):
@@ -133,10 +133,10 @@ def test_application_seeds_previous_sources_and_routes_to_backed_up_update(appro
     def previous(config, release, credentials):
         assert release == MIGRATION_ACTIVE_RELEASE
         calls.append("previous")
-        return b"previous-sources"
-    monkeypatch.setattr(application, "load_previous_sources", previous)
+        return {"internal/crawledsubs.json": b"previous-sources", "subs/clash.yaml": b"previous-candidates"}
+    monkeypatch.setattr(application, "load_previous_inputs", previous)
     def generate(*_, **kwargs):
-        assert kwargs["previous_sources"] == b"previous-sources"
+        assert kwargs["previous_inputs"] == {"internal/crawledsubs.json": b"previous-sources", "subs/clash.yaml": b"previous-candidates"}
         calls.append("generation")
     monkeypatch.setattr(application, "build_aggregator", generate)
     migration = object()

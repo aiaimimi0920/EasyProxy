@@ -187,6 +187,18 @@ assert type(backend) is push.PushToLocal
 from crawl.helpers import load_records
 assert load_records(backend, config.storage.items["crawledsubs"]) == {
     "https://fixture.invalid/previous-sub": {"origin": "TEMPORARY", "push_to": ["public"]}}
+from config.models import SiteConfig, NodeInput
+import process
+from airport import AirPort
+config.sites = [SiteConfig(name="fixture", nodes=NodeInput(uris=["ss://synthetic-test-only@127.0.0.1:9"]), push_to=["public"])]
+previous = "proxies: [{name: old-fixture, type: http, server: '127.0.0.1', port: 9}]\\n"
+assert backend.push_to(previous, config.storage.items["public-clash"])
+tasks, groups = process.assign(config, retry=1, bin_name="unused", remain=True, pushtool=backend)
+retained = [task for task in tasks if task.name == "remains-public"]
+assert len(retained) == 1 and retained[0].taskid in groups["public"]
+assert AirPort._fetch_text(None, retained[0].nodes.subscribe_list()[0], 1) == previous
+without, _ = process.assign(config, retry=1, bin_name="unused", remain=False, pushtool=backend)
+assert not any(task.name.startswith("remains-") for task in without)
 for name, item in config.storage.items.items():
     assert backend.push_to("local-fixture-" + name, item, retry=99)
     from urllib.request import url2pathname
@@ -201,20 +213,35 @@ print("APPROVED_LOCAL_BACKEND_OK")
     assert len(list(output.iterdir())) == len(build.FILES)
 
 
-def test_previous_source_cache_is_supplied_before_collection_without_reusing_node_artifacts(tmp_path, monkeypatch):
+def test_previous_sources_and_nodes_are_candidates_before_collection_and_never_reuse_health(tmp_path, monkeypatch):
     from test_generation_diagnostics import fixture
     root, output, calls = fixture(tmp_path, monkeypatch)
-    previous = b'{"https://fixture.invalid/known-sub":{"push_to":["public"]}}'
+    previous = {"internal/crawledsubs.json": b'{"https://fixture.invalid/known-sub":{"push_to":["public"]}}',
+                "subs/clash.yaml": b'proxies: [{name: fixture, type: http, server: "127.0.0.1", port: 9}]\n'}
     original = build._run
     observed = []
     def run(args, cwd, env, label, timeout):
         if label == "generation":
             artifacts = output / "artifacts"
-            assert [p.name for p in artifacts.iterdir()] == ["crawledsubs.artifact"]
-            assert (artifacts / "crawledsubs.artifact").read_bytes() == previous
+            assert {p.name for p in artifacts.iterdir()} == {"crawledsubs.artifact", "public-clash.artifact"}
+            assert (artifacts / "crawledsubs.artifact").read_bytes() == previous["internal/crawledsubs.json"]
+            assert (artifacts / "public-clash.artifact").read_bytes() == previous["subs/clash.yaml"]
+            assert "--overwrite" not in args and "--skip-alive-check" in args
             observed.append(True)
         return original(args, cwd, env, label, timeout)
     monkeypatch.setattr(build, "_run", run)
     build.build_aggregator(root, "owner/repo", "a" * 40, output,
-        seed_secrets=dict.fromkeys(build.SEED_SECRETS, build.DISABLED_SEED), previous_sources=previous)
+        seed_secrets=dict.fromkeys(build.SEED_SECRETS, build.DISABLED_SEED), previous_inputs=previous)
     assert observed == [True] and calls == ["config", "generation"]
+
+
+def test_seeded_clash_input_cannot_masquerade_as_a_new_output(tmp_path, monkeypatch):
+    from test_generation_diagnostics import fixture
+    from diagnostics import StageError
+    root, output, calls = fixture(tmp_path, monkeypatch, failure="outputs")
+    previous = {"internal/crawledsubs.json": b'{"https://fixture.invalid/known-sub":{"push_to":["public"]}}',
+                "subs/clash.yaml": b'proxies: [{name: fixture, type: http, server: "127.0.0.1", port: 9}]\n'}
+    with pytest.raises(StageError) as caught:
+        build.build_aggregator(root, "owner/repo", "a" * 40, output,
+            seed_secrets=dict.fromkeys(build.SEED_SECRETS, build.DISABLED_SEED), previous_inputs=previous)
+    assert caught.value.stage == "GENERATION_OUTPUTS" and calls == ["config", "generation"]

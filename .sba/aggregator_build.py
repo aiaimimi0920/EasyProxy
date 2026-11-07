@@ -134,16 +134,16 @@ def _run(args: list[str], cwd: Path, env: dict, label: str, timeout: int) -> Non
 
 
 def build_aggregator(root: Path, repository: str, source_sha: str, output: Path, *, seed_secrets: dict,
-                     previous_sources: bytes | None = None) -> dict[str, bytes]:
+                     previous_inputs: dict[str, bytes] | None = None) -> dict[str, bytes]:
     with phase("GENERATION_SOURCE"):
         root = root.resolve(strict=True)
         rows = inspect_checkout(root, repository, source_sha)
         row = next(row for row in rows if row["path"] == "upstreams/aggregator")
         inspect_gitlink_checkout(root, row)
     with phase("GENERATION_CONFIG"):
-        if previous_sources is not None:
-            from generation_sources import validate_sources
-            validate_sources(previous_sources)
+        if previous_inputs is not None:
+            from generation_sources import validate_inputs
+            validate_inputs(previous_inputs)
         require(output.is_absolute() and not str(output).startswith(("\\\\", "//")), "OUTPUT")
         output = output.resolve()
         require(not output.exists() and root not in output.parents and output != root, "OUTPUT")
@@ -163,9 +163,13 @@ def build_aggregator(root: Path, repository: str, source_sha: str, output: Path,
               "--output", str(materialized)], output, {**env, **seed_secrets}, "config", 30)
         artifacts = output / "artifacts"
         artifacts.mkdir()
-        if previous_sources is not None:
-            # 上游从同一 local storage 读取缓存，并重新请求/校验来源；不复制旧节点产物。
-            (artifacts / "crawledsubs.artifact").write_bytes(previous_sources)
+        previous_clash_stamp = None
+        if previous_inputs is not None:
+            # 仅把已提交稳定版作为候选；上游重新聚合，EasyProxy 必须重新检测全部节点。
+            (artifacts / "crawledsubs.artifact").write_bytes(previous_inputs["internal/crawledsubs.json"])
+            (artifacts / "public-clash.artifact").write_bytes(previous_inputs["subs/clash.yaml"])
+            seeded = (artifacts / "public-clash.artifact").stat()
+            previous_clash_stamp = (seeded.st_mtime_ns, seeded.st_ctime_ns, seeded.st_size)
         config = local_config(json.loads(materialized.read_text(encoding="utf-8")), artifacts)
         config_path, empty_env = output / "runtime.private.json", output / "empty.env"
         config_path.write_text(json.dumps(config, ensure_ascii=False), encoding="utf-8")
@@ -173,7 +177,8 @@ def build_aggregator(root: Path, repository: str, source_sha: str, output: Path,
     with phase("GENERATION_COLLECT"):
         # 这里只收集/转换候选；旧 Clash 的瞬时预筛不能删光某格式的节点。
         # 是否可发布仍由后续准确 EasyProxy 镜像的真实消费审计与晋级门禁决定。
-        _run([sys.executable, "-u", "subscribe/process.py", "--overwrite", "--skip-remark", "--invisible", "--skip-alive-check",
+        _run([sys.executable, "-u", "subscribe/process.py", *(["--overwrite"] if previous_inputs is None else []),
+              "--skip-remark", "--invisible", "--skip-alive-check",
               "--environment", str(empty_env), "--server", str(config_path)], workspace, env, "generation", 2400)
     with phase("GENERATION_READBACK"):
         verify_runtime(workspace, runtime)
@@ -183,6 +188,11 @@ def build_aggregator(root: Path, repository: str, source_sha: str, output: Path,
         bodies = {}
         for name in OUTPUT_NAMES:
             bodies[ARTIFACTS[name]] = _read_output(artifacts, name)
+        if previous_clash_stamp is not None:
+            # 预置输入的存在不算本轮输出；批准上游的本地写入会更新此文件时间。
+            generated = (artifacts / "public-clash.artifact").stat()
+            require((generated.st_mtime_ns, generated.st_ctime_ns, generated.st_size) != previous_clash_stamp,
+                    "OUTPUT_REFRESH")
     with phase("GENERATION_CONVERSION"):
         # 复用纯转换函数，不调用 R2 publish/main 入口。
         spec = importlib.util.spec_from_file_location("sba_v2ray_converter", root / "scripts/publish-aggregator-v2ray.py")

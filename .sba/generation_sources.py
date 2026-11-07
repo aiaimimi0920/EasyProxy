@@ -1,8 +1,8 @@
-"""只读带入已提交稳定版的来源缓存；不复用旧节点健康结论或向上游传写凭据。"""
+"""只读带入已提交稳定版的来源与节点候选；健康结论必须重新审计。"""
 import json
 from urllib.parse import urlsplit
 
-from aggregator_publish import PublicArtifacts, _previous
+from aggregator_publish import PublicArtifacts, _previous, _validate
 from artifact_store import ArtifactStore, MAX_BYTES, require
 from coordination import Coordinator, r2_store
 
@@ -21,7 +21,12 @@ def validate_sources(raw: bytes) -> dict:
         require(False, "SOURCE_CACHE")
 
 
-def load_previous_sources(config, expected_release: dict, credentials: dict) -> bytes:
+def validate_inputs(inputs: dict[str, bytes]) -> None:
+    _validate(inputs, {"internal/crawledsubs.json", "subs/clash.yaml"})
+    validate_sources(inputs["internal/crawledsubs.json"])
+
+
+def load_previous_inputs(config, expected_release: dict, credentials: dict) -> dict[str, bytes]:
     store = r2_store(config.account_id, config.bucket, credentials["EASYPROXY_R2_ACCESS_KEY_ID"],
                      credentials["EASYPROXY_R2_SECRET_ACCESS_KEY"])
     public = None
@@ -32,10 +37,10 @@ def load_previous_sources(config, expected_release: dict, credentials: dict) -> 
         public = PublicArtifacts(config.worker_origin + "/aggregator",
             **({"inventory": config.inventory} if config.custom_worker_origin is not None else {}))
         _, _, artifacts = _previous(ArtifactStore(store), public, expected_release)
-        raw = artifacts["internal/crawledsubs.json"].body
-        validate_sources(raw)
+        inputs = {key: artifacts[key].body for key in ("internal/crawledsubs.json", "subs/clash.yaml")}
+        validate_inputs(inputs)
         require(owner._read() == before, "SOURCE_CACHE_DRIFT")
-        return raw
+        return inputs
     finally:
         if public is not None:
             public.close()
