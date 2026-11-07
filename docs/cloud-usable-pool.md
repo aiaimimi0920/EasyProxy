@@ -47,7 +47,13 @@ Global runtime manifest 或 `subs/effective.txt` / `subs/effective.json`，不�
 NAS 现有 source-sync 每小时刷新一次可用池和 connector；不需要在 NAS 再保存两条原始订阅。
 云端或本地刷新失败均不得被报告为本轮刷新成功。
 
-## 1.0.19 实施状态
+## 1.0.20 实施状态
 
-本版是以上链路的代码候选；本文不预报提交、CI、SpringBok 更新或 NAS 验收已经完成。
-实际运行版本、来源贡献、云端池与 NAS 读回证据另记于运维记录。
+以上链路已随 `1.0.20` 提交、推送并部署至唯一 SpringBok 云套件及 NAS 网关。
+运行源码为 `103fdb250ad48536ee06d14a887021e803c72511`；active、stable、公开七产物、
+MiSub Global 和 NAS 读回均已核对。普通订阅的实际节点已进入云端审计池并下发 NAS，
+ZenProxy/ECH 继续由 NAS 展开和检查。
+
+具体节点快照、测试与业务验收、NAS 健康检查窗口调整及已批准的旧副本清理，见
+[2026-11-08 上线与验收记录](cloud-usable-pool-2026-11-08.md)。节点可用性随时间和网络变化，
+记录中的数量不是长期可用性承诺；下一次自然定时刷新尚不在该次验收范围内。
