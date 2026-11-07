@@ -282,15 +282,18 @@ def test_migration_recovery_uses_update_stages_and_commits_only_after_backup_and
 
 
 @pytest.mark.parametrize('failure', [None, 'edge', 'pages'])
-def test_partial_publication_recovery_carries_baseline_through_both_publishers_after_backup(prepared, monkeypatch, failure):
+@pytest.mark.parametrize('kind', ['edge16', 'first-release17'])
+def test_partial_publication_recovery_carries_baseline_through_both_publishers_after_backup(prepared, monkeypatch, failure, kind):
     import hashlib
     from coordination import Coordinator
     from migration import MiSubMigration
     from publication_baseline import PublicationBaseline
     from repair_context import EDGE_CONTEXT, EDGE_PARENT_RELEASE, MIGRATION_ACTIVE_RELEASE
+    from repair_context import PROMOTION_COPY_CONTEXT, PROMOTION_COPY_PARENT_RELEASE
     base, root, tools, image, sealer, output, credentials, store, record = prepared
-    request = replace(base, action='update', application_version='1.0.17', previous=MIGRATION_ACTIVE_RELEASE)
-    recovery = replace(request, action='repair', previous=EDGE_PARENT_RELEASE, context=EDGE_CONTEXT)
+    request = replace(base, action='update', application_version='1.0.17' if kind == 'edge16' else '1.0.18', previous=MIGRATION_ACTIVE_RELEASE)
+    recovery = replace(request, action='repair', previous=EDGE_PARENT_RELEASE if kind == 'edge16' else PROMOTION_COPY_PARENT_RELEASE,
+                       context=EDGE_CONTEXT if kind == 'edge16' else PROMOTION_COPY_CONTEXT)
     owner = Coordinator(store, request.config.identity('production'), request.config.inventory_digest)
     initial = owner.begin('deploy', MIGRATION_ACTIVE_RELEASE)
     owner.commit_verified(initial, {'suite-published': True, 'service-ready': True})
@@ -298,7 +301,7 @@ def test_partial_publication_recovery_carries_baseline_through_both_publishers_a
     def begin(owner, received, source, values):
         assert received is recovery and source == root and values is credentials
         permit = owner.begin('update', request.candidate, previous=MIGRATION_ACTIVE_RELEASE)
-        baseline = PublicationBaseline(permit.operation_id, hashlib.sha256(permit.state_bytes).hexdigest())
+        baseline = PublicationBaseline(permit.operation_id, hashlib.sha256(permit.state_bytes).hexdigest(), kind)
         handles.append(baseline)
         return permit, baseline
     migration = MiSubMigration(root=root, executable=root/'cli', node=root/'node', wrangler=root/'wrangler', topology=root/'topology', manifest=root/'manifest', wrangler_config=root/'config', workdir=root/'work', database_id=request.config.database_id, base_url=f'https://{request.config.pages_name}.pages.dev')
@@ -323,7 +326,7 @@ def test_partial_publication_recovery_carries_baseline_through_both_publishers_a
         assert state(store)['active'] == MIGRATION_ACTIVE_RELEASE
         record['order'].append('verify')
         return {'checks': dict.fromkeys(('release-versions-verified','published-subscriptions-verified','pages-frontend-verified'),True), 'runId':record['permit'].operation_id,'manifestSha256':'f'*64,'counts':{'nodes':1,'sources':1}}
-    monkeypatch.setattr(orchestration, 'begin_edge_recovery', begin)
+    monkeypatch.setattr(orchestration, 'begin_edge_recovery' if kind == 'edge16' else 'begin_promotion_copy_recovery', begin)
     monkeypatch.setattr(orchestration, 'migrate_misub', migrate)
     monkeypatch.setattr(orchestration, 'configure_environment', configure)
     monkeypatch.setattr(orchestration, 'verify_public', verify)

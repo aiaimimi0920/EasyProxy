@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import execute as entry
 from diagnostics import STAGES, PROMOTION_REASONS, StageError, phase, safe_error_code
 from artifact_store import ArtifactError
+from coordination import CoordinationError
 from test_pristine_repair import request_fixture
 from test_request import parse
 
@@ -98,3 +99,22 @@ def test_promotion_reason_cannot_be_forged_or_attached_to_an_unrelated_stage():
     error = StageError("PROMOTION", "COUNT_DROP")
     error.reason = "PRIVATE_URI"
     assert safe_error_code(error) == "EASYPROXY_SBA_FAILED_OR_UNKNOWN"
+
+
+@pytest.mark.parametrize('reason', ['UNKNOWN', 'OWNERSHIP', 'STAGE_ALREADY_ATTEMPTED', 'STAGE_UNKNOWN'])
+def test_promotion_preserves_exact_coordination_failure_without_provider_body(reason):
+    with pytest.raises(StageError) as caught:
+        with phase('PROMOTION'):
+            raise CoordinationError('EASYPROXY_SBA_COORDINATION_' + reason)
+    assert safe_error_code(caught.value) == 'EASYPROXY_SBA_PROMOTION_COORDINATION_' + reason + '_UNKNOWN'
+
+
+@pytest.mark.parametrize('error', [CoordinationError('PRIVATE_PROVIDER_BODY'),
+    CoordinationError('EASYPROXY_SBA_COORDINATION_UNKNOWN PRIVATE_PROVIDER_BODY'),
+    CoordinationError('EASYPROXY_SBA_COORDINATION_UNKNOWN', 'PRIVATE_PROVIDER_BODY'),
+    RuntimeError('EASYPROXY_SBA_COORDINATION_UNKNOWN')])
+def test_promotion_rejects_unknown_or_forged_coordination_classification(error):
+    with pytest.raises(StageError) as caught:
+        with phase('PROMOTION'):
+            raise error
+    assert safe_error_code(caught.value) == 'EASYPROXY_SBA_PROMOTION_UNKNOWN'

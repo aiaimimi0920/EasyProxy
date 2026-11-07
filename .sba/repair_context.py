@@ -146,3 +146,15 @@ EDGE_CONTEXT = {
     'resultDigest': 'cc04cd0c79f5597ef655b8bc5bcf87d785c215c3236f9b1bb463138f7aecb74b',
     'errorCode': 'EASYPROXY_SBA_EDGE_UNKNOWN',
 }
+
+# 准确 1.0.17 只复制首个 immutable release 后停止，旧 stable 尚未修改。
+PROMOTION_COPY_REPAIR_ID = 'continue-update-after-first-release-copy'
+PROMOTION_COPY_PARENT_RELEASE = {'sourceSha': '7b36a847bc5d527a34e79f498feb783026594a09', 'applicationVersion': '1.0.17'}
+PROMOTION_COPY_CONTEXT = {
+    'repairId': PROMOTION_COPY_REPAIR_ID,
+    'parentTaskId': 'dc-47580752d6844c73a8c3da3b6ea47569',
+    'parentRunId': 42379246256,
+    'requestDigest': '5d893c823f607bdd40b5a4f6264d48e74034a62338b68783538b06cf5eb53930',
+    'resultDigest': '9a7e932bc6754a457cc8753edb1a1acbf7281b03f06e15df5a35e03c9cc12e91',
+    'errorCode': 'EASYPROXY_SBA_PROMOTION_UNKNOWN',
+}

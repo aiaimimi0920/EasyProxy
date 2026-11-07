@@ -2,6 +2,43 @@
 
 ## 本轮状态
 
+### 1.0.17 的准确结果与 1.0.18 候选
+
+1.0.17 源码 `7b36a847bc5d527a34e79f498feb783026594a09` 已推送，Validate run
+`42378438041` 两项通过；Linux SBA 全套 1920 passed / 51 skipped。单次恢复 task
+`dc-47580752d6844c73a8c3da3b6ea47569` / run `42379246256` 的认证业务回执仍为
+`EASYPROXY_SBA_PROMOTION_UNKNOWN`，不是成功。Worker/Pages 现为 1.0.17，active/stable
+仍为 1.0.13；本次 writer operation 为 `32ca11b37c6c4e1283c0d5ee8205d0bf`。
+
+本次已持久保存有限审计摘要：47 个稳定 URI、compatibility probe 通过、无格式错误且
+审计容器清理已确认，因此不能再将此次失败归因为数量门禁。晋级阶段已登记，准确
+`releases/<operation>/` 只有 51395 字节的 `subs/clash.yaml`，没有其余七个 release 对象；
+旧 stable 七份产物、manifest SHA/ETag、D1 44/1/0/0 和 migration 1/2 仍未变。
+11878 字节 age 备份完整回读摘要为
+`b5d5d6614e63fe8c020b8ccacd436d7d53fe50653c937b00e5cc08d497620e76`。
+
+本地只读 control GET 现场实测一次 HTTP 500；代码确认 PROMOTION 会丢弃确切
+`CoordinationError`，该类错误可在首个不可变副本后的 ownership GET 发生。但原日志
+没有保留底层分类，**不能将这次历史失败唯一归因于 R2 500**。1.0.18 候选仅对 control
+GET 的 500/502/503/504 增加一次 0.25 秒退避重读，权限/确定性/无法分类错误不重读；
+PUT/CAS/阶段写入与 SDK 单发送限制不变。PROMOTION 仅透传准确类型与完整固定参数的
+四项协调错误码，不公开异常正文。该部分 Windows/Linux 相关测试各 205 passed。
+
+用户另行批准准确本次父回执的 1.0.18 单次恢复。新入口额外绑定首个 release 副本、
+七份阶段正文与 ETag、五份候选、完整旧备份、last-known-good 清单、D1 全表逐行摘要，
+公开/provider 1.0.17、active/stable 1.0.13。任何漂移停止；create-only 消费证据后原 ETag
+单次 CAS 移交非空 update writer，不清锁、不重放旧晋级、不删除任何原对象。新 update
+仍先持久新加密备份，再发布、重新生成/审计、晋级、同步及公开验收，最后才 commit。
+这里记录批准与候选设计，不是 1.0.18 已上线声明。
+
+NAS 已实际更新到准确 1.0.17 完整镜像，停止态备份和 SQLite integrity_check 通过，
+HTTP CONNECT 与 SOCKS5/TLS 均 204；启动收敛后 TUN IPv4 ready、manifest healthy、无
+fallback，RestartCount=0、无 OOM/panic/fatal。云端稳定产物尚旧，不能据此称全部完成。
+
+SpringBok PR #144 已合并为 `aa73dcbb6cfee2fb08d5afdc1362121640b294a4`，七项 main CI
+通过，控制面已发布并独立核对 Worker bytes。修复只禁止点击过期预览确认，不延长签名、
+不修改权限或恢复边界；Linux executor pin 仍为 `de26192f0be5c1f4df23e82e3ac3104ab59bcf30`。
+
 用户于 2026-11-07 明确恢复本任务，并批准仅退役旧 `easyproxy-prod` 登记、保留历史任务
 与回执，不触碰 main、NAS 数据或备份。旧 refresh writer 已按独立证据恢复；随后普通
 1.0.14 update 产生新的 MIGRATION UNKNOWN；获批的 1.0.15 恢复已单次执行，解决备份

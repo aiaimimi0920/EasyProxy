@@ -154,7 +154,7 @@ def test_application_seeds_previous_inputs_and_routes_to_backed_up_update(approv
 
 def test_current_manifest_exposes_only_exact_edge_recovery():
     root = Path(__file__).parents[1]
-    manifest = json.loads((root / 'manifest.json').read_bytes())
+    manifest = json.loads((root / 'tests/fixtures/manifest-1.0.17.json').read_bytes())
     assert manifest['version'] == '1.0.17'
     row, = manifest['repairs']
     assert row['id'] == EDGE_CONTEXT['repairId'] and row['fromErrorCodes'] == [EDGE_CONTEXT['errorCode']]

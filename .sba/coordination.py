@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 import threading
+import time
 from typing import Protocol
 from urllib.parse import urlsplit
 import uuid
@@ -301,18 +302,24 @@ class S3Store:
             raise StoreUnknown()
 
     def read(self) -> tuple[bytes, str] | None:
-        try:
-            response = self.client.get_object(Bucket=self.bucket, Key=STATE_KEY)
-            stream = response["Body"]
+        # 所有权检查是无副作用的 GET；仅已确认的临时 HTTP 失败可再读一次。
+        # 不重试 PUT/CAS、权限/归属拒绝、损坏正文或无法分类的错误。
+        for attempt in range(2):
             try:
-                body = stream.read(MAX_STATE_BYTES + 1)
-            finally:
-                stream.close()
-            return body, response.get("ETag")
-        except Exception as exc:
-            if _status(exc) == 404 and _code(exc) == "NoSuchKey":
-                return None
-            raise StoreUnknown() from None
+                response = self.client.get_object(Bucket=self.bucket, Key=STATE_KEY)
+                stream = response["Body"]
+                try:
+                    body = stream.read(MAX_STATE_BYTES + 1)
+                finally:
+                    stream.close()
+                return body, response.get("ETag")
+            except Exception as exc:
+                if _status(exc) == 404 and _code(exc) == "NoSuchKey":
+                    return None
+                if attempt == 0 and _status(exc) in (500, 502, 503, 504):
+                    time.sleep(0.25)
+                    continue
+                raise StoreUnknown() from None
 
     def is_empty(self) -> bool:
         try:

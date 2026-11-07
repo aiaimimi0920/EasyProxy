@@ -96,26 +96,27 @@ def verify_parent(token):
         session.close()
 
 
-def verify_provider_baseline(owner, config, credentials):
+def verify_provider_baseline(owner, config, credentials, *, release=None):
     from ech import metadata, _verify_settings
     from worker_api import WorkerAPI
     from pages import configuration, _verify_project, _verify_deployment
     from pages_api import PagesAPI
     from repair_context import PROMOTION_PARENT_RELEASE
+    release = PROMOTION_PARENT_RELEASE if release is None else release
     worker = WorkerAPI(config.account_id, credentials['EASYPROXY_CLOUDFLARE_API_TOKEN'])
     pages = PagesAPI(config.account_id, config.pages_name, credentials['EASYPROXY_CLOUDFLARE_API_TOKEN'])
     try:
-        _verify_settings(worker.settings(config.worker_name), metadata(owner, PROMOTION_PARENT_RELEASE,
+        _verify_settings(worker.settings(config.worker_name), metadata(owner, release,
                          credentials['EASYPROXY_ECH_TOKEN']))
         secrets = {'ADMIN_PASSWORD': credentials['EASYPROXY_MISUB_ADMIN_PASSWORD'],
                    'COOKIE_SECRET': credentials['EASYPROXY_MISUB_COOKIE_SECRET'],
                    'MANIFEST_TOKEN': credentials['EASYPROXY_MANIFEST_TOKEN']}
-        expected = configuration(owner, PROMOTION_PARENT_RELEASE, config.pages_name, config.database_id, secrets,
+        expected = configuration(owner, release, config.pages_name, config.database_id, secrets,
             **({'origin': config.pages_origin} if config.custom_pages_origin is not None else {}))
         project = pages.project()
         project_id = _verify_project(project, config.pages_name, expected)
         canonical = project.get('canonical_deployment')
-        _verify_deployment(canonical, config.pages_name, project_id, PROMOTION_PARENT_RELEASE)
+        _verify_deployment(canonical, config.pages_name, project_id, release)
         require(canonical.get('latest_stage', {}).get('name') == 'deploy'
                 and canonical['latest_stage'].get('status') == 'success')
     finally:

@@ -26,8 +26,10 @@ from migration import MiSubMigration, migrate_misub
 from migration_repair import begin_recovery as begin_migration_recovery
 from promotion_repair import begin_recovery as begin_promotion_recovery
 from edge_repair import begin_recovery as begin_edge_recovery
+from promotion_copy_repair import begin_recovery as begin_promotion_copy_recovery
 from publication_baseline import PublicationBaseline
 from repair_context import EDGE_REPAIR_ID
+from repair_context import PROMOTION_COPY_REPAIR_ID
 from repair_context import MIGRATION_REPAIR_ID, PROMOTION_REPAIR_ID
 from pages import PagesDeployment, configuration as pages_configuration, publish_pages
 from pages_repair import PagesResume, begin_recovery as begin_pages_recovery, verify_configured
@@ -68,7 +70,7 @@ def deploy_suite(request: ApplicationRequest, root: Path, tools: LinuxTools, ima
             and type(tools) is LinuxTools and type(image) is AuditImage and type(sealer) is Sealer)
     require(recovery_request is None or type(recovery_request) is ApplicationRequest
             and recovery_request.action == "repair" and (request.action == "deploy" or
-                request.action == "update" and recovery_request.context.get("repairId") in (MIGRATION_REPAIR_ID, PROMOTION_REPAIR_ID, EDGE_REPAIR_ID))
+                request.action == "update" and recovery_request.context.get("repairId") in (MIGRATION_REPAIR_ID, PROMOTION_REPAIR_ID, EDGE_REPAIR_ID, PROMOTION_COPY_REPAIR_ID))
             and recovery_request.task_id == request.task_id
             and recovery_request.candidate == request.candidate and recovery_request.config == request.config)
     require(root.is_absolute() and root.resolve(strict=True) == root
@@ -117,6 +119,7 @@ def deploy_suite(request: ApplicationRequest, root: Path, tools: LinuxTools, ima
                          MIGRATION_REPAIR_ID: begin_migration_recovery,
                          PROMOTION_REPAIR_ID: begin_promotion_recovery,
                          EDGE_REPAIR_ID: begin_edge_recovery,
+                         PROMOTION_COPY_REPAIR_ID: begin_promotion_copy_recovery,
                          FRESH_DOMAIN_REPAIR_ID: begin_fresh_domain_recovery,
                          GENERATION_REPAIR_ID: begin_generation_recovery,
                          GENERATION_OUTPUTS_REPAIR_ID: begin_generation_outputs_recovery,

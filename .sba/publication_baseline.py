@@ -3,23 +3,29 @@ from dataclasses import dataclass
 import hashlib
 
 from coordination import Coordinator, Permit
-from repair_context import MIGRATION_ACTIVE_RELEASE, PROMOTION_PARENT_RELEASE
+from repair_context import MIGRATION_ACTIVE_RELEASE, PROMOTION_PARENT_RELEASE, PROMOTION_COPY_PARENT_RELEASE
 
 
 @dataclass(frozen=True)
 class PublicationBaseline:
     operation_id: str
     permit_sha256: str
+    recovery: str = 'edge16'
 
     @property
     def release(self):
-        return dict(PROMOTION_PARENT_RELEASE)
+        if self.recovery == 'edge16':
+            return dict(PROMOTION_PARENT_RELEASE)
+        if self.recovery == 'first-release17':
+            return dict(PROMOTION_COPY_PARENT_RELEASE)
+        raise RuntimeError('EASYPROXY_SBA_PUBLICATION_BASELINE_REJECTED')
 
     def assert_permit(self, owner: Coordinator, permit: Permit):
         state = owner.assert_owned(permit)
         if not (permit.action == 'update' and owner.identity['purpose'] == 'production'
                 and state['active'] == MIGRATION_ACTIVE_RELEASE
-                and state['writer']['candidate']['applicationVersion'] == '1.0.17'
+                and (self.recovery, state['writer']['candidate']['applicationVersion'])
+                    in (('edge16', '1.0.17'), ('first-release17', '1.0.18'))
                 and permit.operation_id == self.operation_id
                 and hashlib.sha256(permit.state_bytes).hexdigest() == self.permit_sha256):
             raise RuntimeError('EASYPROXY_SBA_PUBLICATION_BASELINE_REJECTED')

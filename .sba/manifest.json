@@ -2,7 +2,7 @@
   "schemaVersion": 3,
   "id": "easyproxy-cloud",
   "name": "EasyProxy 云套件",
-  "version": "1.0.17",
+  "version": "1.0.18",
   "entrypoint": "springbok.ps1",
   "runtime": {
     "runner": "ubuntu-24.04",
@@ -32,10 +32,10 @@
   },
   "repairs": [
     {
-      "id": "continue-update-partial-publication",
-      "name": "恢复本次部分发布的升级",
+      "id": "continue-update-after-first-release-copy",
+      "name": "恢复本次首个发布副本后的升级",
       "fromErrorCodes": [
-        "EASYPROXY_SBA_EDGE_UNKNOWN"
+        "EASYPROXY_SBA_PROMOTION_UNKNOWN"
       ],
       "secretNames": [
         "EASYPROXY_CLOUDFLARE_API_TOKEN",

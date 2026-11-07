@@ -21,7 +21,8 @@ STAGES = {"SOURCE", "PYTHON", "CREDENTIALS", "OUTPUT", "TOOLS", "RUNTIME", "IMAG
 PROMOTION_REASONS = frozenset({"IDENTITY", "AUDIT", "AUDIT_IMAGE", "AUDIT_CLEANUP", "INPUT", "EMPTY", "FORMAT",
     "COUNTS", "COUNT_DROP", "STABLE_MISSING", "UNOWNED_STABLE", "STABLE_IDENTITY", "STABLE_MANIFEST",
     "STABLE_DRIFT", "CANDIDATE_DRIFT", "SNAPSHOT_DRIFT", "PUBLIC_UNKNOWN", "PUBLIC_MISMATCH",
-    "READ_UNKNOWN", "CONFLICT", "WRITE_UNKNOWN", "READBACK_UNKNOWN"})
+    "READ_UNKNOWN", "CONFLICT", "WRITE_UNKNOWN", "READBACK_UNKNOWN", "COORDINATION_UNKNOWN",
+    "COORDINATION_OWNERSHIP", "COORDINATION_STAGE_ALREADY_ATTEMPTED", "COORDINATION_STAGE_UNKNOWN"})
 STAGE_REASONS = {**dict.fromkeys(PAGES_STAGES, RESPONSE_REASONS), "PROMOTION": PROMOTION_REASONS}
 
 
@@ -55,9 +56,13 @@ def phase(stage: str):
         reason = None
         if stage == "PROMOTION":
             from artifact_store import ArtifactError
+            from coordination import CoordinationError
             if type(error) is ArtifactError:
                 reason = next((item for item in PROMOTION_REASONS
                     if error.args == ("EASYPROXY_SBA_ARTIFACT_" + item,)), None)
+            elif type(error) is CoordinationError:
+                reason = next((item for item in PROMOTION_REASONS if item.startswith("COORDINATION_")
+                    and error.args == ("EASYPROXY_SBA_" + item,)), None)
         raise StageError(stage, reason) from None
 
 

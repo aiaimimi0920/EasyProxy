@@ -27,7 +27,7 @@ RELEASE = {"sourceSha": "a" * 40, "applicationVersion": "1.0.0"}
 
 @pytest.fixture
 def wire():
-    record = {"body": None, "etag": None, "writes": [], "mode": "normal", "requests": [], "backups": {}, "stages": {}}
+    record = {"body": None, "etag": None, "writes": [], "mode": "normal", "requests": [], "backups": {}, "stages": {}, "read_errors": []}
     mutex = threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):
@@ -51,7 +51,10 @@ def wire():
         def do_GET(self):
             with mutex:
                 record["requests"].append(("GET", self.path))
-                if record["mode"] == "missing-bucket":
+                if self.path == '/' + BUCKET + '/' + coordination.STATE_KEY and record['read_errors']:
+                    status = record['read_errors'].pop(0)
+                    self.error(status, 'InternalError' if status >= 500 else 'AccessDenied')
+                elif record["mode"] == "missing-bucket":
                     self.error(404, "NoSuchBucket")
                 elif "/_sba/backups/" in self.path or "/_sba/operations/" in self.path:
                     objects = record["backups"] if "/_sba/backups/" in self.path else record["stages"]
@@ -196,6 +199,39 @@ def test_single_send_guard_overrides_sdk_retry_handlers(wire):
     with pytest.raises(coordination.StoreUnknown):
         store.compare_and_set(b"{}", None)
     assert len(record["writes"]) == 1
+
+
+@pytest.mark.parametrize('status', [500, 502, 503, 504])
+def test_control_read_retries_one_transient_http_error_without_replaying_put(wire, status):
+    create, record = wire
+    store = create()
+    etag = store.compare_and_set(b'{"fixture":1}', None)
+    record['requests'].clear()
+    record['read_errors'] = [status]
+    assert store.read() == (b'{"fixture":1}', etag)
+    assert [method for method, _ in record['requests']] == ['GET', 'GET']
+    assert len(record['writes']) == 1
+
+
+@pytest.mark.parametrize('errors,attempts', [([500, 500, 500], 2), ([403, 500], 1), ([401, 500], 1), ([400, 500], 1)])
+def test_control_read_retry_is_bounded_and_never_retries_deterministic_errors(wire, errors, attempts):
+    create, record = wire
+    store = create()
+    record['read_errors'] = list(errors)
+    with pytest.raises(coordination.StoreUnknown):
+        store.read()
+    assert len(record['requests']) == attempts
+    assert record['writes'] == []
+
+
+def test_control_read_retry_returns_fresh_bytes_not_the_previous_ownership(wire):
+    create, record = wire
+    store = create()
+    store.compare_and_set(b'{"fixture":1}', None)
+    current = create().compare_and_set(b'{"fixture":2}', record['etag'])
+    record['read_errors'] = [500]
+    assert store.read() == (b'{"fixture":2}', current)
+    assert len(record['writes']) == 2
 
 
 def test_definitive_precondition_failure_does_not_replay(wire):
