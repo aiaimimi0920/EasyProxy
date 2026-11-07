@@ -8,9 +8,11 @@ toolchain go1.24.4
 replace github.com/sagernet/sing-tun => ./third_party/sing-tun
 
 require (
+	github.com/miekg/dns v1.1.68
 	github.com/oschwald/geoip2-golang v1.13.0
 	github.com/sagernet/sing v0.7.18
 	github.com/sagernet/sing-box v1.12.25
+	github.com/sagernet/sing-tun v0.7.13
 	golang.org/x/sync v0.19.0
 	golang.org/x/sys v0.38.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -56,7 +58,7 @@ require (
 	github.com/illarion/gonotify/v2 v2.0.3 // indirect
 	github.com/insomniacslk/dhcp v0.0.0-20250417080101-5f8cf70e8c5f // indirect
 	github.com/jsimonetti/rtnetlink v1.4.0 // indirect
-	github.com/klauspost/compress v1.18.1 // indirect
+	github.com/klauspost/compress v1.18.7 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/kortschak/wol v0.0.0-20200729010619-da482cc4850a // indirect
 	github.com/libdns/alidns v1.0.5-libdns.v1.beta1 // indirect
@@ -71,7 +73,6 @@ require (
 	github.com/metacubex/tfo-go v0.0.0-20251024101424-368b42b59148 // indirect
 	github.com/metacubex/utls v1.8.4 // indirect
 	github.com/mholt/acmez/v3 v3.1.4 // indirect
-	github.com/miekg/dns v1.1.68 // indirect
 	github.com/mitchellh/go-ps v1.0.0 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/oschwald/maxminddb-golang v1.13.1 // indirect
@@ -92,7 +93,6 @@ require (
 	github.com/sagernet/sing-shadowsocks v0.2.8 // indirect
 	github.com/sagernet/sing-shadowsocks2 v0.2.1 // indirect
 	github.com/sagernet/sing-shadowtls v0.2.1-0.20250503051639-fcd445d33c11 // indirect
-	github.com/sagernet/sing-tun v0.7.13 // indirect
 	github.com/sagernet/sing-vmess v0.2.7 // indirect
 	github.com/sagernet/smux v1.5.50-sing-box-mod.1 // indirect
 	github.com/sagernet/tailscale v1.80.3-sing-box-1.12-mod.2 // indirect
