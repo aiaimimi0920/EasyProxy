@@ -13,7 +13,7 @@ def test_published_contract_matches_real_entry_actions_and_exact_secret_set():
     manifest = json.loads((root / "manifest.json").read_bytes())
     declaration = json.loads((root / "deployment.json").read_bytes())
     assert manifest["schemaVersion"] == 3 and declaration["schemaVersion"] == 2
-    assert manifest["id"] == APPLICATION_ID and set(manifest["actions"]) == ACTIONS
+    assert manifest["id"] == APPLICATION_ID and set(manifest["actions"]) == ACTIONS - {"repair"}
     assert manifest["runtime"] == {"runner": "ubuntu-24.04", "powershell": "7.6.9", "python": "3.12", "node": "22"}
     assert set(manifest["secrets"]) == SECRETS and len(manifest["secrets"]) == len(SECRETS)
     assert (root / manifest["entrypoint"]).is_file()
@@ -24,7 +24,8 @@ def test_published_contract_matches_real_entry_actions_and_exact_secret_set():
 
 def test_usable_pool_release_does_not_advertise_consumed_recovery():
     manifest = json.loads((Path(__file__).parents[1] / "manifest.json").read_bytes())
-    assert manifest["version"] == "1.0.19" and manifest["repairs"] == []
+    assert manifest["version"] == "1.0.20"
+    assert "repairs" not in manifest and "repair" not in manifest["actions"]
 
 
 def test_declaration_templates_produce_the_exact_seven_resource_application_inventory():

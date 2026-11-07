@@ -2,7 +2,7 @@
   "schemaVersion": 3,
   "id": "easyproxy-cloud",
   "name": "EasyProxy 云套件",
-  "version": "1.0.19",
+  "version": "1.0.20",
   "entrypoint": "springbok.ps1",
   "runtime": {
     "runner": "ubuntu-24.04",
@@ -25,12 +25,8 @@
     },
     "destroy-preview": {
       "timeoutSeconds": 3600
-    },
-    "repair": {
-      "timeoutSeconds": 3600
     }
   },
-  "repairs": [],
   "secrets": [
     "EASYPROXY_CLOUDFLARE_API_TOKEN",
     "EASYPROXY_GITHUB_TOKEN",
