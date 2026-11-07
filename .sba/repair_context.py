@@ -134,3 +134,15 @@ PROMOTION_CONTEXT = {
     "resultDigest": "41a40df671b5324745a0bca628ca730a3fd22c757fc5624fb9b43de563ee545b",
     "errorCode": "EASYPROXY_SBA_PROMOTION_UNKNOWN",
 }
+
+# 准确 1.0.16 在 Worker 覆盖前被旧 active 校验拒绝；公开仍为 1.0.15。
+EDGE_REPAIR_ID = 'continue-update-partial-publication'
+EDGE_PARENT_RELEASE = {'sourceSha': '6b35a53ecd4f085af2526118cbd84a8e644675c3', 'applicationVersion': '1.0.16'}
+EDGE_CONTEXT = {
+    'repairId': EDGE_REPAIR_ID,
+    'parentTaskId': 'dc-a140d70d79d1403d96ace01d07c4a677',
+    'parentRunId': 42376441530,
+    'requestDigest': 'bc99768c48c2bc9d3af30599b20fe2c8dcb0dffaba93aaa5378a463e3bf986a1',
+    'resultDigest': 'cc04cd0c79f5597ef655b8bc5bcf87d785c215c3236f9b1bb463138f7aecb74b',
+    'errorCode': 'EASYPROXY_SBA_EDGE_UNKNOWN',
+}

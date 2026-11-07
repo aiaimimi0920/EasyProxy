@@ -144,12 +144,17 @@ def build_bundle(root: Path, esbuild: Path, workdir: Path) -> bytes:
         raise WorkerError("EASYPROXY_SBA_WORKER_BUILD") from None
 
 
-def publish_ech(owner: Coordinator, permit: Permit, settings: EchDeployment, *, api_token: str, ech_token: str, resume=None) -> dict:
+def publish_ech(owner: Coordinator, permit: Permit, settings: EchDeployment, *, api_token: str, ech_token: str,
+                resume=None, publication_baseline=None) -> dict:
     from pages_repair import PagesResume, WORKER_BUNDLE_SHA256, worker_bundle_digest
     from fresh_domain_resume import FreshDomainResume
     from fresh_domain_resources import record_worker_domain, verify_worker_domain
     from repair_context import FRESH_DOMAIN_PARENT_RELEASE
+    from publication_baseline import PublicationBaseline
     state = owner.assert_owned(permit)
+    if publication_baseline is not None:
+        require(resume is None and type(publication_baseline) is PublicationBaseline, 'OWNERSHIP')
+        publication_baseline.assert_permit(owner, permit)
     require(permit.action in ("deploy", "update", "preview"), "OWNERSHIP")
     require(inventory_digest(settings.inventory) == owner.inventory_digest, "INVENTORY")
     workers = [row for row in settings.inventory if row["kind"] == "worker"]
@@ -182,7 +187,8 @@ def publish_ech(owner: Coordinator, permit: Permit, settings: EchDeployment, *, 
                     f"https://{settings.worker_name}.{subdomain}.workers.dev"), parent_release)
         elif permit.action == "update":
             require(len(existing) == 1, "OWNERSHIP")
-            _verify_settings(api.settings(settings.worker_name), metadata(owner, state["active"], ech_token))
+            parent_release = state['active'] if publication_baseline is None else publication_baseline.release
+            _verify_settings(api.settings(settings.worker_name), metadata(owner, parent_release, ech_token))
         else:
             require(not existing, "UNOWNED_RESOURCE")  # No implicit import or overwrite on first deployment.
         owner.claim_stage(permit, "ech-publication")

@@ -279,3 +279,62 @@ def test_migration_recovery_uses_update_stages_and_commits_only_after_backup_and
     assert record["order"] == ["migration", *ORDER[1:]]
     assert result == {"checks": {"suite-published": True, "service-ready": True, "backup-created": True, "data-preserved": True}}
     assert state(store)["active"] == request.candidate and state(store)["writer"] is None
+
+
+@pytest.mark.parametrize('failure', [None, 'edge', 'pages'])
+def test_partial_publication_recovery_carries_baseline_through_both_publishers_after_backup(prepared, monkeypatch, failure):
+    import hashlib
+    from coordination import Coordinator
+    from migration import MiSubMigration
+    from publication_baseline import PublicationBaseline
+    from repair_context import EDGE_CONTEXT, EDGE_PARENT_RELEASE, MIGRATION_ACTIVE_RELEASE
+    base, root, tools, image, sealer, output, credentials, store, record = prepared
+    request = replace(base, action='update', application_version='1.0.17', previous=MIGRATION_ACTIVE_RELEASE)
+    recovery = replace(request, action='repair', previous=EDGE_PARENT_RELEASE, context=EDGE_CONTEXT)
+    owner = Coordinator(store, request.config.identity('production'), request.config.inventory_digest)
+    initial = owner.begin('deploy', MIGRATION_ACTIVE_RELEASE)
+    owner.commit_verified(initial, {'suite-published': True, 'service-ready': True})
+    handles = []
+    def begin(owner, received, source, values):
+        assert received is recovery and source == root and values is credentials
+        permit = owner.begin('update', request.candidate, previous=MIGRATION_ACTIVE_RELEASE)
+        baseline = PublicationBaseline(permit.operation_id, hashlib.sha256(permit.state_bytes).hexdigest())
+        handles.append(baseline)
+        return permit, baseline
+    migration = MiSubMigration(root=root, executable=root/'cli', node=root/'node', wrangler=root/'wrangler', topology=root/'topology', manifest=root/'manifest', wrangler_config=root/'config', workdir=root/'work', database_id=request.config.database_id, base_url=f'https://{request.config.pages_name}.pages.dev')
+    def migrate(owner, permit, settings, **_):
+        assert settings is migration
+        record['order'].append('migration')
+        return {'checks': dict.fromkeys(('backup-created', 'data-preserved', 'migration-verified'), True)}
+    for name in ('publish_ech', 'publish_pages'):
+        original = getattr(orchestration, name)
+        def publish(*args, _original=original, **kwargs):
+            assert kwargs.pop('publication_baseline') is handles[0] and 'resume' not in kwargs
+            handles[0].assert_permit(args[0], args[1])
+            result = _original(*args, **kwargs)
+            result.update(request.candidate)
+            return result
+        monkeypatch.setattr(orchestration, name, publish)
+    github = orchestration.configure_environment
+    def configure(*args, **kwargs):
+        assert kwargs['resume'] is None and record['order'] == ['migration']
+        return github(*args, **kwargs)
+    def verify(*_):
+        assert state(store)['active'] == MIGRATION_ACTIVE_RELEASE
+        record['order'].append('verify')
+        return {'checks': dict.fromkeys(('release-versions-verified','published-subscriptions-verified','pages-frontend-verified'),True), 'runId':record['permit'].operation_id,'manifestSha256':'f'*64,'counts':{'nodes':1,'sources':1}}
+    monkeypatch.setattr(orchestration, 'begin_edge_recovery', begin)
+    monkeypatch.setattr(orchestration, 'migrate_misub', migrate)
+    monkeypatch.setattr(orchestration, 'configure_environment', configure)
+    monkeypatch.setattr(orchestration, 'verify_public', verify)
+    monkeypatch.setattr(orchestration, 'initialize_d1', lambda *_a, **_k: pytest.fail('no initialization'))
+    record['fail'] = failure
+    def run():
+        return orchestration.deploy_suite(request,root,tools,image,sealer,BODIES,output,credentials=credentials,migration_settings=migration,recovery_request=recovery)
+    if failure:
+        with pytest.raises(RuntimeError): run()
+        assert state(store)['active'] == MIGRATION_ACTIVE_RELEASE and state(store)['writer'] is not None
+    else:
+        assert run()['checks']['service-ready'] is True
+        assert record['order'] == ['migration', *ORDER[1:]]
+        assert state(store)['active'] == request.candidate and state(store)['writer'] is None

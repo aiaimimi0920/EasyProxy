@@ -202,6 +202,35 @@ def publish(owner, permit, settings):
     return ech.publish_ech(owner, permit, settings, api_token="fixture-api-token", ech_token=ECH_TOKEN)
 
 
+@pytest.mark.parametrize('mode', ['ordinary', 'retained', 'binding-drift', 'wrong-permit'])
+def test_partial_publication_baseline_never_weakens_ordinary_update_or_binding_checks(tmp_path, api_wire, monkeypatch, mode):
+    from publication_baseline import PublicationBaseline
+    from repair_context import MIGRATION_ACTIVE_RELEASE, PROMOTION_PARENT_RELEASE
+    release = {'sourceSha': 'b' * 40, 'applicationVersion': '1.0.17'}
+    store = MemoryStore()
+    owner = coordination.Coordinator(store, IDENTITY, ech.inventory_digest(INVENTORY))
+    first = owner.begin('deploy', MIGRATION_ACTIVE_RELEASE)
+    owner.commit_verified(first, CHECKS['deploy'])
+    permit = owner.begin('update', release, previous=MIGRATION_ACTIVE_RELEASE)
+    settings = ech.EchDeployment(tmp_path, tmp_path / 'esbuild', tmp_path / 'build', WORKER, INVENTORY)
+    monkeypatch.setattr(ech, 'inspect_checkout', lambda *_: [])
+    monkeypatch.setattr(ech, 'build_bundle', lambda *_: b'fixture worker bundle')
+    api_wire['settings'] = ech.metadata(owner, PROMOTION_PARENT_RELEASE, ECH_TOKEN)
+    if mode == 'binding-drift': api_wire['settings']['bindings'][0]['bucket_name'] = 'foreign'
+    baseline = PublicationBaseline('f' * 32 if mode == 'wrong-permit' else permit.operation_id,
+                                   hashlib.sha256(permit.state_bytes).hexdigest())
+    def run():
+        return ech.publish_ech(owner, permit, settings, api_token='fixture-api-token', ech_token=ECH_TOKEN,
+                               **({} if mode == 'ordinary' else {'publication_baseline': baseline}))
+    if mode == 'retained':
+        assert run()['checks']['ech-published'] is True
+        assert len(api_wire['writes']) == 2
+    else:
+        with pytest.raises(RuntimeError): run()
+        assert api_wire['writes'] == [] and not store.stages
+    assert json.loads(store.body)['active'] == MIGRATION_ACTIVE_RELEASE
+
+
 @pytest.mark.parametrize("action", ["deploy", "update", "unknown"])
 def test_custom_origin_publication_verifies_provider_then_binds_then_custom(candidate, api_wire, monkeypatch, action):
     release, settings = candidate

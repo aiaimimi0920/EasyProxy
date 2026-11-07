@@ -25,6 +25,9 @@ from misub_sync import sync_misub
 from migration import MiSubMigration, migrate_misub
 from migration_repair import begin_recovery as begin_migration_recovery
 from promotion_repair import begin_recovery as begin_promotion_recovery
+from edge_repair import begin_recovery as begin_edge_recovery
+from publication_baseline import PublicationBaseline
+from repair_context import EDGE_REPAIR_ID
 from repair_context import MIGRATION_REPAIR_ID, PROMOTION_REPAIR_ID
 from pages import PagesDeployment, configuration as pages_configuration, publish_pages
 from pages_repair import PagesResume, begin_recovery as begin_pages_recovery, verify_configured
@@ -65,7 +68,7 @@ def deploy_suite(request: ApplicationRequest, root: Path, tools: LinuxTools, ima
             and type(tools) is LinuxTools and type(image) is AuditImage and type(sealer) is Sealer)
     require(recovery_request is None or type(recovery_request) is ApplicationRequest
             and recovery_request.action == "repair" and (request.action == "deploy" or
-                request.action == "update" and recovery_request.context.get("repairId") in (MIGRATION_REPAIR_ID, PROMOTION_REPAIR_ID))
+                request.action == "update" and recovery_request.context.get("repairId") in (MIGRATION_REPAIR_ID, PROMOTION_REPAIR_ID, EDGE_REPAIR_ID))
             and recovery_request.task_id == request.task_id
             and recovery_request.candidate == request.candidate and recovery_request.config == request.config)
     require(root.is_absolute() and root.resolve(strict=True) == root
@@ -113,6 +116,7 @@ def deploy_suite(request: ApplicationRequest, root: Path, tools: LinuxTools, ima
                 begin = {PAGES_REPAIR_ID: begin_pages_recovery, ASSETS_REPAIR_ID: begin_assets_recovery,
                          MIGRATION_REPAIR_ID: begin_migration_recovery,
                          PROMOTION_REPAIR_ID: begin_promotion_recovery,
+                         EDGE_REPAIR_ID: begin_edge_recovery,
                          FRESH_DOMAIN_REPAIR_ID: begin_fresh_domain_recovery,
                          GENERATION_REPAIR_ID: begin_generation_recovery,
                          GENERATION_OUTPUTS_REPAIR_ID: begin_generation_outputs_recovery,
@@ -146,10 +150,14 @@ def deploy_suite(request: ApplicationRequest, root: Path, tools: LinuxTools, ima
                                            parent_release=resume.parent_release)
             else:
                 github = configure_environment(owner, permit, config, root, token=credentials["EASYPROXY_GITHUB_TOKEN"],
-                    secrets={name: credentials[name] for name in REFRESH_SECRETS}, sealer=sealer, resume=resume)
+                    secrets={name: credentials[name] for name in REFRESH_SECRETS}, sealer=sealer,
+                    resume=None if type(resume) is PublicationBaseline else resume)
         stage_checks(github, {"github-environment-configured", "github-environment-verified", "github-workflow-verified"})
         require(github.get("refreshEnabled") is True)
         continuation = {"resume": resume} if type(resume) in (PagesResume, FreshDomainResume) else {}
+        if type(resume) is PublicationBaseline:
+            resume.assert_permit(owner, permit)
+            continuation = {'publication_baseline': resume}
         with phase("EDGE"):
             edge = publish_ech(owner, permit, EchDeployment(root, tools.esbuild, output / "edge", config.worker_name,
                 config.inventory), api_token=credentials["EASYPROXY_CLOUDFLARE_API_TOKEN"], ech_token=credentials["EASYPROXY_ECH_TOKEN"], **continuation)

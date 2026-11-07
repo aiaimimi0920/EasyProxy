@@ -126,9 +126,14 @@ def _verify_public(project: str, release: dict, *, origin: str | None = None):
     raise PagesError("EASYPROXY_SBA_PAGES_PUBLIC_VERSION_UNKNOWN")
 
 
-def publish_pages(owner: Coordinator, permit: Permit, settings: PagesDeployment, *, api_token: str, secrets: dict, resume=None) -> dict:
+def publish_pages(owner: Coordinator, permit: Permit, settings: PagesDeployment, *, api_token: str, secrets: dict,
+                  resume=None, publication_baseline=None) -> dict:
     from pages_repair import PagesResume, PROJECT_ID
+    from publication_baseline import PublicationBaseline
     state = owner.assert_owned(permit)
+    if publication_baseline is not None:
+        require(resume is None and type(publication_baseline) is PublicationBaseline, 'OWNERSHIP')
+        publication_baseline.assert_permit(owner, permit)
     require(permit.action in ("deploy", "update", "preview") and inventory_digest(settings.inventory) == owner.inventory_digest,
             "INVENTORY")
     projects = [row for row in settings.inventory if row["kind"] == "pages"]
@@ -162,10 +167,11 @@ def publish_pages(owner: Coordinator, permit: Permit, settings: PagesDeployment,
                         and api.deployments() == [], "DEPLOYMENT")
         elif permit.action == "update":
             with phase("PAGES_PARENT_VERIFY"):
-                previous = configuration(owner, state["active"], settings.project_name, databases[0]["id"], secrets, **origin_option)
+                parent_release = state['active'] if publication_baseline is None else publication_baseline.release
+                previous = configuration(owner, parent_release, settings.project_name, databases[0]["id"], secrets, **origin_option)
                 project_id = _verify_project(existing, settings.project_name, previous)
                 canonical = existing.get("canonical_deployment")
-                _verify_deployment(canonical, settings.project_name, project_id, state["active"])
+                _verify_deployment(canonical, settings.project_name, project_id, parent_release)
                 require(type(canonical.get("latest_stage")) is dict and canonical["latest_stage"].get("name") == "deploy"
                         and canonical["latest_stage"].get("status") == "success", "DEPLOYMENT")
         else:

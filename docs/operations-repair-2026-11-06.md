@@ -7,8 +7,39 @@
 1.0.14 update 产生新的 MIGRATION UNKNOWN；获批的 1.0.15 恢复已单次执行，解决备份
 漏读并完成持久加密备份及 Worker/Pages 发布，但在晋级前返回新的 PROMOTION UNKNOWN。
 **active/stable 仍是 1.0.13，Worker/Pages 是 1.0.15，新 writer 保留；旧 prod 登记已退役**。
-新的 UNKNOWN 不复用上次许可，已停止后续云写入；不能将部分更新称为整套上线成功。
+上述为 1.0.15 停点。最新 1.0.16 执行与 1.0.17 受限修复见下一节；不能将部分更新称为整套上线成功。
 不得把本文的修复候选当作已上线，也不得据历史部署成功卡片重新创建一套资源。
+
+## 1.0.16 实际执行与 1.0.17 发布基线修复（2026-11-07）
+
+1.0.16 源码 `6b35a53ecd4f085af2526118cbd84a8e644675c3` 的 Validate 两项通过，
+Linux SBA 全套 1886 passed / 51 skipped；隔离真实生成 262 raw / 27 sources，再由新
+完整 NAS 镜像实际审计得到 29 个稳定 URI，满足原 43 个节点的 40% 门禁，不沿用旧健康结论。
+
+首次 UI 确认在两分钟签名有效期后点击，未登记/执行。重新只读预检、即时预览确认后，
+任务 `dc-a140d70d79d1403d96ace01d07c4a677` / run `42376441530` 实际执行，认证结果为
+`EASYPROXY_SBA_EDGE_UNKNOWN`，不能因 executor success 称业务成功。
+
+已精确复现责任代码：`publish_ech()` 普通 update 分支以 active 1.0.13 检查线上 settings，
+而恢复前已核验线上部分发布为 1.0.15；同份生产 settings 对 1.0.13 返回 OWNERSHIP，
+对 1.0.15 通过。Pages 同样存在 active/provider 基线混用，必须同时修复，不能只过第一处。
+此次 writer operation `f14880e4dd234124adf038b20c4b3264` 仅有 GitHub environment 阶段，
+未 claim ECH、Pages、candidate、audit 或 promotion，releases 为空；新 11875 字节 age
+备份完整 GET 与摘要通过，44 条订阅 / 1 条配置的原逻辑摘要未变。active/stable 仍为 1.0.13，
+Worker/Pages 仍为 1.0.15。原 UNKNOWN、加密备份、旧阶段全部保留，不重放该任务。
+
+用户已批准 1.0.17 单次受限恢复：固定父任务/请求/结果、原 writer/control SHA/ETag、
+备份、仅 GitHub 阶段、无 releases、D1 全部原数据、stable 七产物及 provider settings/Pages
+canonical 1.0.15；漂移零写入。create-only 移交证据后单次 CAS 非空 writer。返回的新内部
+`PublicationBaseline` 绑定 operation 与 permit 摘要，只允许准确 1.0.17 update，不能从外部
+请求传任意版本。Worker 和 Pages 在覆盖前各完整校验 1.0.15 所有权及绑定，普通 update
+仍核 active；不改 active 来绕过校验。新 update 重新加密备份、发布、审计、晋级、同步，
+全部通过才 commit。当前段落记录实现/授权，最终源码与云端结果另验。
+
+NAS 已单实例切换到准确 1.0.16 镜像，完整停止态私密备份及 SQLite integrity_check 通过；
+HTTP CONNECT、SOCKS5 的 TLS 实测均 204，TUN ready、manifest healthy、无 panic/fatal，
+RestartCount=0。旧容器保留为停止态回滚；此处不宣称云端已更新，也不代表最终 1.0.17 已部署。
+最终仅保留一套活动服务与当前产物；清理 NAS/云端历史运行产物仍需准确清单及单独删除批准。
 
 ## 为什么显示两套云服务
 

@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from email.parser import BytesParser
 from email.policy import default
+import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import importlib.util
 import json
@@ -60,6 +61,36 @@ def deployment(release):
     return {"id": DEPLOYMENT_ID, "project_id": PROJECT_ID, "project_name": PROJECT, "uses_functions": True,
             "environment": "production", "deployment_trigger": {"metadata": {"branch": "main", "commit_hash": release["sourceSha"]}},
             "latest_stage": {"name": "deploy", "status": "success", "started_on": "synthetic"}}
+
+
+@pytest.mark.parametrize('mode', ['ordinary', 'retained', 'binding-drift', 'canonical-drift', 'wrong-permit'])
+def test_partial_publication_uses_verified_provider_baseline_not_active(candidate, api_wire, mode):
+    from publication_baseline import PublicationBaseline
+    from repair_context import MIGRATION_ACTIVE_RELEASE, PROMOTION_PARENT_RELEASE
+    _, settings = candidate
+    release = {'sourceSha': 'b' * 40, 'applicationVersion': '1.0.17'}
+    store = MemoryStore()
+    owner = coordination.Coordinator(store, IDENTITY, pages.inventory_digest(INVENTORY))
+    first = owner.begin('deploy', MIGRATION_ACTIVE_RELEASE)
+    owner.commit_verified(first, CHECKS['deploy'])
+    permit = owner.begin('update', release, previous=MIGRATION_ACTIVE_RELEASE)
+    api_wire['project'] = project(pages.configuration(owner, PROMOTION_PARENT_RELEASE, PROJECT, DATABASE_ID, SECRETS),
+                                  deployment(PROMOTION_PARENT_RELEASE))
+    if mode == 'binding-drift':
+        api_wire['project']['deployment_configs']['production']['d1_databases']['MISUB_DB']['id'] = PROJECT_ID
+    if mode == 'canonical-drift': api_wire['project']['canonical_deployment'] = deployment(MIGRATION_ACTIVE_RELEASE)
+    baseline = PublicationBaseline('f' * 32 if mode == 'wrong-permit' else permit.operation_id,
+                                   hashlib.sha256(permit.state_bytes).hexdigest())
+    def run():
+        return pages.publish_pages(owner, permit, settings, api_token='fixture-api-token', secrets=SECRETS,
+                                    **({} if mode == 'ordinary' else {'publication_baseline': baseline}))
+    if mode == 'retained':
+        assert run()['checks']['pages-published'] is True
+        assert api_wire['deployments'] == 1
+    else:
+        with pytest.raises(RuntimeError): run()
+        assert api_wire['writes'] == [] and not store.stages
+    assert json.loads(store.body)['active'] == MIGRATION_ACTIVE_RELEASE
 
 
 def project(config, canonical=None):

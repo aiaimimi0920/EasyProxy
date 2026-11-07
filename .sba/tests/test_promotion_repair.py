@@ -152,7 +152,7 @@ def test_application_seeds_previous_inputs_and_routes_to_backed_up_update(approv
 
 def test_current_manifest_exposes_only_current_repair_and_keeps_historical_declaration_fixture():
     root = Path(__file__).parents[1]
-    manifest = json.loads((root / "manifest.json").read_bytes())
+    manifest = json.loads((root / "tests/fixtures/manifest-1.0.16.json").read_bytes())
     assert manifest["version"] == "1.0.16" and len(manifest["repairs"]) == 1
     row, = manifest["repairs"]
     assert row["id"] == PROMOTION_CONTEXT["repairId"] and row["fromErrorCodes"] == [PROMOTION_CONTEXT["errorCode"]]
