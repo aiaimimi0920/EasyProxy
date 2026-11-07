@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 from pathlib import Path
+import re
 import sys
 
 from aggregator_build import _environment
@@ -12,7 +13,7 @@ from audit_image import AuditImage, image_identity, verify_image
 from aggregator_publish import Candidate, PublicArtifacts, RAW, _validate
 from artifact_store import require
 from cloudflare_http import decode_object
-from coordination import Coordinator, Permit, _encode
+from coordination import Coordinator, Permit, ETAG, _encode
 from sources import inspect_checkout, inspect_gitlink_checkout
 
 
@@ -29,6 +30,26 @@ def candidate_digest(candidate: Candidate) -> str:
     _validate(candidate.artifacts, RAW)
     return hashlib.sha256(_encode({key: hashlib.sha256(value).hexdigest()
                                   for key, value in candidate.artifacts.items()})).hexdigest()
+
+
+def persist_audit_evidence(owner: Coordinator, permit: Permit, audit: Audit) -> None:
+    """持久保存白名单摘要；私密 URI、输入 URL、响应和错误正文均不离开运行目录。"""
+    value = decode_object(audit.body, require)
+    nodes = value.get("nodes")
+    uris = nodes.get("stable_available_uris") if type(nodes) is dict else None
+    bounded = type(uris) is list and len(uris) <= 100000
+    evidence = _encode({"schemaVersion": 1, "operationId": permit.operation_id,
+        "candidateDigest": audit.candidate_digest, "aggregatorSha": audit.aggregator_sha,
+        "auditSha256": hashlib.sha256(audit.body).hexdigest(), "image": image_identity(audit.image),
+        "cleanupConfirmed": value.get("container_cleanup_confirmed") is True,
+        "compatProbeOk": type(value.get("compat_probe")) is dict and value["compat_probe"].get("ok") is True,
+        "stableUriCount": len(set(uris)) if bounded and all(type(uri) is str for uri in uris) else None,
+        "invalidUriCount": sum(type(uri) is not str or re.fullmatch(r"[a-z][a-z0-9+.-]*://[^\s]+", uri) is None
+                               for uri in uris) if bounded else None})
+    owner.assert_owned(permit)
+    etag = owner.store.create_stage(permit.operation_id, "aggregator-audit-result", evidence)
+    require(type(etag) is str and ETAG.fullmatch(etag) is not None, "AUDIT_EVIDENCE_UNKNOWN")
+    owner.assert_owned(permit)
 
 
 def audit_candidate(owner: Coordinator, permit: Permit, candidate: Candidate, public: PublicArtifacts,
@@ -67,4 +88,6 @@ def audit_candidate(owner: Coordinator, permit: Permit, candidate: Candidate, pu
     owner.assert_owned(permit)
     require(digest == candidate_digest(candidate), "AUDIT")
     inspect_checkout(root, owner.identity["repository"], state["writer"]["candidate"]["sourceSha"])
-    return Audit(permit.operation_id, digest, row["sourceSha"], _encode(value), image)
+    audit = Audit(permit.operation_id, digest, row["sourceSha"], _encode(value), image)
+    persist_audit_evidence(owner, permit, audit)
+    return audit

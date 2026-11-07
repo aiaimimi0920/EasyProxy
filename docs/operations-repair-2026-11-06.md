@@ -179,3 +179,36 @@ ECH Worker 是 TCP/WebSocket 入口，不能用普通 HTTP fetch 冒充端到端
 调查脚本、脱敏选定回执和 DPAPI 原始证据位于：
 `C:/Users/Public/nas_home/AI/GameEditor/linshi/easyproxy-ops-20261106`。
 原始响应、运行配置及完整日志不提交到产品仓库。
+
+## 2026-11-07 继续修复：1.0.16 候选（尚未上线）
+
+最新用户要求继续全部代码修复，并在最终源码冻结后统一更新云端、active、聚合订阅及
+NAS；最终只保留最新版运行副本。清理安排在验收后，目录外删除仍需准确清单及明确同意。
+
+11:29Z 只读重核仍是准确 1.0.15 writer/ETag、active 1.0.13、稳定 manifest 未变，
+无晋级 marker/release，旧加密备份完整。新受限入口的全部 GET/SELECT 前置实测通过，
+没有消费入口、写云数据或重放旧任务。
+
+11:31–11:35Z 隔离候选消费审计：114 raw、11 个真实 direct-probe 可用 URI、兼容 lease
+通过、URI 格式无异常，低于历史 43 节点对应的 18 个门槛。11:37–11:43Z 对准确旧 immutable
+订阅的同环境审计：181 raw、36 个真实可用 URI、兼容 lease 通过。两次使用现有 hotfix
+运行时，只是诊断，不冒充新版本镜像或原 hosted 审计；原 private audit 已缺失，不能唯一
+倒推旧 run 的具体拒绝分支。此次重现足以证明不应降低数量门禁。
+
+源码发现隔离生成将 storage 改为每次空目录，未带入已提交稳定版的 6 条采集来源缓存。
+候选修复在应用持有的只读 R2 通道中完整验证旧稳定版七份产物、manifest/source identity
+与控制状态不变，仅将来源缓存送入隔离 local storage。上游须重新请求/验证来源，之后
+仍由准确候选镜像审计，不复制旧有效 URI 或健康结论，不向上游发送云写凭据。
+
+同时补固定 PROMOTION 错误 allowlist、不可公开的 `_sba` 审计摘要；不保存 URI/URL/响应/
+任意异常字段。周期刷新仅在明确数量门禁拒绝、成功审计已确认清理且原 Permit 未尝试
+晋级时，保失败证据后 CAS 终止自己的 writer；晋级/同步未知继续保留 writer。
+
+本次 `continue-update-before-promotion` 只绑定准确 parent task/run/request/result、原
+control 字节/ETag、五份阶段正文、完整加密备份、无晋级及旧 stable、D1 原业务计数、公开
+部分版本 1.0.15。create-only 移交证据后单次 CAS 到新 update writer，新升级仍须先持久
+备份再迁移；不初始化 D1、不删控制键、不改原 UNKNOWN、不覆盖旧阶段。
+
+当前 manifest 只声明这一项待用 repair；十一个已消费/过期声明不再暴露到 UI，原声明
+放入测试夹具以继续验证历史安全边界，不为了第十二个历史入口再扩 SpringBok 上限。
+实现、测试、真实重新生成、CI 与最终部署证据将分开记录；此节不宣称生产修复已完成。

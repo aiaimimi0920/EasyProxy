@@ -17,6 +17,7 @@ from repair_context import PAGES_ASSET_PROTOCOL_CONTEXT, PAGES_ASSET_PROTOCOL_PA
 from repair_context import FRESH_PRISTINE_CONTEXT, FRESH_PRISTINE_PARENT_RELEASE
 from repair_context import FRESH_DOMAIN_CONTEXT, FRESH_DOMAIN_PARENT_RELEASE
 from repair_context import MIGRATION_CONTEXT, MIGRATION_PARENT_RELEASE
+from repair_context import PROMOTION_CONTEXT, PROMOTION_PARENT_RELEASE
 from suite_config import ConfigurationError, SuiteConfig, parse_configuration
 
 
@@ -77,6 +78,11 @@ def repair_context(value, config):
     exact(context, CONTEXT_FIELDS)
     task(context["parentTaskId"])
     require(config.repository == "aiaimimi0920/easyproxy" and context["parentTaskId"] != value["taskId"])
+    if context["repairId"] == PROMOTION_CONTEXT["repairId"]:
+        require(type(context["parentRunId"]) is int and context == PROMOTION_CONTEXT
+                and value["previous"] == PROMOTION_PARENT_RELEASE and configuration_matches(config)
+                and value["applicationVersion"] == "1.0.16")
+        return
     if context["repairId"] == MIGRATION_CONTEXT["repairId"]:
         require(type(context["parentRunId"]) is int and context == MIGRATION_CONTEXT
                 and value["previous"] == MIGRATION_PARENT_RELEASE and configuration_matches(config)

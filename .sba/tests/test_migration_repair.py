@@ -146,7 +146,7 @@ def test_application_routes_recovery_through_backup_migration_update_not_initial
 
 
 def test_manifest_declares_only_exact_migration_error_and_existing_secrets():
-    manifest = json.loads((Path(__file__).parents[1] / "manifest.json").read_text())
+    manifest = json.loads((Path(__file__).parents[1] / "tests/fixtures/manifest-1.0.15.json").read_text())
     row = next(row for row in manifest["repairs"] if row["id"] == MIGRATION_CONTEXT["repairId"])
     assert manifest["version"] == "1.0.15" and len(manifest["repairs"]) == 11
     assert row["fromErrorCodes"] == [MIGRATION_CONTEXT["errorCode"]] and set(row["secretNames"]) == SECRETS

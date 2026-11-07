@@ -9,7 +9,7 @@ import tempfile
 import time
 
 from deadline import MAX_SECONDS, action_deadline, remaining
-from diagnostics import STAGES, StageError, phase, safe_error_code
+from diagnostics import STAGES, STAGE_REASONS, StageError, phase, safe_error_code
 from python_runtime import environment as python_environment, prepare_python
 from refresh_context import CONFIG_VARIABLE, OWNER_VARIABLE, context, credentials, require
 
@@ -32,10 +32,11 @@ def check_child(result, log: Path, fallback: str):
         stream.seek(0, 2)
         stream.seek(max(0, stream.tell() - 4096))
         lines = stream.read().decode("utf-8", errors="replace").splitlines()
-    allowed = {safe_error_code(StageError(stage)): stage for stage in STAGES}
+    allowed = {safe_error_code(StageError(stage, reason)): (stage, reason) for stage in STAGES
+               for reason in (None, *STAGE_REASONS.get(stage, ()))}
     for line in reversed(lines):
         if line in allowed:
-            raise StageError(allowed[line])
+            raise StageError(*allowed[line])
     raise StageError(fallback)
 
 

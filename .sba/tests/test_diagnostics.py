@@ -8,7 +8,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import execute as entry
-from diagnostics import STAGES, StageError, phase, safe_error_code
+from diagnostics import STAGES, PROMOTION_REASONS, StageError, phase, safe_error_code
+from artifact_store import ArtifactError
 from test_pristine_repair import request_fixture
 from test_request import parse
 
@@ -69,3 +70,31 @@ def test_entry_never_replaces_an_existing_parent_or_child_receipt(tmp_path, monk
                                     "--output", str(tmp_path / "output"), "--deadline", "9999999999"])
     assert entry.main() == 1
     assert result.read_bytes() == original
+
+
+@pytest.mark.parametrize("reason", sorted(PROMOTION_REASONS))
+def test_promotion_preserves_only_exact_artifact_classification(reason):
+    with pytest.raises(StageError) as caught:
+        with phase("PROMOTION"):
+            raise ArtifactError("EASYPROXY_SBA_ARTIFACT_" + reason)
+    assert safe_error_code(caught.value) == "EASYPROXY_SBA_PROMOTION_" + reason + "_UNKNOWN"
+
+
+@pytest.mark.parametrize("error", [ArtifactError("EASYPROXY_SBA_ARTIFACT_COUNT_DROP PRIVATE_URI"),
+    ArtifactError("PRIVATE_URI"), RuntimeError("EASYPROXY_SBA_ARTIFACT_COUNT_DROP"),
+    ArtifactError("EASYPROXY_SBA_ARTIFACT_COUNT_DROP", "PRIVATE_URI")])
+def test_promotion_never_propagates_arbitrary_exception_or_partial_matches(error):
+    with pytest.raises(StageError) as caught:
+        with phase("PROMOTION"):
+            raise error
+    assert safe_error_code(caught.value) == "EASYPROXY_SBA_PROMOTION_UNKNOWN"
+
+
+def test_promotion_reason_cannot_be_forged_or_attached_to_an_unrelated_stage():
+    with pytest.raises(ValueError):
+        StageError("PROMOTION", "PRIVATE_URI")
+    with pytest.raises(ValueError):
+        StageError("MIGRATION", "COUNT_DROP")
+    error = StageError("PROMOTION", "COUNT_DROP")
+    error.reason = "PRIVATE_URI"
+    assert safe_error_code(error) == "EASYPROXY_SBA_FAILED_OR_UNKNOWN"

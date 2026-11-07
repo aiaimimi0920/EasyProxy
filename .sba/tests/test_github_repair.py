@@ -194,7 +194,7 @@ def test_state_change_during_preflight_stops_before_any_transition_write(partial
 
 
 def test_manifest_has_separate_error_scope_with_only_existing_secret_names():
-    manifest = json.loads((Path(__file__).resolve().parents[1] / "manifest.json").read_bytes())
+    manifest = json.loads((Path(__file__).resolve().parents[1] / "tests/fixtures/manifest-1.0.15.json").read_bytes())
     scope = next(row for row in manifest["repairs"] if row["id"] == GITHUB_CONTEXT["repairId"])
     assert scope["fromErrorCodes"] == [GITHUB_CONTEXT["errorCode"]]
     assert set(scope["secretNames"]) == SECRETS and manifest["version"] == "1.0.15"

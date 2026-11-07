@@ -116,10 +116,32 @@ def test_candidate_audit_never_builds_and_requires_actual_image_receipt(tmp_path
     else:
         result = audit.audit_candidate(owner, permit, candidate, public, root.resolve(), output, image=FIXTURE)
         assert result.image == FIXTURE and len(inspected) == 2
+        evidence = json.loads(owner.store.stages[(permit.operation_id, "aggregator-audit-result")])
+        assert evidence["auditSha256"] == hashlib.sha256(result.body).hexdigest()
+        assert evidence["candidateDigest"] == audit.candidate_digest(candidate)
+        assert evidence["stableUriCount"] == 1 and evidence["invalidUriCount"] == 0
+        assert evidence["compatProbeOk"] is evidence["cleanupConfirmed"] is True
     assert len(calls) == 1 and "--build-if-missing" not in calls[0]
     assert calls[0][calls[0].index("--image") + 1] == FIXTURE.image_id
     assert calls[0][calls[0].index("--expected-source-sha") + 1] == FIXTURE.source_sha
     assert state(owner.store)["writer"] is not None
+
+
+def test_persisted_evidence_is_a_fixed_allowlist_not_a_redacted_copy():
+    owner, objects, public = setup()
+    permit = owner.begin("deploy", OLD)
+    receipt = audit_receipt(permit, public)
+    body = json.loads(receipt.body)
+    body["privateUnexpectedField"] = "DO_NOT_PERSIST_PRIVATE_URI"
+    body["nodes"]["stable_available_uris"] = ["ss://private-secret@host#name with space"]
+    receipt = replace(receipt, body=json.dumps(body).encode())
+    audit.persist_audit_evidence(owner, permit, receipt)
+    raw = owner.store.stages[(permit.operation_id, "aggregator-audit-result")]
+    assert b"private-secret" not in raw and b"DO_NOT_PERSIST" not in raw and b"ss://" not in raw
+    evidence = json.loads(raw)
+    assert set(evidence) == {"schemaVersion", "operationId", "candidateDigest", "aggregatorSha", "auditSha256", "image",
+                             "cleanupConfirmed", "compatProbeOk", "stableUriCount", "invalidUriCount"}
+    assert evidence["stableUriCount"] == evidence["invalidUriCount"] == 1
 
 
 def test_audit_image_credentials_and_daemon_overrides_are_not_inherited(tmp_path, monkeypatch):

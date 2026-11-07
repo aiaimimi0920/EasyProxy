@@ -10,6 +10,7 @@ from deploy import deploy_suite
 from destroy_preview import destroy_preview
 from diagnostics import phase
 from fresh_pristine_repair import assert_fresh_pristine
+from generation_sources import load_previous_sources
 from migration_prepare import prepare_migration
 from preview import preview_suite
 from pristine_repair import assert_pristine
@@ -20,7 +21,7 @@ from repair_context import GENERATION_REPAIR_ID, PAGES_DIAGNOSTIC_REPAIR_ID
 from repair_context import GENERATION_OUTPUTS_REPAIR_ID, PAGES_ASSET_PROTOCOL_REPAIR_ID
 from repair_context import FRESH_PRISTINE_REPAIR_ID
 from repair_context import FRESH_DOMAIN_REPAIR_ID
-from repair_context import MIGRATION_REPAIR_ID, MIGRATION_ACTIVE_RELEASE
+from repair_context import MIGRATION_REPAIR_ID, MIGRATION_ACTIVE_RELEASE, PROMOTION_REPAIR_ID
 from sealed_box import build_sealer
 from sources import inspect_checkout
 from toolchain import build_cli, prepare_linux_tools
@@ -63,13 +64,16 @@ def execute(request: ApplicationRequest, root: Path, output: Path, *, environmen
     with phase("SEALER"):
         sealer = build_sealer(root, request.config.repository, request.source_sha, tools, output / "sealer")
     with phase("GENERATION"):
+        promotion_recovery = request.action == "repair" and request.context.get("repairId") == PROMOTION_REPAIR_ID
+        source_release = MIGRATION_ACTIVE_RELEASE if promotion_recovery else request.previous
+        previous_sources = load_previous_sources(request.config, source_release, values) if request.action == "update" or promotion_recovery else None
         bodies = build_aggregator(root, request.config.repository, request.source_sha, output / "generation",
-                                  seed_secrets={key: values[key] for key in SEED_SECRETS})
+                                  seed_secrets={key: values[key] for key in SEED_SECRETS}, previous_sources=previous_sources)
     if request.action == "preview":
         with phase("PUBLISH"):
             return preview_suite(request, root, tools, image, sealer, bodies, output / "publish", credentials=values)
     migration = None
-    migration_recovery = request.action == "repair" and request.context.get("repairId") == MIGRATION_REPAIR_ID
+    migration_recovery = request.action == "repair" and request.context.get("repairId") in (MIGRATION_REPAIR_ID, PROMOTION_REPAIR_ID)
     if request.action == "update" or migration_recovery:
         with phase("MIGRATION"):
             executable = build_cli(root, request.config.repository, request.source_sha, tools, output / "cli")
@@ -77,7 +81,7 @@ def execute(request: ApplicationRequest, root: Path, output: Path, *, environmen
     deployment = replace(request, action="deploy", previous=None, context=None) if request.action == "repair" else request
     if migration_recovery:
         deployment = replace(request, action="update", previous=dict(MIGRATION_ACTIVE_RELEASE), context=None)
-    recovery = {"recovery_request": request} if request.action == "repair" and request.context.get("repairId") in (GITHUB_REPAIR_ID, PAGES_REPAIR_ID, ASSETS_REPAIR_ID, GENERATION_REPAIR_ID, PAGES_DIAGNOSTIC_REPAIR_ID, GENERATION_OUTPUTS_REPAIR_ID, PAGES_ASSET_PROTOCOL_REPAIR_ID, FRESH_DOMAIN_REPAIR_ID, MIGRATION_REPAIR_ID) else {}
+    recovery = {"recovery_request": request} if request.action == "repair" and request.context.get("repairId") in (GITHUB_REPAIR_ID, PAGES_REPAIR_ID, ASSETS_REPAIR_ID, GENERATION_REPAIR_ID, PAGES_DIAGNOSTIC_REPAIR_ID, GENERATION_OUTPUTS_REPAIR_ID, PAGES_ASSET_PROTOCOL_REPAIR_ID, FRESH_DOMAIN_REPAIR_ID, MIGRATION_REPAIR_ID, PROMOTION_REPAIR_ID) else {}
     if fresh_pristine:
         # 长时间本地构建后、首次写入前重核全部空现场；不使用旧 writer 恢复路径。
         with phase("FRESH_PRISTINE"):

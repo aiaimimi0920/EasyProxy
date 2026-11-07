@@ -171,6 +171,8 @@ def test_actual_approved_upstream_local_backend_writes_and_reads_without_network
     env = build._environment(env_root)
     config = build.local_config(template(), output.resolve())
     (tmp_path / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    cache = {"https://fixture.invalid/previous-sub": {"origin": "TEMPORARY", "push_to": ["public"]}}
+    (output / "crawledsubs.artifact").write_text(json.dumps(cache), encoding="utf-8")
     script = '''import json, socket, sys
 def forbidden(*a, **k):
     raise RuntimeError("NETWORK_FORBIDDEN")
@@ -182,6 +184,9 @@ import push
 config = ProcessConfig.parse(json.load(open(sys.argv[2], encoding="utf-8")))
 backend = push.get_instance(config.storage)
 assert type(backend) is push.PushToLocal
+from crawl.helpers import load_records
+assert load_records(backend, config.storage.items["crawledsubs"]) == {
+    "https://fixture.invalid/previous-sub": {"origin": "TEMPORARY", "push_to": ["public"]}}
 for name, item in config.storage.items.items():
     assert backend.push_to("local-fixture-" + name, item, retry=99)
     from urllib.request import url2pathname
@@ -194,3 +199,22 @@ print("APPROVED_LOCAL_BACKEND_OK")
     assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
     assert b"APPROVED_LOCAL_BACKEND_OK" in result.stdout
     assert len(list(output.iterdir())) == len(build.FILES)
+
+
+def test_previous_source_cache_is_supplied_before_collection_without_reusing_node_artifacts(tmp_path, monkeypatch):
+    from test_generation_diagnostics import fixture
+    root, output, calls = fixture(tmp_path, monkeypatch)
+    previous = b'{"https://fixture.invalid/known-sub":{"push_to":["public"]}}'
+    original = build._run
+    observed = []
+    def run(args, cwd, env, label, timeout):
+        if label == "generation":
+            artifacts = output / "artifacts"
+            assert [p.name for p in artifacts.iterdir()] == ["crawledsubs.artifact"]
+            assert (artifacts / "crawledsubs.artifact").read_bytes() == previous
+            observed.append(True)
+        return original(args, cwd, env, label, timeout)
+    monkeypatch.setattr(build, "_run", run)
+    build.build_aggregator(root, "owner/repo", "a" * 40, output,
+        seed_secrets=dict.fromkeys(build.SEED_SECRETS, build.DISABLED_SEED), previous_sources=previous)
+    assert observed == [True] and calls == ["config", "generation"]

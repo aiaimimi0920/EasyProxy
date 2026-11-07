@@ -86,7 +86,7 @@ def test_even_another_well_formed_instance_with_same_parent_is_refused(approved)
 
 
 def test_manifest_preserves_all_eight_old_repairs_and_all_other_contracts():
-    manifest = json.loads((Path(__file__).resolve().parents[1] / "manifest.json").read_bytes())
+    manifest = json.loads((Path(__file__).resolve().parents[1] / "tests/fixtures/manifest-1.0.15.json").read_bytes())
     assert manifest["version"] == "1.0.15" and len(manifest["repairs"]) == 11
     scope = manifest["repairs"][8]
     assert scope["id"] == CONTEXT["repairId"] and scope["fromErrorCodes"] == [CONTEXT["errorCode"]]

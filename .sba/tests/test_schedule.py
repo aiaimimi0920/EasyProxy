@@ -83,6 +83,8 @@ def test_schedule_failure_stops_before_approved_runtime_or_publication(tmp_path,
 @pytest.mark.parametrize("body, expected", [
     ("private-password\nEASYPROXY_SBA_AUDIT_UNKNOWN\n", "AUDIT_UNKNOWN"),
     ("private-password\nEASYPROXY_SBA_WRITER_UNKNOWN\n", "WRITER_UNKNOWN"),
+    ("private-password\nEASYPROXY_SBA_PROMOTION_COUNT_DROP_UNKNOWN\n", "PROMOTION_COUNT_DROP_UNKNOWN"),
+    ("EASYPROXY_SBA_PROMOTION_COUNT_DROP_PRIVATE_URI_UNKNOWN\n", "PUBLISH_UNKNOWN"),
     ("EASYPROXY_SBA_private-password_UNKNOWN\n", "PUBLISH_UNKNOWN"),
     ("prefix EASYPROXY_SBA_AUDIT_UNKNOWN suffix\n", "PUBLISH_UNKNOWN"),
     ("Traceback: private-password\n", "PUBLISH_UNKNOWN"),

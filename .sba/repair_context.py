@@ -122,3 +122,15 @@ MIGRATION_CONTEXT = {
     "resultDigest": "58e0240c6234d88a581023e294e178cd78bd87ec9e088796045af3302929019e",
     "errorCode": "EASYPROXY_SBA_MIGRATION_UNKNOWN",
 }
+
+# 仅准确 1.0.15 在晋级 claim 前停止；旧备份/阶段/active/stable 全部保留。
+PROMOTION_REPAIR_ID = "continue-update-before-promotion"
+PROMOTION_PARENT_RELEASE = {"sourceSha": "87f60967723e1fb11188ca375057dfaac52e93ab", "applicationVersion": "1.0.15"}
+PROMOTION_CONTEXT = {
+    "repairId": PROMOTION_REPAIR_ID,
+    "parentTaskId": "dc-d17eef8a70434871883f85d92219af62",
+    "parentRunId": 42365774495,
+    "requestDigest": "5c9d7158153a46578f66eb02d5db9c1714057117e4e20554c06778eb9b86fe71",
+    "resultDigest": "41a40df671b5324745a0bca628ca730a3fd22c757fc5624fb9b43de563ee545b",
+    "errorCode": "EASYPROXY_SBA_PROMOTION_UNKNOWN",
+}

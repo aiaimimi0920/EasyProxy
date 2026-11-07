@@ -133,13 +133,17 @@ def _run(args: list[str], cwd: Path, env: dict, label: str, timeout: int) -> Non
         raise ArtifactError("EASYPROXY_SBA_ARTIFACT_BUILD_" + label.upper()) from None
 
 
-def build_aggregator(root: Path, repository: str, source_sha: str, output: Path, *, seed_secrets: dict) -> dict[str, bytes]:
+def build_aggregator(root: Path, repository: str, source_sha: str, output: Path, *, seed_secrets: dict,
+                     previous_sources: bytes | None = None) -> dict[str, bytes]:
     with phase("GENERATION_SOURCE"):
         root = root.resolve(strict=True)
         rows = inspect_checkout(root, repository, source_sha)
         row = next(row for row in rows if row["path"] == "upstreams/aggregator")
         inspect_gitlink_checkout(root, row)
     with phase("GENERATION_CONFIG"):
+        if previous_sources is not None:
+            from generation_sources import validate_sources
+            validate_sources(previous_sources)
         require(output.is_absolute() and not str(output).startswith(("\\\\", "//")), "OUTPUT")
         output = output.resolve()
         require(not output.exists() and root not in output.parents and output != root, "OUTPUT")
@@ -159,6 +163,9 @@ def build_aggregator(root: Path, repository: str, source_sha: str, output: Path,
               "--output", str(materialized)], output, {**env, **seed_secrets}, "config", 30)
         artifacts = output / "artifacts"
         artifacts.mkdir()
+        if previous_sources is not None:
+            # 上游从同一 local storage 读取缓存，并重新请求/校验来源；不复制旧节点产物。
+            (artifacts / "crawledsubs.artifact").write_bytes(previous_sources)
         config = local_config(json.loads(materialized.read_text(encoding="utf-8")), artifacts)
         config_path, empty_env = output / "runtime.private.json", output / "empty.env"
         config_path.write_text(json.dumps(config, ensure_ascii=False), encoding="utf-8")

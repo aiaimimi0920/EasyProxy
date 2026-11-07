@@ -10,7 +10,7 @@ from audit_image import AuditImage, image_identity
 from audit_runner import AuditStoppedError
 from coordination import Coordinator, r2_store
 from deploy import stage_checks
-from diagnostics import phase
+from diagnostics import StageError, phase
 from misub_sync import sync_misub
 from refresh_context import REFRESH_SECRETS, require
 from sealed_box import secret_value
@@ -65,8 +65,16 @@ def refresh_suite(config: SuiteConfig, release: dict, root: Path, image: AuditIm
                 with phase("REFRESH_ABORT"):
                     owner.abort_unpublished_refresh(permit)
             raise
-        with phase("PROMOTION"):
-            promoted = promote_candidate(owner, permit, artifacts, public, candidate, audit=audit, root=root)
+        try:
+            with phase("PROMOTION"):
+                promoted = promote_candidate(owner, permit, artifacts, public, candidate, audit=audit, root=root)
+        except StageError as error:
+            # 数量门禁在 claim/write 之前明确拒绝，且成功 audit 已确认清理。
+            # 原 Permit 的本地 attempted-stage 栅栏仍会拒绝任何晋级尝试后的释放。
+            if error.stage == "PROMOTION" and error.reason in ("COUNTS", "COUNT_DROP"):
+                with phase("REFRESH_ABORT"):
+                    owner.abort_unpublished_refresh(permit)
+            raise
         stage_checks(promoted, {"candidate-verified", "stable-verified"})
         synchronized = sync_misub(owner, permit, candidate, audit, public, root, config.inventory,
             admin_password=credentials["EASYPROXY_MISUB_ADMIN_PASSWORD"],
