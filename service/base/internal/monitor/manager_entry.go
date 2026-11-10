@@ -256,6 +256,7 @@ func (e *entry) recordSuccessWithLatency(latency time.Duration) {
 	e.lastProbeAt = now
 	e.lastProbeOK = now
 	e.lastProbe = latency
+	e.recordProbeMetricLocked(now, latency)
 	e.available = true
 	e.upstreamAuthFailed = false
 	e.initialCheckDone = true
@@ -341,6 +342,7 @@ func (e *entry) recordProbeLatency(d time.Duration) {
 	e.lastProbeAt = now
 	e.lastProbeOK = now
 	e.lastProbe = d
+	e.recordProbeMetricLocked(now, d)
 	e.mu.Unlock()
 }
 

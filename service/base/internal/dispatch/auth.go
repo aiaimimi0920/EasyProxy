@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"easy_proxies/internal/outbound/pool"
+	"easy_proxies/internal/outbound/profileselect"
 	"easy_proxies/internal/profile"
 	"easy_proxies/internal/routerule"
 )
@@ -172,25 +173,7 @@ func peerAddr(addr net.Addr) netip.Addr {
 }
 
 func directiveFromProfile(resolution profile.Resolution) pool.SelectionDirective {
-	if resolution.Profile == nil {
-		return pool.SelectionDirective{}
-	}
-	selection := resolution.Profile.Selection()
-	return pool.SelectionDirective{
-		ProfileID:       resolution.ProfileID,
-		ProfileRevision: resolution.ProfileRevision,
-		Strategy:        pool.NormalizeStrategy(selection.DefaultStrategy),
-		SessionTTL:      selection.SessionTTL,
-		Filter: pool.NodeFilter{
-			Countries: append([]string(nil), selection.Filter.Countries...),
-			Regions:   append([]string(nil), selection.Filter.Regions...),
-			LongLived: cloneBool(selection.Filter.LongLived),
-		},
-		LongLived: pool.LongLivedPolicy{
-			MinUptime:      selection.LongLivedMinUptime,
-			MinSuccessRate: selection.LongLivedMinSuccessRate,
-		},
-	}
+	return profileselect.Directive(resolution, "")
 }
 
 func policyForProfile(split bool, compiled *profile.CompiledProfile, host string) routerule.Policy {
@@ -203,6 +186,7 @@ func policyForProfile(split bool, compiled *profile.CompiledProfile, host string
 func (s *Server) resolveLegacyRequest(auth parsedProxyUsername, requestOverlay directiveOverlay, host string, sessionFallback string) (resolved, routerule.Policy) {
 	overlay := s.bound.merge(auth.Overlay).merge(requestOverlay)
 	res := overlay.resolve(s.DefaultStrategy(), sessionFallback)
+	res.directive.SelectionTiers = s.SelectionTiers()
 	if res.directive.RequiredTag != "" {
 		return res, routerule.PolicyProxy
 	}
@@ -211,7 +195,7 @@ func (s *Server) resolveLegacyRequest(auth parsedProxyUsername, requestOverlay d
 
 func (s *Server) resolveProfileRequest(auth parsedProxyUsername, requestOverlay directiveOverlay, host string, remoteAddr net.Addr) (resolved, routerule.Policy, profile.Resolution, error) {
 	if s == nil || s.cfg.Profiles == nil {
-		res, policy := s.resolveLegacyRequest(auth, requestOverlay, host, peerAddr(remoteAddr).String())
+		res, policy := s.resolveLegacyRequest(auth, requestOverlay, host, sessionPeerKey(peerAddr(remoteAddr)))
 		return res, policy, profile.Resolution{}, nil
 	}
 
@@ -231,9 +215,17 @@ func (s *Server) resolveProfileRequest(auth parsedProxyUsername, requestOverlay 
 	}
 
 	overlay := s.bound.merge(auth.Overlay).merge(requestOverlay)
-	final := overlay.applyTo(base, peer.String())
+	final := overlay.applyTo(base, sessionPeerKey(peer))
 	if final.directive.RequiredTag != "" {
 		return final, routerule.PolicyProxy, resolution, nil
 	}
 	return final, policyForProfile(final.split, resolution.Profile, host), resolution, nil
+}
+
+// Missing source metadata must never create a shared synthetic session key.
+func sessionPeerKey(peer netip.Addr) string {
+	if !peer.IsValid() {
+		return ""
+	}
+	return peer.String()
 }

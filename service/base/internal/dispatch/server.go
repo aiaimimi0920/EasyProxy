@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"easy_proxies/internal/config"
 	"easy_proxies/internal/outbound/pool"
 	"easy_proxies/internal/routerule"
 
@@ -35,6 +36,7 @@ type Logger interface {
 
 // Config controls the dispatcher entry server.
 type Config struct {
+	SelectionTiers  []config.SelectionTier
 	Listen          string        // host:port to listen on
 	Username        string        // optional proxy auth username
 	Password        string        // optional proxy auth password
@@ -53,12 +55,13 @@ type Config struct {
 // Server is a smart proxy entry (HTTP/HTTPS CONNECT) that performs traffic
 // splitting and strategy-based node selection in front of the pool.
 type Server struct {
-	cfg       Config
-	provider  PoolProvider
-	engine    *routerule.Engine
-	logger    Logger
-	directDLR *net.Dialer
-	bound     directiveOverlay // parsed from cfg.BoundTokens (zero value = none)
+	selectionTiers []config.SelectionTier // protected by mu
+	cfg            Config
+	provider       PoolProvider
+	engine         *routerule.Engine
+	logger         Logger
+	directDLR      *net.Dialer
+	bound          directiveOverlay // parsed from cfg.BoundTokens (zero value = none)
 
 	lifecycleMu     sync.Mutex
 	mu              sync.RWMutex
@@ -86,6 +89,7 @@ func NewServer(cfg Config, provider PoolProvider, engine *routerule.Engine, logg
 		cfg.DefaultStrategy = pool.StrategyStable
 	}
 	s := &Server{
+		selectionTiers:  config.CloneSelectionTiers(cfg.SelectionTiers),
 		cfg:             cfg,
 		provider:        provider,
 		engine:          engine,
@@ -114,6 +118,9 @@ func (s *Server) TransparentRouter(noAvailableProxyPolicy routerule.Policy) *Tra
 	return NewTransparentRouter(TransparentRouterConfig{
 		DialTimeout:            s.cfg.DialTimeout,
 		NoAvailableProxyPolicy: noAvailableProxyPolicy,
+		Profiles:               s.transparentProfiles(),
+		SelectionTiers:         s.SelectionTiers,
+		DefaultStrategy:        s.DefaultStrategy,
 	}, s.provider, s.currentEngine(), s.logger)
 }
 

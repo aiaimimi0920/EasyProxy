@@ -319,6 +319,7 @@ export interface RoutingConfig {
   enabled: boolean
   listen: string
   default_strategy: string
+  selection_tiers?: import('./localServer').SelectionTier[]
   use_default_rules: boolean
   final_policy: string
   rules: string[]

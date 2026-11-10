@@ -267,6 +267,9 @@ func (s *Server) handleLocalServerRoutingConfig(w http.ResponseWriter, r *http.R
 			return
 		}
 		definition.NodeFilter = shared.Definition().NodeFilter
+		if req.SelectionTiers == nil {
+			definition.SelectionTiers = shared.Definition().SelectionTiers
+		}
 		bodyRevision := req.ExpectedRevision
 		if req.Revision != nil {
 			if bodyRevision != nil && *bodyRevision != *req.Revision {
@@ -327,6 +330,7 @@ func routingPayloadFromRouting(routing config.RoutingConfig) routingConfigPayloa
 		useDefaults = *routing.UseDefaultRules
 	}
 	return routingConfigPayload{
+		SelectionTiers:     config.CloneSelectionTiers(routing.SelectionTiers),
 		Enabled:            routing.Enabled,
 		Listen:             routing.Listen,
 		DefaultStrategy:    routing.DefaultStrategy,
@@ -381,6 +385,7 @@ func (s *Server) routingDefinitionFromPayload(req routingConfigPayload) (profile
 		return profile.Definition{}, fmt.Errorf("%w: %v", errLocalServerValidation, err)
 	}
 	routing := config.RoutingConfig{
+		SelectionTiers:  config.CloneSelectionTiers(req.SelectionTiers),
 		Enabled:         req.Enabled,
 		DefaultStrategy: strings.TrimSpace(req.DefaultStrategy),
 		FinalPolicy:     strings.TrimSpace(req.FinalPolicy),

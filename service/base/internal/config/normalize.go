@@ -13,6 +13,11 @@ func (c *Config) normalizeInternal(skipSubscriptionFetch bool) error {
 	if err := c.applyDefaults(); err != nil {
 		return err
 	}
+	tiers, err := NormalizeSelectionTiers(c.Routing.SelectionTiers)
+	if err != nil {
+		return err
+	}
+	c.Routing.SelectionTiers = tiers
 	if err := c.normalizeLocalServer(); err != nil {
 		return err
 	}

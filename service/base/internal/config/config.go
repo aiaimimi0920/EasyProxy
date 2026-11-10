@@ -47,6 +47,7 @@ type Config struct {
 // attribute filters). When disabled the runtime behaves exactly as before: the
 // plain pool inbound serves all traffic with no splitting.
 type RoutingConfig struct {
+	SelectionTiers  []SelectionTier         `yaml:"selection_tiers,omitempty"`
 	Enabled         bool                    `yaml:"enabled"`           // 是否启用智能分流入口（默认关闭，保持旧行为）
 	Listen          string                  `yaml:"listen"`            // 智能入口监听地址，默认接管 listener 的 host:port
 	DefaultStrategy string                  `yaml:"default_strategy"`  // 默认入口策略：stable / session / auto（默认 stable）

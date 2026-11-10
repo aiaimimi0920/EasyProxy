@@ -244,6 +244,7 @@ type EntryHandle struct {
 }
 
 type entry struct {
+	latencySamples     probeLatencyWindow
 	owner              *Manager
 	info               NodeInfo
 	failure            int

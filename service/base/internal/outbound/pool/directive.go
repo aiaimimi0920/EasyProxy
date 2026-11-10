@@ -2,7 +2,9 @@ package pool
 
 import (
 	"context"
+
 	"crypto/sha1"
+	"easy_proxies/internal/config"
 	"encoding/hex"
 	"fmt"
 	"sort"
@@ -119,6 +121,9 @@ func (f NodeFilter) bucketKey() string {
 // SelectionDirective carries per-request / per-session selection intent from
 // the dispatcher into the pool outbound through the dial context.
 type SelectionDirective struct {
+	SelectionTiers            []config.SelectionTier
+	tierNamespace             string
+	tierAttempts              *[3]int
 	ProfileID                 string
 	ProfileRevision           int64
 	Strategy                  Strategy
@@ -133,6 +138,9 @@ type SelectionDirective struct {
 }
 
 func (d SelectionDirective) namespaced(value string) string {
+	if d.tierNamespace != "" {
+		value = d.tierNamespace + "\x00" + value
+	}
 	if d.ProfileID == "" {
 		return value
 	}
@@ -140,6 +148,9 @@ func (d SelectionDirective) namespaced(value string) string {
 }
 
 func (d SelectionDirective) namespacedSessionKey() string {
+	if strings.TrimSpace(d.SessionKey) == "" {
+		return ""
+	}
 	return d.namespaced(d.SessionKey)
 }
 

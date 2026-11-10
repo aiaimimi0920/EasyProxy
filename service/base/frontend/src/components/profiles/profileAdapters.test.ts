@@ -41,3 +41,21 @@ it('preserves topology-only fields when replacing Profile-owned fields', () => {
     final_policy: 'DIRECT',
   })
 })
+
+
+it('retains ordered tiers and clones them across adapter boundaries', () => {
+  const legacy = { ...legacyRoutingFixture(), selection_tiers: [{ kind: 'country' as const, country: 'JP' }, { kind: 'stability' as const }] }
+  const profile = routingConfigToProfile(legacy)
+  expect(profile.selection_tiers).toEqual(legacy.selection_tiers)
+  expect(profile.selection_tiers?.[0]).not.toBe(legacy.selection_tiers[0])
+  const result = profileToRoutingConfig(profile, legacy)
+  expect(result.selection_tiers).toEqual(legacy.selection_tiers)
+  expect(result.selection_tiers?.[0]).not.toBe(profile.selection_tiers?.[0])
+  expect(profileToRoutingConfig({ ...profile, selection_tiers: [] }, legacy).selection_tiers).toEqual([])
+})
+
+it('does not introduce defaults for legacy profiles or keep removed tiers', () => {
+  expect(routingConfigToProfile(legacyRoutingFixture())).not.toHaveProperty('selection_tiers')
+  const previous = { ...legacyRoutingFixture(), selection_tiers: [{ kind: 'latency' as const }] }
+  expect(profileToRoutingConfig(profileFixture(), previous).selection_tiers).toBeUndefined()
+})

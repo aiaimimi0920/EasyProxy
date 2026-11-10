@@ -1,4 +1,5 @@
 import type { ForwardingProfile, RuleProvider } from '../../types'
+import SelectionTiersForm from './SelectionTiersForm'
 
 interface ProfileFormProps {
   value: ForwardingProfile
@@ -39,9 +40,11 @@ export default function ProfileForm({ value, onChange, disabled = false }: Profi
         />
       </label>
 
+      <SelectionTiersForm value={value.selection_tiers} onChange={(selection_tiers) => patch({ selection_tiers })} disabled={disabled} />
+
       <div className="grid gap-4 md:grid-cols-2">
         <fieldset className="fieldset">
-          <label htmlFor="profile-strategy" className="fieldset-legend">默认选节点策略</label>
+          <label htmlFor="profile-strategy" className="fieldset-legend">国家级与通用池选节点策略</label>
           <select
             id="profile-strategy"
             className="select select-bordered w-full"
@@ -160,7 +163,7 @@ export default function ProfileForm({ value, onChange, disabled = false }: Profi
 
       <div className="grid gap-4 md:grid-cols-2">
         <fieldset className="fieldset">
-          <label htmlFor="profile-countries" className="fieldset-legend">国家筛选</label>
+          <label htmlFor="profile-countries" className="fieldset-legend">国家筛选（硬限制）</label>
           <input
             id="profile-countries"
             className="input input-bordered w-full"

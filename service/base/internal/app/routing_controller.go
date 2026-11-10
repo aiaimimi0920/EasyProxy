@@ -186,6 +186,7 @@ func (rc *RoutingController) startLocked(cfg *config.Config) error {
 			Username:        username,
 			Password:        password,
 			DefaultStrategy: pool.NormalizeStrategy(cfg.Routing.DefaultStrategy),
+			SelectionTiers:  config.CloneSelectionTiers(cfg.Routing.SelectionTiers),
 			LocalServer:     true,
 			Profiles:        rc.profiles,
 		}, rc.boxMgr, nil, dispatchLogger{})
@@ -218,6 +219,7 @@ func (rc *RoutingController) startLocked(cfg *config.Config) error {
 		Username:        cfg.Listener.Username,
 		Password:        cfg.Listener.Password,
 		DefaultStrategy: pool.NormalizeStrategy(cfg.Routing.DefaultStrategy),
+		SelectionTiers:  config.CloneSelectionTiers(cfg.Routing.SelectionTiers),
 	}, rc.boxMgr, engine, dispatchLogger{})
 
 	if err := srv.Start(rc.ctx); err != nil {

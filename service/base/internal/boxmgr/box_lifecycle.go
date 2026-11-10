@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"easy_proxies/internal/builder"
@@ -11,6 +12,7 @@ import (
 	"easy_proxies/internal/monitor"
 	"easy_proxies/internal/outbound/gatewayroute"
 	"easy_proxies/internal/outbound/pool"
+	"easy_proxies/internal/outbound/profileselect"
 
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/include"
@@ -45,6 +47,9 @@ func (m *Manager) createBox(ctx context.Context, cfg *config.Config) (*box.Box, 
 
 	boxCtx := box.Context(ctx, inboundRegistry, outboundRegistry, endpointRegistry, dnsRegistry, serviceRegistry)
 	boxCtx = monitor.ContextWith(boxCtx, m.monitorMgr)
+	if m.profiles != nil {
+		boxCtx = profileselect.WithResolver(boxCtx, m.profiles)
+	}
 
 	instance, err := box.New(box.Options{Context: boxCtx, Options: opts})
 	if err != nil {
@@ -54,10 +59,22 @@ func (m *Manager) createBox(ctx context.Context, cfg *config.Config) (*box.Box, 
 }
 
 func (m *Manager) createManagedBox(ctx context.Context, cfg *config.Config) (managedBox, error) {
-	if m.boxFactory != nil {
-		return m.boxFactory(ctx, cfg)
+	var gate *profileselect.Admission
+	if m.profiles != nil && cfg != nil && cfg.LocalServer.Enabled && cfg.Gateway.Enabled && strings.EqualFold(cfg.Gateway.Mode, "tun") {
+		gate = new(profileselect.Admission)
+		ctx = profileselect.WithAdmission(ctx, gate)
 	}
-	return m.createBox(ctx, cfg)
+	var instance managedBox
+	var err error
+	if m.boxFactory != nil {
+		instance, err = m.boxFactory(ctx, cfg)
+	} else {
+		instance, err = m.createBox(ctx, cfg)
+	}
+	if err != nil || gate == nil {
+		return instance, err
+	}
+	return &profileGatedBox{managedBox: instance, gate: gate}, nil
 }
 
 // gracefulSwitch swaps the current box with a new one.

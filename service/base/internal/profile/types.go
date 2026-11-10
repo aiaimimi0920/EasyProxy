@@ -54,19 +54,21 @@ type SessionPolicy struct {
 }
 
 type Definition struct {
-	SchemaVersion   int             `json:"schema_version"`
-	Enabled         bool            `json:"enabled"`
-	DefaultStrategy string          `json:"default_strategy"`
-	UseDefaultRules bool            `json:"use_default_rules"`
-	FinalPolicy     string          `json:"final_policy"`
-	Rules           []string        `json:"rules"`
-	RuleProviders   []RuleProvider  `json:"rule_providers"`
-	NodeFilter      NodeFilter      `json:"node_filter"`
-	LongLived       LongLivedPolicy `json:"long_lived"`
-	Session         SessionPolicy   `json:"session"`
+	SelectionTiers  []config.SelectionTier `json:"selection_tiers,omitempty"`
+	SchemaVersion   int                    `json:"schema_version"`
+	Enabled         bool                   `json:"enabled"`
+	DefaultStrategy string                 `json:"default_strategy"`
+	UseDefaultRules bool                   `json:"use_default_rules"`
+	FinalPolicy     string                 `json:"final_policy"`
+	Rules           []string               `json:"rules"`
+	RuleProviders   []RuleProvider         `json:"rule_providers"`
+	NodeFilter      NodeFilter             `json:"node_filter"`
+	LongLived       LongLivedPolicy        `json:"long_lived"`
+	Session         SessionPolicy          `json:"session"`
 }
 
 type SelectionSettings struct {
+	SelectionTiers          []config.SelectionTier
 	DefaultStrategy         string
 	Filter                  NodeFilter
 	LongLivedMinUptime      time.Duration
@@ -83,11 +85,12 @@ type RuntimeStatus struct {
 
 func DefinitionFromRouting(routing config.RoutingConfig) Definition {
 	def := Definition{
-		SchemaVersion: 1,
-		Enabled:       routing.Enabled,
-		FinalPolicy:   strings.TrimSpace(routing.FinalPolicy),
-		Rules:         cloneStringSlice(routing.Rules),
-		NodeFilter:    cloneRoutingNodeFilter(routing.NodeFilter),
+		SelectionTiers: config.CloneSelectionTiers(routing.SelectionTiers),
+		SchemaVersion:  1,
+		Enabled:        routing.Enabled,
+		FinalPolicy:    strings.TrimSpace(routing.FinalPolicy),
+		Rules:          cloneStringSlice(routing.Rules),
+		NodeFilter:     cloneRoutingNodeFilter(routing.NodeFilter),
 	}
 	if strings.TrimSpace(routing.DefaultStrategy) != "" {
 		def.DefaultStrategy = strings.TrimSpace(routing.DefaultStrategy)
@@ -147,6 +150,7 @@ func ApplyDefinitionToRouting(def Definition, routing *config.RoutingConfig) err
 		return err
 	}
 
+	routing.SelectionTiers = config.CloneSelectionTiers(normalized.SelectionTiers)
 	routing.Enabled = normalized.Enabled
 	routing.DefaultStrategy = selection.DefaultStrategy
 	useDefaults := normalized.UseDefaultRules
@@ -180,6 +184,7 @@ func ApplyDefinitionToRouting(def Definition, routing *config.RoutingConfig) err
 
 func cloneDefinition(def Definition) Definition {
 	cloned := def
+	cloned.SelectionTiers = config.CloneSelectionTiers(def.SelectionTiers)
 	cloned.Rules = cloneStringSlice(def.Rules)
 	cloned.RuleProviders = cloneRuleProviders(def.RuleProviders)
 	cloned.NodeFilter = cloneNodeFilter(def.NodeFilter)
@@ -188,6 +193,7 @@ func cloneDefinition(def Definition) Definition {
 
 func cloneSelection(selection SelectionSettings) SelectionSettings {
 	cloned := selection
+	cloned.SelectionTiers = config.CloneSelectionTiers(selection.SelectionTiers)
 	cloned.Filter = cloneNodeFilter(selection.Filter)
 	return cloned
 }

@@ -7,7 +7,9 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"easy_proxies/internal/config"
 	"easy_proxies/internal/outbound/pool"
+	"easy_proxies/internal/outbound/profileselect"
 	"easy_proxies/internal/routerule"
 
 	"github.com/sagernet/sing-box/adapter"
@@ -34,6 +36,8 @@ var nativeUDPProtocolFamilies = []string{"hysteria2", "tuic"}
 // Options controls native TUN routing through EasyProxy's direct and pool
 // outbounds. An empty PoolTag represents a valid direct-only runtime.
 type Options struct {
+	DeviceProfiles         bool
+	SelectionTiers         []config.SelectionTier
 	Rules                  []string
 	FinalPolicy            string
 	NoAvailableProxyPolicy string
@@ -54,7 +58,9 @@ type Stats struct {
 }
 
 type routeOutbound struct {
+	admission *profileselect.Admission
 	sboutbound.Adapter
+	profiles   profileselect.Resolver
 	manager    adapter.OutboundManager
 	options    Options
 	engine     *routerule.Engine
@@ -96,6 +102,10 @@ func newRoute(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag st
 		manager: manager,
 		options: options,
 		engine:  routerule.New(options.Rules, routerule.NormalizePolicy(options.FinalPolicy), nil),
+	}
+	if options.DeviceProfiles {
+		route.profiles = profileselect.FromContext(ctx)
+		route.admission = profileselect.AdmissionFrom(ctx)
 	}
 	dnsRouter := service.FromContext[adapter.DNSRouter](ctx)
 	dnsTransportManager := service.FromContext[adapter.DNSTransportManager](ctx)
@@ -141,16 +151,16 @@ func (r *routeOutbound) Start(stage adapter.StartStage) error {
 func (*routeOutbound) Close() error { return nil }
 
 func (r *routeOutbound) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	if err := r.admission.Check(); err != nil {
+		return nil, err
+	}
 	r.recordNetwork(network, destination)
-	if r.policy(ctx, network, destination) == routerule.PolicyDirect {
+	policy, directive := r.selection(ctx, network, destination)
+	if policy == routerule.PolicyDirect {
 		r.directCount.Add(1)
 		return r.direct.DialContext(ctx, network, destination)
 	}
 	if r.pool != nil {
-		directive := &pool.SelectionDirective{
-			ProfileID: tcpProfileID,
-			Strategy:  pool.NormalizeStrategy(string(r.options.DefaultStrategy)),
-		}
 		conn, err := r.pool.DialContext(pool.WithDirective(ctx, directive), network, destination)
 		if err == nil {
 			r.proxyCount.Add(1)
@@ -195,8 +205,11 @@ func udpLookupStrategy(ctx context.Context) C.DomainStrategy {
 }
 
 func (r *routeOutbound) ListenPacketWithDestination(ctx context.Context, destination M.Socksaddr) (net.PacketConn, netip.Addr, error) {
+	if err := r.admission.Check(); err != nil {
+		return nil, netip.Addr{}, err
+	}
 	r.recordNetwork(N.NetworkUDP, destination)
-	policy := r.policy(ctx, N.NetworkUDP, destination)
+	policy, directive := r.selection(ctx, N.NetworkUDP, destination)
 	resolvedDestination, destinationAddress := r.resolvePacketDestination(ctx, destination)
 	if policy == routerule.PolicyDirect {
 		r.directCount.Add(1)
@@ -204,12 +217,6 @@ func (r *routeOutbound) ListenPacketWithDestination(ctx context.Context, destina
 		return packetConn, destinationAddress, err
 	}
 	if r.pool != nil {
-		directive := &pool.SelectionDirective{
-			ProfileID:                 udpProfileID,
-			Strategy:                  pool.StrategyAuto,
-			PreferredProtocolFamilies: nativeUDPProtocolFamilies,
-			RequireAvailablePreferred: true,
-		}
 		packetConn, err := r.pool.ListenPacket(pool.WithDirective(ctx, directive), resolvedDestination)
 		if err == nil {
 			r.proxyCount.Add(1)

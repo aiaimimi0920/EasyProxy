@@ -96,7 +96,7 @@ func RunWithContext(ctx context.Context, cfg *config.Config) error {
 	defer profileMgr.Close()
 
 	// ── 5. Create and start BoxManager ──
-	boxMgr := boxmgr.New(cfg, monitorCfg, boxmgr.WithStore(dataStore))
+	boxMgr := boxmgr.New(cfg, monitorCfg, boxmgr.WithStore(dataStore), boxmgr.WithProfiles(profileMgr))
 	boxMgr.SetEphemeralNodes(filterEphemeralNodes(cfg.Nodes))
 	if err := boxMgr.PrepareMonitor(ctx); err != nil {
 		return fmt.Errorf("prepare monitor server: %w", err)

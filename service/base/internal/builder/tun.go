@@ -66,7 +66,9 @@ func buildTunInbound(cfg *config.Config) (option.Inbound, error) {
 func buildGatewayRouteOptions(cfg *config.Config, hasPool bool) (gatewayroute.Options, error) {
 	localRules, err := routerule.LoadLocalRuleFiles(cfg.Routing.RuleFiles)
 	if err != nil {
-		return gatewayroute.Options{}, err
+		return gatewayroute.Options{
+			DeviceProfiles: cfg.LocalServer.Enabled,
+			SelectionTiers: append([]config.SelectionTier(nil), cfg.Routing.SelectionTiers...)}, err
 	}
 	rules := make([]string, 0, len(cfg.Routing.Rules)+len(localRules)+64)
 	rules = append(rules, cfg.Routing.Rules...)
@@ -79,6 +81,8 @@ func buildGatewayRouteOptions(cfg *config.Config, hasPool bool) (gatewayroute.Op
 		poolTag = pool.Tag
 	}
 	return gatewayroute.Options{
+		DeviceProfiles:         cfg.LocalServer.Enabled,
+		SelectionTiers:         append([]config.SelectionTier(nil), cfg.Routing.SelectionTiers...),
 		Rules:                  rules,
 		FinalPolicy:            cfg.Gateway.Routing.FinalPolicy,
 		NoAvailableProxyPolicy: cfg.Gateway.Routing.NoAvailableProxyPolicy,

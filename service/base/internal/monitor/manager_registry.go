@@ -47,6 +47,11 @@ func (m *Manager) Register(info NodeInfo) *EntryHandle {
 			// The node identity is unchanged, so its last known health remains
 			// valid while the replacement probe closure is installed.
 			e.healthGen = m.reloadGen
+			// Authentic samples belong to this unchanged URI, not the box instance.
+			// Adopt their generation without altering values or observation times.
+			if e.latencySamples.generation == e.reloadGen {
+				e.latencySamples.generation = m.reloadGen
+			}
 		}
 		e.reloadGen = m.reloadGen
 		if e.firstSeenAt.IsZero() {

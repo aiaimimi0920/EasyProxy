@@ -5,10 +5,16 @@ export interface RuleProvider {
   interval: string
 }
 
+export interface SelectionTier {
+  kind: 'country' | 'latency' | 'stability'
+  country?: string
+}
+
 export interface ForwardingProfile {
   schema_version: 1
   enabled: boolean
   default_strategy: 'auto' | 'stable' | 'session'
+  selection_tiers?: SelectionTier[]
   use_default_rules: boolean
   final_policy: 'DIRECT' | 'PROXY'
   rules: string[]

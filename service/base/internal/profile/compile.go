@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"easy_proxies/internal/config"
 	"easy_proxies/internal/routerule"
 )
 
@@ -113,6 +114,14 @@ func (p *CompiledProfile) Match(host string) routerule.Policy {
 	return p.engine.Match(host)
 }
 
+// MatchRequest preserves protocol and destination-port rules for transparent flows.
+func (p *CompiledProfile) MatchRequest(request routerule.Request) routerule.Policy {
+	if p == nil || p.engine == nil {
+		return routerule.PolicyProxy
+	}
+	return p.engine.MatchRequest(request)
+}
+
 func (p *CompiledProfile) Selection() SelectionSettings {
 	if p == nil {
 		return SelectionSettings{}
@@ -172,6 +181,11 @@ func normalizeDefinition(def Definition) (Definition, SelectionSettings, error) 
 	}
 	normalized := cloneDefinition(def)
 	normalized.SchemaVersion = 1
+	tiers, err := config.NormalizeSelectionTiers(normalized.SelectionTiers)
+	if err != nil {
+		return Definition{}, SelectionSettings{}, err
+	}
+	normalized.SelectionTiers = tiers
 	if strings.TrimSpace(normalized.DefaultStrategy) == "" {
 		normalized.DefaultStrategy = "stable"
 	}
@@ -239,6 +253,7 @@ func normalizeDefinition(def Definition) (Definition, SelectionSettings, error) 
 	}
 
 	selection := SelectionSettings{
+		SelectionTiers:          config.CloneSelectionTiers(tiers),
 		DefaultStrategy:         strategy,
 		Filter:                  normalizeNodeFilter(normalized.NodeFilter),
 		LongLivedMinUptime:      longLivedMinUptime,

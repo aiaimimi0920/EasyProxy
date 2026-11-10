@@ -274,6 +274,7 @@ func (m *Manager) reloadLockedWithEphemeralNodes(
 	for _, listener := range listeners {
 		listener.OnConfigUpdate(targetCfg)
 	}
+	commitProfileAdmission(instance)
 
 	m.logger.Infof("reload completed successfully with %d nodes", len(targetCfg.Nodes))
 	return nil
@@ -469,6 +470,7 @@ func (m *Manager) notifyConfigListeners(cfg *config.Config) {
 	for _, listener := range listeners {
 		listener.OnConfigUpdate(cfg)
 	}
+	m.commitCurrentProfileAdmission()
 }
 
 // CurrentReloadState returns the last successfully applied immutable runtime

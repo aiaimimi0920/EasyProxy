@@ -54,8 +54,11 @@ func (p *poolOutbound) pickMember(network string, excluded map[string]struct{}, 
 		return nil, E.New("no healthy proxy available")
 	}
 
-	member := p.selectMemberWithDirective(candidates, sourceStates, secondaryStates, directive)
+	member := p.selectTieredMember(candidates, sourceStates, secondaryStates, directive)
 	p.putCandidateBuffer(candidates)
+	if member == nil {
+		return nil, E.New("selection tier retry budget exhausted")
+	}
 	return member, nil
 }
 
@@ -154,6 +157,12 @@ func (p *poolOutbound) availableMembersLocked(
 		}
 		if !p.memberMatchesRequiredAvailableProtocol(member, directive) {
 			continue
+		}
+		if hasSelectionTiers(directive) && member.entry != nil {
+			snap := member.entry.Snapshot()
+			if snap.InitialCheckDone && !snap.EffectiveAvailable {
+				continue
+			}
 		}
 		if directive != nil && !p.memberMatchesFilter(member, directive) {
 			continue

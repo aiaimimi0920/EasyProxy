@@ -129,6 +129,7 @@ func (s *Server) handleGatewayStatus(w http.ResponseWriter, r *http.Request) {
 // GET/PUT /api/routing/config. Durations are expressed as Go duration strings
 // (e.g. "2h", "10m") for human-friendly editing in the UI.
 type routingConfigPayload struct {
+	SelectionTiers     []config.SelectionTier  `json:"selection_tiers,omitempty"`
 	Enabled            bool                    `json:"enabled"`
 	Listen             string                  `json:"listen"`
 	DefaultStrategy    string                  `json:"default_strategy"`
@@ -211,6 +212,7 @@ func (s *Server) getRoutingConfig() routingConfigPayload {
 		})
 	}
 	return routingConfigPayload{
+		SelectionTiers:     config.CloneSelectionTiers(c.Routing.SelectionTiers),
 		Enabled:            c.Routing.Enabled,
 		Listen:             c.Routing.Listen,
 		DefaultStrategy:    c.Routing.DefaultStrategy,
@@ -227,6 +229,10 @@ func (s *Server) getRoutingConfig() routingConfigPayload {
 // updateRoutingConfig validates, persists, and applies a routing config edit.
 // Returns whether a full reload is required for the change to fully take effect.
 func (s *Server) updateRoutingConfig(req routingConfigPayload) (bool, error) {
+	tiers, tierErr := config.NormalizeSelectionTiers(req.SelectionTiers)
+	if tierErr != nil {
+		return false, tierErr
+	}
 	// Parse/validate durations up front so a bad value fails cleanly before we
 	// mutate anything.
 	var llUptime, sessionTTL time.Duration
@@ -292,6 +298,9 @@ func (s *Server) updateRoutingConfig(req routingConfigPayload) (bool, error) {
 		strings.TrimSpace(c.Routing.Listen) != strings.TrimSpace(req.Listen) ||
 		c.Routing.Session.TTL != sessionTTL
 	candidate := c.Clone()
+	if req.SelectionTiers != nil {
+		candidate.Routing.SelectionTiers = tiers
+	}
 	candidate.Routing.Enabled = req.Enabled
 	candidate.Routing.Listen = strings.TrimSpace(req.Listen)
 	candidate.Routing.DefaultStrategy = strings.TrimSpace(req.DefaultStrategy)

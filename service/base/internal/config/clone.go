@@ -68,6 +68,7 @@ func (c *Config) Clone() *Config {
 	cloned.DNS.Enabled = cloneConfigBool(c.DNS.Enabled)
 	cloned.DNS.RemoteServers = cloneConfigSlice(c.DNS.RemoteServers)
 	cloned.Routing.UseDefaultRules = cloneConfigBool(c.Routing.UseDefaultRules)
+	cloned.Routing.SelectionTiers = CloneSelectionTiers(c.Routing.SelectionTiers)
 	cloned.Routing.Rules = cloneConfigSlice(c.Routing.Rules)
 	cloned.Routing.RuleFiles = cloneConfigSlice(c.Routing.RuleFiles)
 	cloned.Routing.RuleProviders = cloneConfigSlice(c.Routing.RuleProviders)

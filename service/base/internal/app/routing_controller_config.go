@@ -91,6 +91,7 @@ func clearHotRoutingFields(cfg *config.Config) {
 		cfg.Listener.Password = ""
 		cfg.Management.Password = ""
 	}
+	cfg.Routing.SelectionTiers = nil
 	cfg.Routing.DefaultStrategy = ""
 	cfg.Routing.UseDefaultRules = nil
 	cfg.Routing.FinalPolicy = ""

@@ -103,6 +103,7 @@ func (rc *RoutingController) applyRuntimeConfigLocked(previous, cfg *config.Conf
 	}
 
 	rc.server.SetDefaultStrategy(pool.NormalizeStrategy(cfg.Routing.DefaultStrategy))
+	rc.server.SetSelectionTiers(cfg.Routing.SelectionTiers)
 	return nil
 }
 

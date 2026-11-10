@@ -278,6 +278,7 @@ func (m *Manager) applyProbeResult(
 	entry.lastOK = now
 	entry.lastProbeOK = now
 	entry.lastProbe = latency
+	entry.recordProbeMetricLocked(now, latency)
 	entry.available = true
 	entry.upstreamAuthFailed = false
 	latencyMs := latency.Milliseconds()

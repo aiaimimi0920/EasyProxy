@@ -8,7 +8,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"easy_proxies/internal/config"
 	"easy_proxies/internal/outbound/pool"
+	"easy_proxies/internal/outbound/profileselect"
 	"easy_proxies/internal/routerule"
 
 	M "github.com/sagernet/sing/common/metadata"
@@ -17,6 +19,9 @@ import (
 
 // TransparentRouterConfig controls the provider-neutral TCP data plane.
 type TransparentRouterConfig struct {
+	SelectionTiers         func() []config.SelectionTier
+	DefaultStrategy        func() pool.Strategy
+	Profiles               profileselect.Resolver
 	DialTimeout            time.Duration
 	NoAvailableProxyPolicy routerule.Policy
 }
@@ -75,6 +80,7 @@ func (r *TransparentRouter) ServeConn(ctx context.Context, conn net.Conn) {
 		policy = r.engine.Match(host)
 	}
 
+	ctx, policy = r.resolveProfile(ctx, conn.RemoteAddr(), host, port, policy)
 	upstream, dialErr := r.dial(ctx, host, port, policy)
 	usedFallback := false
 	if dialErr != nil && policy == routerule.PolicyProxy && r.cfg.NoAvailableProxyPolicy == routerule.PolicyDirect {
@@ -121,7 +127,7 @@ func (r *TransparentRouter) dial(ctx context.Context, host string, port uint16, 
 		return nil, fmt.Errorf("proxy pool not available")
 	}
 	dst := M.ParseSocksaddrHostPort(host, port)
-	conn, err := out.DialContext(pool.WithDirective(ctx, nil), N.NetworkTCP, dst)
+	conn, err := out.DialContext(ctx, N.NetworkTCP, dst)
 	if err != nil {
 		return nil, fmt.Errorf("proxy: %w", err)
 	}

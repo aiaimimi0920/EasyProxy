@@ -21,7 +21,7 @@ it('renders and edits rules, providers, filters, thresholds, and session policy'
 
   await userEvent.type(screen.getByLabelText('规则列表'), 'DOMAIN-SUFFIX,example.com,PROXY')
   await userEvent.click(screen.getByRole('button', { name: '添加规则订阅' }))
-  await userEvent.type(screen.getByLabelText('国家筛选'), 'CN')
+  await userEvent.type(screen.getByLabelText('国家筛选（硬限制）'), 'CN')
   await userEvent.type(screen.getByLabelText('长效最低成功率'), '0.95')
   await userEvent.type(screen.getByLabelText('会话 TTL'), '20m')
 

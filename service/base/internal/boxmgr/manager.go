@@ -12,6 +12,7 @@ import (
 	"easy_proxies/internal/config"
 	"easy_proxies/internal/monitor"
 	"easy_proxies/internal/outbound/pool"
+	"easy_proxies/internal/outbound/profileselect"
 	"easy_proxies/internal/store"
 
 	"github.com/sagernet/sing-box/adapter"
@@ -41,6 +42,11 @@ type Option func(*Manager)
 // WithLogger sets a custom logger.
 func WithLogger(l Logger) Option {
 	return func(m *Manager) { m.logger = l }
+}
+
+// WithProfiles binds the live registry owner, not a startup snapshot.
+func WithProfiles(resolver profileselect.Resolver) Option {
+	return func(m *Manager) { m.profiles = resolver }
 }
 
 // WithStore sets the data store.
@@ -121,6 +127,7 @@ type Manager struct {
 	reloadIntentCond  *sync.Cond
 	reloadIntentCount int
 
+	profiles      profileselect.Resolver
 	currentBox    managedBox
 	monitorMgr    *monitor.Manager
 	monitorServer *monitor.Server
@@ -254,6 +261,8 @@ func (m *Manager) Start(ctx context.Context) error {
 	if monitorServer != nil {
 		monitorServer.SetConfig(cfg)
 	}
+
+	commitProfileAdmission(instance)
 
 	// Start periodic health check after nodes are registered.
 	m.startPeriodicHealthCheck(cfg)

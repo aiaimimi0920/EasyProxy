@@ -41,6 +41,14 @@ The standard ports are:
 - `22323/tcp`: one mixed HTTP/CONNECT/SOCKS5 proxy entry.
 - `29888/tcp`: embedded Web Console and management API.
 
+## Device selection tiers
+
+Profiles support two optional country/latency/stability priorities and a fixed
+final general-pool fallback. See [Device selection tiers](device-selection-tiers.md)
+for metrics, bounded retries, hard-filter compatibility, and TUN/transparent
+source-address resolution. The final proxy-pool tier is separate from DIRECT
+routing and the gateway's existing fail-open setting.
+
 ## Shared And Independent Profiles
 
 The shared Profile is stored in the normal YAML `routing` block. An independent
