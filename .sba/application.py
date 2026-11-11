@@ -29,6 +29,8 @@ from sealed_box import build_sealer
 from sources import inspect_checkout
 from toolchain import build_cli, prepare_linux_tools
 from verify_public import verify_public
+from writer_idle_repair import assert_writer_idle
+from repair_context import WRITER_IDLE_REPAIR_ID, WRITER_IDLE_ACTIVE_RELEASE
 
 
 def execute(request: ApplicationRequest, root: Path, output: Path, *, environment) -> dict:
@@ -58,6 +60,10 @@ def execute(request: ApplicationRequest, root: Path, output: Path, *, environmen
     if fresh_pristine:
         with phase("FRESH_PRISTINE"):
             assert_fresh_pristine(request, values)
+    writer_idle = request.action == "repair" and request.context.get("repairId") == WRITER_IDLE_REPAIR_ID
+    if writer_idle:
+        with phase("WRITER"):
+            assert_writer_idle(request, values)
     with phase("TOOLS"):
         tools = prepare_linux_tools(output / "tools")
     with phase("RUNTIME"):
@@ -68,9 +74,9 @@ def execute(request: ApplicationRequest, root: Path, output: Path, *, environmen
         sealer = build_sealer(root, request.config.repository, request.source_sha, tools, output / "sealer")
     with phase("GENERATION"):
         promotion_recovery = request.action == "repair" and request.context.get("repairId") in (PROMOTION_REPAIR_ID, EDGE_REPAIR_ID, PROMOTION_COPY_REPAIR_ID)
-        source_release = MIGRATION_ACTIVE_RELEASE if promotion_recovery else request.previous
-        previous_inputs = load_previous_inputs(request.config, source_release, values) if request.action == "update" or promotion_recovery else None
-        registered = load_registered_subscriptions(request.config, values) if request.action == "update" else []
+        source_release = WRITER_IDLE_ACTIVE_RELEASE if writer_idle else MIGRATION_ACTIVE_RELEASE if promotion_recovery else request.previous
+        previous_inputs = load_previous_inputs(request.config, source_release, values) if request.action == "update" or promotion_recovery or writer_idle else None
+        registered = load_registered_subscriptions(request.config, values) if request.action == "update" or writer_idle else []
         bodies = build_aggregator(root, request.config.repository, request.source_sha, output / "generation",
                                   seed_secrets={key: values[key] for key in SEED_SECRETS}, previous_inputs=previous_inputs,
                                   registered_subscriptions=registered)
@@ -79,24 +85,29 @@ def execute(request: ApplicationRequest, root: Path, output: Path, *, environmen
             return preview_suite(request, root, tools, image, sealer, bodies, output / "publish", credentials=values)
     migration = None
     migration_recovery = request.action == "repair" and request.context.get("repairId") in (MIGRATION_REPAIR_ID, PROMOTION_REPAIR_ID, EDGE_REPAIR_ID, PROMOTION_COPY_REPAIR_ID)
-    if request.action == "update" or migration_recovery:
+    if request.action == "update" or migration_recovery or writer_idle:
         with phase("MIGRATION"):
             executable = build_cli(root, request.config.repository, request.source_sha, tools, output / "cli")
             migration = prepare_migration(request.config, request.candidate, root, tools, executable, output / "migration")
     deployment = replace(request, action="deploy", previous=None, context=None) if request.action == "repair" else request
     if migration_recovery:
         deployment = replace(request, action="update", previous=dict(MIGRATION_ACTIVE_RELEASE), context=None)
+    if writer_idle:
+        deployment = replace(request, action="update", previous=dict(WRITER_IDLE_ACTIVE_RELEASE), context=None)
     recovery = {"recovery_request": request} if request.action == "repair" and request.context.get("repairId") in (GITHUB_REPAIR_ID, PAGES_REPAIR_ID, ASSETS_REPAIR_ID, GENERATION_REPAIR_ID, PAGES_DIAGNOSTIC_REPAIR_ID, GENERATION_OUTPUTS_REPAIR_ID, PAGES_ASSET_PROTOCOL_REPAIR_ID, FRESH_DOMAIN_REPAIR_ID, MIGRATION_REPAIR_ID, PROMOTION_REPAIR_ID, EDGE_REPAIR_ID, PROMOTION_COPY_REPAIR_ID) else {}
     if fresh_pristine:
         # 长时间本地构建后、首次写入前重核全部空现场；不使用旧 writer 恢复路径。
         with phase("FRESH_PRISTINE"):
             assert_fresh_pristine(request, values)
+    if writer_idle:
+        with phase("WRITER"):
+            assert_writer_idle(request, values)
     with phase("PUBLISH"):
         result = deploy_suite(deployment, root, tools, image, sealer, bodies, output / "publish",
                               credentials=values, migration_settings=migration, **recovery)
     if request.action == "repair":
         expected = {"suite-published": True, "service-ready": True}
-        if migration_recovery:
+        if migration_recovery or writer_idle:
             expected.update({"backup-created": True, "data-preserved": True})
         require(result == {"checks": expected})
         return {"checks": dict.fromkeys(("repair-completed", "data-preserved", "unchanged-resources-verified", "service-ready"), True)}

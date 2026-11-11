@@ -4,6 +4,19 @@ PARENT_RELEASE = {"sourceSha": "1fc843033ba5f39384772d1dccb4ccd90deda03d", "appl
 PARENT_ERROR = "EASYPROXY_SBA_FAILED_OR_UNKNOWN"
 CONTEXT_FIELDS = {"repairId", "parentTaskId", "parentRunId", "requestDigest", "resultDigest", "errorCode"}
 
+# 仅恢复本次在取得 writer 前失败的 update；现场仍为 1.0.20，不把失败目标当作已部署版本。
+WRITER_IDLE_REPAIR_ID = "continue-writer-idle-update"
+WRITER_IDLE_PARENT_RELEASE = {"sourceSha": "e16166acd5515580b039761df4174dda93b8e631", "applicationVersion": "1.0.21"}
+WRITER_IDLE_ACTIVE_RELEASE = {"sourceSha": "103fdb250ad48536ee06d14a887021e803c72511", "applicationVersion": "1.0.20"}
+WRITER_IDLE_CONTEXT = {
+    "repairId": WRITER_IDLE_REPAIR_ID,
+    "parentTaskId": "dc-11293c42b5134efabfefb45113f1691b",
+    "parentRunId": 43074691677,
+    "requestDigest": "ccfb3bef05197c05dad019b924c2b7a4736b0592d7aa1fe55163973134c0aa56",
+    "resultDigest": "02c9a83dc885fb23ea7ca8534435a7928c33423128f0c796793fca20b96c789f",
+    "errorCode": "EASYPROXY_SBA_WRITER_UNKNOWN",
+}
+
 # 此操作只恢复已核实的这一份失败回执，不是通用的部分发布接管入口。
 GITHUB_REPAIR_ID = "continue-github-initial-deployment"
 GITHUB_PARENT_RELEASE = {"sourceSha": "9f1c66030fb2913f43401da8cf6328ef57608bf3", "applicationVersion": "1.0.1"}
