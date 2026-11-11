@@ -298,6 +298,10 @@ func (s *Server) updateRoutingConfig(req routingConfigPayload) (bool, error) {
 		strings.TrimSpace(c.Routing.Listen) != strings.TrimSpace(req.Listen) ||
 		c.Routing.Session.TTL != sessionTTL
 	candidate := c.Clone()
+	if candidate.LocalServer.SharedRevision < 1 {
+		candidate.LocalServer.SharedRevision = 1
+	}
+	candidate.LocalServer.SharedRevision++
 	if req.SelectionTiers != nil {
 		candidate.Routing.SelectionTiers = tiers
 	}
@@ -320,6 +324,7 @@ func (s *Server) updateRoutingConfig(req routingConfigPayload) (bool, error) {
 		return false, fmt.Errorf("保存配置失败: %w", err)
 	}
 	c.Routing = candidate.Routing
+	c.LocalServer.SharedRevision = candidate.LocalServer.SharedRevision
 	c.Unlock()
 
 	// Hot-apply rules, strategy, final policy, providers, and long-lived

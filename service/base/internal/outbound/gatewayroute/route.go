@@ -60,13 +60,14 @@ type Stats struct {
 type routeOutbound struct {
 	admission *profileselect.Admission
 	sboutbound.Adapter
-	profiles   profileselect.Resolver
-	manager    adapter.OutboundManager
-	options    Options
-	engine     *routerule.Engine
-	direct     adapter.Outbound
-	pool       adapter.Outbound
-	resolveUDP func(context.Context, M.Socksaddr) (M.Socksaddr, netip.Addr, error)
+	sharedSelection pool.SharedSelectionSource
+	profiles        profileselect.Resolver
+	manager         adapter.OutboundManager
+	options         Options
+	engine          *routerule.Engine
+	direct          adapter.Outbound
+	pool            adapter.Outbound
+	resolveUDP      func(context.Context, M.Socksaddr) (M.Socksaddr, netip.Addr, error)
 
 	directCount         atomic.Uint64
 	proxyCount          atomic.Uint64
@@ -98,14 +99,15 @@ func newRoute(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag st
 		dependencies = append(dependencies, options.PoolTag)
 	}
 	route := &routeOutbound{
-		Adapter: sboutbound.NewAdapter(Type, tag, []string{N.NetworkTCP, N.NetworkUDP}, dependencies),
-		manager: manager,
-		options: options,
-		engine:  routerule.New(options.Rules, routerule.NormalizePolicy(options.FinalPolicy), nil),
+		Adapter:         sboutbound.NewAdapter(Type, tag, []string{N.NetworkTCP, N.NetworkUDP}, dependencies),
+		manager:         manager,
+		sharedSelection: pool.SharedSelectionFrom(ctx),
+		options:         options,
+		engine:          routerule.New(options.Rules, routerule.NormalizePolicy(options.FinalPolicy), nil),
 	}
+	route.admission = profileselect.AdmissionFrom(ctx)
 	if options.DeviceProfiles {
 		route.profiles = profileselect.FromContext(ctx)
-		route.admission = profileselect.AdmissionFrom(ctx)
 	}
 	dnsRouter := service.FromContext[adapter.DNSRouter](ctx)
 	dnsTransportManager := service.FromContext[adapter.DNSTransportManager](ctx)
@@ -155,7 +157,10 @@ func (r *routeOutbound) DialContext(ctx context.Context, network string, destina
 		return nil, err
 	}
 	r.recordNetwork(network, destination)
-	policy, directive := r.selection(ctx, network, destination)
+	policy, directive, err := r.selection(ctx, network, destination)
+	if err != nil {
+		return nil, err
+	}
 	if policy == routerule.PolicyDirect {
 		r.directCount.Add(1)
 		return r.direct.DialContext(ctx, network, destination)
@@ -209,7 +214,10 @@ func (r *routeOutbound) ListenPacketWithDestination(ctx context.Context, destina
 		return nil, netip.Addr{}, err
 	}
 	r.recordNetwork(N.NetworkUDP, destination)
-	policy, directive := r.selection(ctx, N.NetworkUDP, destination)
+	policy, directive, err := r.selection(ctx, N.NetworkUDP, destination)
+	if err != nil {
+		return nil, netip.Addr{}, err
+	}
 	resolvedDestination, destinationAddress := r.resolvePacketDestination(ctx, destination)
 	if policy == routerule.PolicyDirect {
 		r.directCount.Add(1)

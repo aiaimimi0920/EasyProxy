@@ -223,6 +223,8 @@ func Build(cfg *config.Config) (option.Options, error) {
 	hasGlobalPool := len(memberTags) > 0 && (enablePoolInbound || cfg.DispatchEnabled() || tunEnabled)
 	if hasGlobalPool {
 		poolOptions := poolout.Options{
+			SharedSelection:   true,
+			SelectionTiers:    append([]config.SelectionTier(nil), cfg.Routing.SelectionTiers...),
 			Mode:              cfg.Pool.Mode,
 			Members:           memberTags,
 			FailureThreshold:  cfg.Pool.FailureThreshold,
@@ -253,6 +255,8 @@ func Build(cfg *config.Config) (option.Options, error) {
 			}
 			extraPoolTag := fmt.Sprintf("%s-%s-%d", poolout.Tag, mode, extra.Port)
 			extraPoolOptions := poolout.Options{
+				SharedSelection:   true,
+				SelectionTiers:    append([]config.SelectionTier(nil), cfg.Routing.SelectionTiers...),
 				Mode:              mode,
 				Members:           memberTags,
 				FailureThreshold:  cfg.Pool.FailureThreshold,

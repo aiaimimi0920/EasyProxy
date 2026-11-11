@@ -293,6 +293,16 @@ func (rc *RoutingController) ApplyHot(cfg *config.Config) bool {
 		return false
 	}
 
+	// Legacy routing edits do not pass through the Local Server shared-profile
+	// endpoint. Publish their immutable selector snapshot before declaring success.
+	if !cfg.LocalServer.Enabled {
+		if publisher, ok := rc.profiles.(interface{ PublishConfigSnapshot(*config.Config) error }); ok {
+			if err := publisher.PublishConfigSnapshot(cfg); err != nil {
+				rc.mu.Unlock()
+				return false
+			}
+		}
+	}
 	ruleCount := 0
 	if rc.engine != nil {
 		ruleCount = rc.engine.RuleCount()

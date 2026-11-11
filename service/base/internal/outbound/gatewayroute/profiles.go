@@ -15,9 +15,32 @@ import (
 	"time"
 )
 
-func (r *routeOutbound) selection(ctx context.Context, network string, destination M.Socksaddr) (routerule.Policy, *pool.SelectionDirective) {
+func (r *routeOutbound) selection(ctx context.Context, network string, destination M.Socksaddr) (routerule.Policy, *pool.SelectionDirective, error) {
 	directive := pool.SelectionDirective{ProfileID: tcpProfileID, Strategy: pool.NormalizeStrategy(string(r.options.DefaultStrategy)), SelectionTiers: append([]config.SelectionTier(nil), r.options.SelectionTiers...)}
 	policy := r.policy(ctx, network, destination)
+	if r.profiles == nil && r.sharedSelection != nil {
+		// Routing-disabled legacy TUN must not become DIRECT or enable device maps.
+		// Only the shared selector is live; existing gateway policy stays in force.
+		shared, err := r.sharedSelection(ctx)
+		if err != nil {
+			return "", nil, err
+		}
+		if shared != nil {
+			directive.SelectionTiers = append([]config.SelectionTier(nil), shared.SelectionTiers...)
+			directive.ProfileRevision = shared.ProfileRevision
+			if len(shared.SelectionTiers) > 0 {
+				directive.Strategy = shared.Strategy
+				directive.SessionTTL = shared.SessionTTL
+				if shared.Strategy == pool.StrategySession {
+					if metadata := adapter.ContextFrom(ctx); metadata != nil && metadata.Source.Addr.IsValid() {
+						directive.SessionKey = metadata.Source.Addr.Unmap().String()
+					}
+				}
+				directive.Filter = shared.Filter
+				directive.LongLived = shared.LongLived
+			}
+		}
+	}
 	if r.profiles != nil {
 		// Source is the original inbound peer, never a sniffed domain, destination or header.
 		var peer netip.Addr
@@ -51,5 +74,5 @@ func (r *routeOutbound) selection(ctx context.Context, network string, destinati
 		directive.PreferredProtocolFamilies = append([]string(nil), nativeUDPProtocolFamilies...)
 		directive.RequireAvailablePreferred = true
 	}
-	return policy, &directive
+	return policy, &directive, nil
 }

@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"easy_proxies/internal/config"
 	"easy_proxies/internal/monitor"
 
 	"github.com/sagernet/sing-box/adapter"
@@ -34,6 +35,8 @@ const (
 
 // Options controls pool outbound behaviour.
 type Options struct {
+	SharedSelection   bool
+	SelectionTiers    []config.SelectionTier
 	Mode              string
 	Members           []string
 	FailureThreshold  int
@@ -74,6 +77,7 @@ type memberState struct {
 }
 
 type poolOutbound struct {
+	sharedSelection SharedSelectionSource
 	outbound.Adapter
 	ctx            context.Context
 	logger         log.ContextLogger
@@ -102,14 +106,15 @@ func newPool(ctx context.Context, _ adapter.Router, logger log.ContextLogger, ta
 	normalized := normalizeOptions(options)
 	memberCount := len(normalized.Members)
 	p := &poolOutbound{
-		Adapter: outbound.NewAdapter(Type, tag, []string{N.NetworkTCP, N.NetworkUDP}, normalized.Members),
-		ctx:     ctx,
-		logger:  logger,
-		manager: manager,
-		options: normalized,
-		mode:    normalized.Mode,
-		rng:     rand.New(rand.NewSource(time.Now().UnixNano())),
-		monitor: monitorMgr,
+		sharedSelection: SharedSelectionFrom(ctx),
+		Adapter:         outbound.NewAdapter(Type, tag, []string{N.NetworkTCP, N.NetworkUDP}, normalized.Members),
+		ctx:             ctx,
+		logger:          logger,
+		manager:         manager,
+		options:         normalized,
+		mode:            normalized.Mode,
+		rng:             rand.New(rand.NewSource(time.Now().UnixNano())),
+		monitor:         monitorMgr,
 		candidatesPool: sync.Pool{
 			New: func() any {
 				return make([]*memberState, 0, memberCount)

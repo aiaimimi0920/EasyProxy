@@ -65,6 +65,16 @@ func mergeHotAppliedConfig(base, applied *config.Config) *config.Config {
 		return applied
 	}
 
+	merged.Routing.SelectionTiers = append([]config.SelectionTier(nil), applied.Routing.SelectionTiers...)
+	merged.LocalServer.SharedRevision = applied.LocalServer.SharedRevision
+	merged.Routing.NodeFilter.Countries = append([]string(nil), applied.Routing.NodeFilter.Countries...)
+	merged.Routing.NodeFilter.Regions = append([]string(nil), applied.Routing.NodeFilter.Regions...)
+	if applied.Routing.NodeFilter.LongLived == nil {
+		merged.Routing.NodeFilter.LongLived = nil
+	} else {
+		longLived := *applied.Routing.NodeFilter.LongLived
+		merged.Routing.NodeFilter.LongLived = &longLived
+	}
 	merged.Routing.DefaultStrategy = applied.Routing.DefaultStrategy
 	merged.Routing.FinalPolicy = applied.Routing.FinalPolicy
 	merged.Routing.Rules = append([]string(nil), applied.Routing.Rules...)
@@ -82,14 +92,6 @@ func mergeHotAppliedConfig(base, applied *config.Config) *config.Config {
 	}
 	if merged.LocalServer.Enabled && applied.LocalServer.Enabled && merged.DispatchListen() == applied.DispatchListen() {
 		merged.Routing.Enabled = applied.Routing.Enabled
-		merged.Routing.NodeFilter.Countries = append([]string(nil), applied.Routing.NodeFilter.Countries...)
-		merged.Routing.NodeFilter.Regions = append([]string(nil), applied.Routing.NodeFilter.Regions...)
-		if applied.Routing.NodeFilter.LongLived == nil {
-			merged.Routing.NodeFilter.LongLived = nil
-		} else {
-			longLived := *applied.Routing.NodeFilter.LongLived
-			merged.Routing.NodeFilter.LongLived = &longLived
-		}
 		merged.Routing.Session = applied.Routing.Session
 		merged.LocalServer.SharedRevision = applied.LocalServer.SharedRevision
 		merged.LocalServer.Auth = applied.LocalServer.Auth

@@ -179,3 +179,16 @@ Existing runtime has one profile and no per-device mappings. New policy options
 are deployed but no device-specific country preference was silently enabled.
 Country remains node-server GeoIP; DIRECT fail-open and existing IPv6 settings
 are unchanged. Established connections cannot be transparently replayed.
+
+
+## Legacy pool 与 TUN 共享策略热更新
+
+共享 `selection_tiers` 不以 Local Server 或 smart routing 开关为前提。
+旧版 pool 模式的默认 HTTP/SOCKS 入口及额外 pool 监听器，在每条新连接上读取已发布的共享选择快照；
+无策略或清空策略时保持原 pool 模式行为。显式设备 directive 始终优先，不由共享选择覆盖。
+非 Local Server TUN 每条新 TCP/UDP 流读取共享选择快照，但保留原 gateway 路由策略，
+不会因 shared profile 的 routing.enabled=false 而改成全直连，也不会隐式启用设备映射。
+UDP 仍要求可用的原生 UDP 节点。地域池、单节点池和 bootstrap 池不受共享默认策略覆盖。
+
+热更新只影响新流，不中断或重放现有连接。新增 generation admission 防止未提交或失败候选
+box 使用上一代策略接收新连接；回滚快照包含策略、共享修订号及硬过滤条件。

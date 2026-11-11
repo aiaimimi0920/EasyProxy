@@ -13,6 +13,7 @@ import (
 	"easy_proxies/internal/outbound/gatewayroute"
 	"easy_proxies/internal/outbound/pool"
 	"easy_proxies/internal/outbound/profileselect"
+	"easy_proxies/internal/profile"
 
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/include"
@@ -49,6 +50,14 @@ func (m *Manager) createBox(ctx context.Context, cfg *config.Config) (*box.Box, 
 	boxCtx = monitor.ContextWith(boxCtx, m.monitorMgr)
 	if m.profiles != nil {
 		boxCtx = profileselect.WithResolver(boxCtx, m.profiles)
+		gate := profileselect.AdmissionFrom(ctx)
+		boxCtx = pool.WithSharedSelection(boxCtx, func(flow context.Context) (*pool.SelectionDirective, error) {
+			if err := gate.Check(); err != nil {
+				return nil, err
+			}
+			d := profileselect.Directive(m.profiles.Resolve(profile.RequestIdentity{}), "")
+			return &d, nil
+		})
 	}
 
 	instance, err := box.New(box.Options{Context: boxCtx, Options: opts})
@@ -60,7 +69,7 @@ func (m *Manager) createBox(ctx context.Context, cfg *config.Config) (*box.Box, 
 
 func (m *Manager) createManagedBox(ctx context.Context, cfg *config.Config) (managedBox, error) {
 	var gate *profileselect.Admission
-	if m.profiles != nil && cfg != nil && cfg.LocalServer.Enabled && cfg.Gateway.Enabled && strings.EqualFold(cfg.Gateway.Mode, "tun") {
+	if m.profiles != nil && cfg != nil && (cfg.DispatchEnabled() || cfg.Mode == "pool" || cfg.Mode == "hybrid" || (cfg.Gateway.Enabled && strings.EqualFold(cfg.Gateway.Mode, "tun"))) {
 		gate = new(profileselect.Admission)
 		ctx = profileselect.WithAdmission(ctx, gate)
 	}

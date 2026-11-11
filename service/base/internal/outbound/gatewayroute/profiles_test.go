@@ -62,7 +62,7 @@ func TestDeviceSelectionUsesOriginalSourceAcrossProtocols(t *testing.T) {
 		} {
 			t.Run(network+test.source, func(t *testing.T) {
 				ctx := adapter.WithContext(context.Background(), &adapter.InboundContext{Source: M.ParseSocksaddr(test.source), Domain: "example.com"})
-				policy, d := route.selection(ctx, network, M.ParseSocksaddr("192.0.2.1:443"))
+				policy, d, _ := route.selection(ctx, network, M.ParseSocksaddr("192.0.2.1:443"))
 				wantID := test.id
 				if network == N.NetworkUDP {
 					wantID += "/udp"
@@ -93,16 +93,16 @@ func TestLiveProfilePublicationAndPortRules(t *testing.T) {
 	route := newTestRoute(nil, "PROXY", "DIRECT", nil, nil)
 	route.profiles = resolver
 	ctx := adapter.WithContext(context.Background(), &adapter.InboundContext{Source: M.ParseSocksaddr("192.0.2.1:1000")})
-	if policy, _ := route.selection(ctx, N.NetworkUDP, M.ParseSocksaddr("1.1.1.1:53")); policy != routerule.PolicyDirect {
+	if policy, _, _ := route.selection(ctx, N.NetworkUDP, M.ParseSocksaddr("1.1.1.1:53")); policy != routerule.PolicyDirect {
 		t.Fatal("profile port rule ignored")
 	}
 	installProfiles(t, resolver, 2, false)
-	policy, d := route.selection(ctx, N.NetworkTCP, M.ParseSocksaddr("1.1.1.1:443"))
+	policy, d, _ := route.selection(ctx, N.NetworkTCP, M.ParseSocksaddr("1.1.1.1:443"))
 	if policy != routerule.PolicyDirect || d.ProfileRevision != 2 {
 		t.Fatalf("stale publication: %s %+v", policy, d)
 	}
 	installProfiles(t, resolver, 3, true)
-	policy, d = route.selection(ctx, N.NetworkTCP, M.ParseSocksaddr("1.1.1.1:443"))
+	policy, d, _ = route.selection(ctx, N.NetworkTCP, M.ParseSocksaddr("1.1.1.1:443"))
 	if policy != routerule.PolicyProxy || d.ProfileRevision != 3 {
 		t.Fatal("hot re-enable ignored")
 	}
@@ -120,7 +120,7 @@ func TestConcurrentProfilesDoNotShareDirectives(t *testing.T) {
 			t.Parallel()
 			ctx := adapter.WithContext(context.Background(), &adapter.InboundContext{Source: M.ParseSocksaddr(source)})
 			for i := 0; i < 100; i++ {
-				_, d := route.selection(ctx, N.NetworkTCP, M.ParseSocksaddr("8.8.8.8:443"))
+				_, d, _ := route.selection(ctx, N.NetworkTCP, M.ParseSocksaddr("8.8.8.8:443"))
 				if d.SessionKey != M.ParseSocksaddr(source).Addr.String() {
 					t.Fatal("cross-device session")
 				}
