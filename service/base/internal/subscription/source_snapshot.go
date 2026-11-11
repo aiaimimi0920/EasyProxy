@@ -3,8 +3,10 @@ package subscription
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -244,6 +246,27 @@ func (m *Manager) fetchManifestSources(cfg *config.Config) ([]RuntimeSource, err
 	ctx, cancel := context.WithTimeout(m.ctx, timeout)
 	defer cancel()
 
+	// Retry only transient timeouts, within the existing request budget. A
+	// manifest-only deployment must not restart on one failed TLS handshake.
+	for attempt := 0; ; attempt++ {
+		sources, err := m.fetchManifestSourcesOnce(ctx, cfg)
+		var timeoutErr net.Error
+		if err == nil || attempt >= 2 || ctx.Err() != nil || !errors.As(err, &timeoutErr) || !timeoutErr.Timeout() {
+			return sources, err
+		}
+		m.logger.Warnf("manifest request timed out; retrying (%d/2)", attempt+1)
+		timer := time.NewTimer(time.Duration(attempt+1) * time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+// Keep each response lifetime inside one attempt, including body decoding.
+func (m *Manager) fetchManifestSourcesOnce(ctx context.Context, cfg *config.Config) ([]RuntimeSource, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, cfg.SourceSync.ManifestURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create manifest request: %w", err)

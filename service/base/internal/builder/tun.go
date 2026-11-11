@@ -176,9 +176,17 @@ func configureTunDNS(cfg *config.Config, dnsOptions *option.DNSOptions) (*option
 	dnsOptions.Servers = append(dnsOptions.Servers, option.DNSServerOptions{
 		Type: C.DNSTypeFakeIP, Tag: "easyproxy-fakeip", Options: fakeOptions,
 	})
+	fakeRule := dnsInboundRouteRule(tunInboundTag, "easyproxy-fakeip")
+	// Unsupported address families need an empty DNS answer, not a lookup
+	// against a missing fake-IP range that leaves dual-stack clients waiting.
+	if cfg.Gateway.Tun.IPv4 && !cfg.Gateway.Tun.IPv6 {
+		fakeRule.DefaultOptions.RouteOptions.Strategy = option.DomainStrategy(C.DomainStrategyIPv4Only)
+	} else if cfg.Gateway.Tun.IPv6 && !cfg.Gateway.Tun.IPv4 {
+		fakeRule.DefaultOptions.RouteOptions.Strategy = option.DomainStrategy(C.DomainStrategyIPv6Only)
+	}
 	dnsOptions.Rules = append(dnsOptions.Rules,
 		dnsRouteRule([]string{"local", "lan", "home.arpa"}, "local"),
-		dnsInboundRouteRule(tunInboundTag, "easyproxy-fakeip"),
+		fakeRule,
 	)
 	cacheDir := "data"
 	if path := strings.TrimSpace(cfg.DatabasePath); path != "" {

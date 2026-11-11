@@ -93,6 +93,37 @@ func TestBuildTunGatewayWithoutNodesProducesDirectOnlyRuntime(t *testing.T) {
 	t.Fatal("gateway route outbound is missing")
 }
 
+func TestTunFakeIPDNSStrategyMatchesEnabledFamilies(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		v4, v6   bool
+		strategy option.DomainStrategy
+	}{
+		{"IPv4 only", true, false, option.DomainStrategy(C.DomainStrategyIPv4Only)},
+		{"IPv6 only", false, true, option.DomainStrategy(C.DomainStrategyIPv6Only)},
+		{"dual stack", true, true, option.DomainStrategy(C.DomainStrategyAsIS)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := tunBuildConfig(true)
+			cfg.Gateway.Tun.IPv4, cfg.Gateway.Tun.IPv6 = tc.v4, tc.v6
+			dns := &option.DNSOptions{}
+			if _, err := configureTunDNS(cfg, dns); err != nil {
+				t.Fatal(err)
+			}
+			if len(dns.Rules) != 2 {
+				t.Fatalf("rules = %d", len(dns.Rules))
+			}
+			if dns.Rules[0].DefaultOptions.RouteOptions.Server != "local" {
+				t.Fatal("local DNS precedence changed")
+			}
+			rule := dns.Rules[1].DefaultOptions
+			if rule.RouteOptions.Server != "easyproxy-fakeip" || rule.RouteOptions.Strategy != tc.strategy {
+				t.Fatalf("unexpected fake-IP route: %+v", rule.RouteOptions)
+			}
+		})
+	}
+}
+
 func tunBuildConfig(withNode bool) *config.Config {
 	cfg := &config.Config{
 		Mode: "pool",
