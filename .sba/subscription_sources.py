@@ -19,6 +19,24 @@ from cloudflare_http import secure_session
 REGISTERED_HASHES = "x-easyproxy-registered-node-hashes"
 
 
+def quota_exhausted(header: str | None) -> bool | None:
+    """未知统计不能视为零；整数交叉相乘严格判断大于 99%。"""
+    if not isinstance(header, str) or len(header) > 4096:
+        return None
+    fields = {}
+    for part in header.split(";"):
+        match = re.fullmatch(r"\s*(upload|download|total|expire)\s*=\s*([0-9]+)\s*", part)
+        if not match and re.match(r"\s*(upload|download|total|expire)\s*=", part):
+            return None
+        if match:
+            if match[1] in fields:
+                return None
+            fields[match[1]] = int(match[2])
+    if not {"upload", "download", "total"} <= fields.keys() or fields["total"] <= 0:
+        return None
+    return (fields["upload"] + fields["download"]) * 100 > fields["total"] * 99
+
+
 def subscription_url(value: str) -> str:
     require(isinstance(value, str) and 0 < len(value) <= 8192 and not any(char.isspace() for char in value), "SUBSCRIPTION_URL")
     try:
@@ -51,11 +69,14 @@ def load_registered_subscriptions(config, credentials: dict) -> list[dict]:
             continue
         agent = row.get("customUserAgent") or "clash.meta"
         require(isinstance(agent, str) and 0 < len(agent) <= 512 and all(32 <= ord(char) < 127 for char in agent), "SUBSCRIPTION_AGENT")
-        result.append({"id": row["id"], "url": subscription_url(row.get("input") or row.get("url")), "user_agent": agent})
+        source = {"id": row["id"], "url": subscription_url(row.get("input") or row.get("url")), "user_agent": agent}
+        if (row.get("options") or {}).get("trafficQuota", {}).get("enabled") is True:
+            source["quota_enabled"] = True
+        result.append(source)
     return result
 
 
-def _download(session, source: dict) -> bytes:
+def _download(session, source: dict) -> bytes | None:
     url = subscription_url(source["url"])
     try:
         for redirect in range(4):
@@ -66,6 +87,8 @@ def _download(session, source: dict) -> bytes:
                     url = subscription_url(urljoin(url, response.headers["Location"]))
                     continue
                 require(response.status_code == 200, "SUBSCRIPTION_FETCH")
+                if source.get("quota_enabled") is True and quota_exhausted(response.headers.get("subscription-userinfo")) is not False:
+                    return None
                 body = bytearray()
                 for chunk in response.iter_content(65536):
                     body.extend(chunk)
@@ -85,6 +108,9 @@ def configure_registered(config: dict, sources: list[dict], output: Path) -> lis
             group = f"registered-{index}"
             downloaded = output / (group + ".private.input")
             body = _download(session, source)
+            if body is None:
+                # 配额排除不等于下载失败。来源登记保留，下轮仍检查，重置后自动恢复。
+                continue
             downloaded.write_bytes(body)
             artifact = output / (group + ".private.yaml")
             # The approved AirPort reader strips literal "file:///", unlike a
@@ -94,6 +120,8 @@ def configure_registered(config: dict, sources: list[dict], output: Path) -> lis
             config["groups"][group] = {"emoji": True, "list": True, "targets": {"clash": group}, "regularize": {"enable": False}}
             config["storage"]["items"][group] = {"folder_id": str(output), "file_id": artifact.name}
             records.append({"id": source["id"], "artifact": artifact, "downloadSha256": hashlib.sha256(body).hexdigest()})
+            if source.get("quota_enabled") is True:
+                records[-1]["quota_key"] = hashlib.sha256(source["id"].encode("utf-8")).hexdigest()
     return records
 
 
@@ -127,7 +155,7 @@ def record_registered(raw: bytes, records: list[dict], output: Path) -> bytes:
         return raw
     value = _clash(raw)
     public = {node_hash(node) for node in value["proxies"]}
-    registered, report = set(), []
+    registered, report, quota_nodes = set(), [], {}
     for row in records:
         path = row["artifact"]
         require(path.is_file() and not path.is_symlink() and path.stat().st_size <= MAX_BYTES, "SUBSCRIPTION_OUTPUT")
@@ -135,7 +163,14 @@ def record_registered(raw: bytes, records: list[dict], output: Path) -> bytes:
         included = {node_hash(node) for node in nodes} & public
         require(nodes and included, "SUBSCRIPTION_OUTPUT")
         registered.update(included)
+        if row.get("quota_key"):
+            for digest in included:
+                quota_nodes.setdefault(digest, set()).add(row["quota_key"])
         report.append({"id": row["id"], "downloadSha256": row["downloadSha256"], "parsedCandidates": len(nodes), "includedCandidates": len(included)})
     value[REGISTERED_HASHES] = sorted(registered)
+    for node in value["proxies"]:
+        keys = quota_nodes.get(node_hash(node))
+        if keys:
+            node["name"] = "[epq:" + ",".join(sorted(keys)) + "] " + str(node.get("name", ""))
     (output / "registered-source-report.safe.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     return yaml.safe_dump(value, allow_unicode=True, sort_keys=False).encode("utf-8")

@@ -24,7 +24,7 @@ def test_published_contract_matches_real_entry_actions_and_exact_secret_set():
 
 def test_usable_pool_release_does_not_advertise_consumed_recovery():
     manifest = json.loads((Path(__file__).parents[1] / "manifest.json").read_bytes())
-    assert manifest["version"] == "1.0.20"
+    assert manifest["version"] == "1.0.21"
     assert "repairs" not in manifest and "repair" not in manifest["actions"]
 
 

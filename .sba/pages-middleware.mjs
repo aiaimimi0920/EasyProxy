@@ -1,5 +1,6 @@
 // Ordinary application routes keep the approved upstream Functions router.
 import { managedSync } from './sba-managed.js';
+import { quotaStatus, filterQuotaManifest } from './sba-quota.mjs';
 
 export async function onRequest(context) {
     const { request, env, next } = context;
@@ -16,6 +17,8 @@ export async function onRequest(context) {
         if (!privateRead && !controlled) return new Response('Preview isolated', { status: 403, headers: { 'Cache-Control': 'no-store' } });
     }
     if (new URL(request.url).pathname === '/api/sba/managed-sync') return managedSync(context);
+    if (pathname === '/api/sba/quota-status') return quotaStatus(context);
+    if (pathname.startsWith('/api/manifest/') && env.SBA_PURPOSE !== 'preview') return filterQuotaManifest(context);
     if (new URL(request.url).pathname !== '/.well-known/easyproxy-release.json') return next();
     const headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' };
     if (!['GET', 'HEAD'].includes(request.method)) {

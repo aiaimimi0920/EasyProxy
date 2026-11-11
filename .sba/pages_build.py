@@ -20,7 +20,7 @@ from sources import inspect_checkout, inspect_gitlink_checkout
 COMPATIBILITY_DATE = "2026-03-25"
 VERSIONS = {"wrangler": "4.93.1", "vite": "7.3.3", "blake3-wasm": "2.1.5"}
 NPM_VERSION = "10.9.7"
-ADAPTERS = ("pages-middleware.mjs", "pages-assets.mjs", "misub-managed.mjs", "misub-body.mjs")
+ADAPTERS = ("pages-middleware.mjs", "pages-assets.mjs", "misub-managed.mjs", "misub-body.mjs", "misub-quota.mjs", "traffic-quota.mjs")
 
 
 @dataclass(frozen=True)
@@ -179,6 +179,9 @@ def build_pages(root: Path, repository: str, sha: str, node: Path, npm_cli: Path
         (project / "functions/sba-managed.js").write_bytes(adapters["misub-managed.mjs"])
         require(not (project / "functions/sba-body.mjs").exists(), "SOURCE")
         (project / "functions/sba-body.mjs").write_bytes(adapters["misub-body.mjs"])
+        for name, target in (("misub-quota.mjs", "sba-quota.mjs"), ("traffic-quota.mjs", "sba-traffic-quota.mjs")):
+            require(not (project / "functions" / target).exists(), "SOURCE")
+            (project / "functions" / target).write_bytes(adapters[name])
         helper = output / "pages-assets.mjs"
         helper.write_bytes(adapters["pages-assets.mjs"])
         _run([str(node), str(npm_cli), "ci", "--ignore-scripts", "--no-audit", "--no-fund", "--include=dev", "--include=optional", "--strict-ssl=true"],

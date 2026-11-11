@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib.util
 from pathlib import Path
 import re
+from urllib.parse import unquote_plus, urlsplit
 
 import requests
 
@@ -98,6 +100,30 @@ def _module(root: Path, name: str):
 
 def _managed(row: dict) -> bool:
     return re.fullmatch(r"(?:proxy_runtime_node|conn_ech_workers_pref)_\d+", row["id"]) is not None
+
+
+def quota_filtered_expected(expected: dict, baseline: dict, manifest: dict) -> dict:
+    """配额过滤只能减去有明确来源标记且本次报告停用的节点。"""
+    guarded = {row["id"]: row for row in baseline["subscriptions"] if row.get("kind") == "subscription"
+               and (row.get("options") or {}).get("trafficQuota", {}).get("enabled") is True}
+    statuses = manifest.get("traffic_quota", [] if not guarded else None)
+    require(type(statuses) is list and len(statuses) == len(guarded)
+            and {row.get("id") for row in statuses if type(row) is dict} == set(guarded), "QUOTA_UNKNOWN")
+    allowed = {hashlib.sha256(row["id"].encode("utf-8")).hexdigest(): row.get("enabled") is True
+               for row in baseline["subscriptions"] if row.get("kind") == "subscription" and row["id"] not in guarded}
+    for row in statuses:
+        require(type(row.get("effectiveEnabled")) is bool and row.get("status") in
+                ("available", "exhausted", "unknown", "manual-disabled"), "QUOTA_UNKNOWN")
+        require(row["effectiveEnabled"] == (row["status"] == "available"), "QUOTA_UNKNOWN")
+        allowed[hashlib.sha256(row["id"].encode("utf-8")).hexdigest()] = row["effectiveEnabled"]
+    def retained(row):
+        if row.get("kind") != "proxy_uri" or re.fullmatch(r"proxy_runtime_node_\d+", row["id"]) is None or (
+                row.get("options") or {}).get("managed_by") != "easyproxy_runtime_sources":
+            return True
+        name = unquote_plus(urlsplit(row.get("input", "")).fragment)
+        match = re.match(r"^\[epq:([a-f0-9]{64}(?:,[a-f0-9]{64})*)\]", name)
+        return not match or all(allowed.get(key) is True for key in match[1].split(","))
+    return {identity: row for identity, row in expected.items() if retained(row)}
 
 
 def _diff(before: list[dict], after: list[dict]) -> dict:
@@ -197,6 +223,8 @@ def sync_misub(owner: Coordinator, permit: Permit, candidate: Candidate, audit, 
         sources = value["sources"]
         expected_ids = next(row for row in desired["profiles"] if row.get("customId") == PROFILE)["manualNodes"]
         expected = {row["id"]: row for row in desired["subscriptions"] if row["id"] in expected_ids and row.get("enabled", True)}
+        if permit.action != "preview":
+            expected = quota_filtered_expected(expected, baseline, value)
         require(len(sources) == len(expected) and {row.get("id") for row in sources} == set(expected), "MANIFEST_UNKNOWN")
         for row in sources:
             target = expected[row["id"]]

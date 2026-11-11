@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
 import { createRuntime } from './miniflare-runtime.mjs';
+import { quotaKey } from '../traffic-quota.mjs';
 
 const runtime = process.env.EASYPROXY_TEST_MINIFLARE;
 const artifactRoot = process.env.EASYPROXY_TEST_ARTIFACT_ROOT;
@@ -23,6 +24,7 @@ for (const purpose of ['production', 'preview']) test(`MiSub actual Pages Functi
     assert.equal(Object.hasOwn(metadata, 'bindings'), false);
     const script = await form.get(metadata.main_module).text();
     const outbound = [];
+    let quotaHeader = null;
     const root = path.join(build, 'misub/dist');
     const assetRequests = [];
     const mf = await createRuntime(runtime, {
@@ -43,7 +45,12 @@ for (const purpose of ['production', 'preview']) test(`MiSub actual Pages Functi
                 return new Response(request.method === 'HEAD' ? null : body, { headers: { 'Content-Type': type } });
             } catch { return new Response('Not Found', { status: 404 }); }
         } },
-        outboundService: request => { outbound.push(request.url); return new Response('Outbound disabled', { status: 502 }); },
+        outboundService: request => {
+            outbound.push(request.url);
+            if (request.url === 'https://quota.fixture.example/sub') return new Response('fixture', {
+                headers: quotaHeader ? { 'subscription-userinfo': quotaHeader } : {} });
+            return new Response('Outbound disabled', { status: 502 });
+        },
     }, persistence);
     t.after(() => mf.dispose());
     await mf.ready;
@@ -220,4 +227,32 @@ for (const purpose of ['production', 'preview']) test(`MiSub actual Pages Functi
         assert.deepEqual(await snapshot(), before);
     });
     assert.deepEqual(outbound, []);
+    await t.test('quota filters old managed nodes on read and recovers without database writes', async () => {
+        const quota = { id: 'fixture-quota', kind: 'subscription', enabled: true, input: 'https://quota.fixture.example/sub',
+            url: 'https://quota.fixture.example/sub', options: { trafficQuota: { enabled: true } } };
+        const uri = 'trojan://fixture@192.0.2.3:443#' + encodeURIComponent(`[epq:${await quotaKey(quota.id)}] quota`);
+        const node = { id: 'proxy_runtime_node_2', kind: 'proxy_uri', enabled: true, input: uri, url: uri,
+            probe_status: 'verified', options: { managed_by: 'easyproxy_runtime_sources' } };
+        for (const row of [quota, node]) await database.prepare('INSERT INTO subscriptions (id,data) VALUES (?,?)')
+            .bind(row.id, JSON.stringify(row)).run();
+        const profileRow = await database.prepare('SELECT data FROM profiles WHERE id = ?').bind('aggregator_global').first();
+        const profile = JSON.parse(profileRow.data);
+        profile.manualNodes.push(node.id);
+        await database.prepare('UPDATE profiles SET data = ? WHERE id = ?').bind(JSON.stringify(profile), profile.id).run();
+        const before = (await database.prepare('SELECT * FROM subscriptions ORDER BY id').all()).results;
+        for (const [header, allowed] of [['upload=0;download=100;total=100', false], [null, false],
+            ['upload=0;download=1;total=100', true], ['upload=0;download=99;total=100', true]]) {
+            quotaHeader = header;
+            const response = await mf.dispatchFetch('https://misub.invalid/api/manifest/aggregator-global', {
+                headers: { Authorization: 'Bearer fixture-manifest-token' } });
+            assert.equal(response.status, 200);
+            const manifest = await response.json();
+            assert.equal(manifest.sources.some(row => row.id === node.id), purpose === 'preview' || allowed);
+            if (purpose === 'production') assert.equal(manifest.traffic_quota[0].effectiveEnabled, allowed);
+            else assert.equal(manifest.traffic_quota, undefined);
+        }
+        assert.deepEqual((await database.prepare('SELECT * FROM subscriptions ORDER BY id').all()).results, before);
+        assert.equal(outbound.length, purpose === 'preview' ? 0 : 4);
+        assert.ok(outbound.every(url => url === quota.input));
+    });
 });
