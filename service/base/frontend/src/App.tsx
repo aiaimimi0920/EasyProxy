@@ -6,6 +6,7 @@ import DevicesPanel from './components/DevicesPanel'
 import DebugPanel from './components/DebugPanel'
 import SettingsPanel from './components/SettingsPanel'
 import LoginPage from './components/LoginPage'
+import GeoIPAttribution from './components/GeoIPAttribution'
 import { checkAuth, getToken, logout } from './api/client'
 import { requestAppNavigation } from './hooks/useUnsavedChangesGuard'
 import type { AuthResponse } from './types'
@@ -439,6 +440,7 @@ function App() {
         {/* Main Content Area */}
         <main className="flex-1 overflow-y-auto bg-base-200/40 relative">
           {renderContent()}
+          <GeoIPAttribution />
         </main>
       </div>
 
