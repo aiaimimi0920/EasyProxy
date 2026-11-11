@@ -55,6 +55,16 @@ class OperatorDocumentationContractTests(unittest.TestCase):
 
         self.assertNotIn("/C:/Users/", markdown)
 
+    def test_readme_screenshots_are_not_shipped_as_runtime_assets(self):
+        service = REPO_ROOT / "service" / "base"
+        readme = (service / "README.md").read_text(encoding="utf-8")
+        for number in range(1, 6):
+            name = f"{number}.png"
+            self.assertIn(f"./docs/screenshots/{name}", readme)
+            self.assertTrue((service / "docs" / "screenshots" / name).is_file())
+            self.assertFalse((service / "frontend" / "public" / name).exists())
+            self.assertFalse((service / "internal" / "monitor" / "assets" / name).exists())
+
     def test_native_installers_require_fork_neutral_release_source(self):
         linux = (REPO_ROOT / "deploy/native/linux/install.sh").read_text(encoding="utf-8")
         windows = (REPO_ROOT / "deploy/native/windows/install-service.ps1").read_text(encoding="utf-8")

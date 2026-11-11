@@ -26,11 +26,11 @@ EasyProxy 是一个轻量级、高性能的代理池与订阅管理工具，底�
 
 ## 🖼️ 项目预览
 
-![项目预览 1](./frontend/public/1.png)
-![项目预览 2](./frontend/public/2.png)
-![项目预览 3](./frontend/public/3.png)
-![项目预览 4](./frontend/public/4.png)
-![项目预览 5](./frontend/public/5.png)
+![项目预览 1](./docs/screenshots/1.png)
+![项目预览 2](./docs/screenshots/2.png)
+![项目预览 3](./docs/screenshots/3.png)
+![项目预览 4](./docs/screenshots/4.png)
+![项目预览 5](./docs/screenshots/5.png)
 
 ---
 
