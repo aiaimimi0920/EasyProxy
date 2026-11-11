@@ -232,7 +232,8 @@ for (const purpose of ['production', 'preview']) test(`MiSub actual Pages Functi
             url: 'https://quota.fixture.example/sub', options: { trafficQuota: { enabled: true } } };
         const uri = 'trojan://fixture@192.0.2.3:443#' + encodeURIComponent(`[epq:${await quotaKey(quota.id)}] quota`);
         const node = { id: 'proxy_runtime_node_2', kind: 'proxy_uri', enabled: true, input: uri, url: uri,
-            probe_status: 'verified', options: { managed_by: 'easyproxy_runtime_sources' } };
+            probe_status: 'verified', detected_kind: 'proxy_uri', probe_input: uri,
+            last_probe_at: 'sba-quota-fixture', options: { managed_by: 'easyproxy_runtime_sources' } };
         await database.prepare('INSERT INTO subscriptions (id,data) VALUES (?,?)')
             .bind(quota.id, JSON.stringify(quota)).run();
         const profileRow = await database.prepare('SELECT data FROM profiles WHERE id = ?').bind('aggregator_global').first();
@@ -259,7 +260,8 @@ for (const purpose of ['production', 'preview']) test(`MiSub actual Pages Functi
                 headers: { Authorization: 'Bearer fixture-manifest-token' } });
             assert.equal(response.status, 200);
             const manifest = await response.json();
-            assert.equal(manifest.sources.some(row => row.id === node.id), purpose === 'preview' || allowed);
+            assert.equal(manifest.sources.some(row => row.id === node.id), purpose === 'preview' || allowed,
+                JSON.stringify({ purpose, header, quota: manifest.traffic_quota, outboundCount: outbound.length }));
             if (purpose === 'production') assert.equal(manifest.traffic_quota[0].effectiveEnabled, allowed);
             else assert.equal(manifest.traffic_quota, undefined);
         }

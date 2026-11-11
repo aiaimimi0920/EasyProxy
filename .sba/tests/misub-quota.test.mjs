@@ -25,7 +25,7 @@ test('manifest filters exhausted/unknown, restores reset, and never changes pers
     const managed = await node(), rows = [structuredClone(source)], before = JSON.stringify(rows);
     let header = 'upload=0; download=100; total=100';
     t.mock.method(globalThis, 'fetch', async (_url, options) => {
-        assert.equal(options.redirect, 'error');
+        assert.equal(options.redirect, 'manual');
         assert.equal(options.headers.Authorization, undefined);
         return new Response('', { headers: header ? { 'subscription-userinfo': header } : {} });
     });

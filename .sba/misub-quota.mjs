@@ -11,7 +11,7 @@ async function readUsage(source, signal) {
         const parsed = new URL(url);
         if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.hash) throw new Error('url');
         const result = await fetch(url, { headers: { 'User-Agent': source.customUserAgent || 'clash.meta',
-            'Cache-Control': 'no-cache' }, redirect: 'error', signal });
+            'Cache-Control': 'no-cache' }, redirect: 'manual', signal });
         const usage = result.ok ? parseUsage(result.headers.get('subscription-userinfo')) : null;
         await result.body?.cancel();
         return usage ? { status: usage.exhausted ? 'exhausted' : 'available', ...usage } : { status: 'unknown' };
