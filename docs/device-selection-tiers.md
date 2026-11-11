@@ -59,6 +59,18 @@ a large country is unusable. It prevents a large failing preferred set from
 starving the second and general tiers. Legacy empty chains retain existing
 `MaxRetries` behavior. Caller cancellation is not evidence of node failure.
 
+For Hysteria2 TCP, a tier is not ready merely because a cached QUIC session
+returns a lazy stream. Before exposing the connection, the pool sends only the
+destination request header and validates the protocol's TCP response within the
+setup budget. No application payload is sent or read during this check, so a
+failed handshake can safely advance to another tier without replaying a request.
+This is specific to the pinned Hysteria2 implementation, not a generic empty
+read/write trick for other protocols. It adds a handshake round trip before
+application traffic instead of coalescing the first payload into that handshake.
+A failed attempt may already have opened an empty TCP connection at the target
+before its confirmation was lost. This avoids replaying application requests;
+it is not an exactly-once guarantee for TCP connection establishment.
+
 Known unavailable nodes are not preference candidates. Existing mandatory
 protocol constraints remain in effect, including available native UDP protocol
 requirements. Country and general tiers use `auto`, `stable`, or `session`
@@ -128,6 +140,12 @@ entire proxy selection fails, explicit proxy requests fail as before; a gateway
 with `no_available_proxy_policy: DIRECT` may then use its existing direct
 fallback. This feature therefore does not promise strict-US routing or prevent
 all direct traffic, IPv6 bypass, or unsupported UDP paths.
+
+Selection cannot guarantee delivery after a connection has been returned. An
+established TCP stream, UDP session, or another protocol whose readiness is not
+acknowledged may still fail before health monitoring detects the outage. The
+pool never replays application bytes or datagrams onto a different node. Such
+failures remain visible to the caller; new flows can use the next healthy node.
 
 ## Validation before deployment
 

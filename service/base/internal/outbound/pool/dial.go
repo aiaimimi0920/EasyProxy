@@ -42,7 +42,10 @@ func (p *poolOutbound) DialContext(ctx context.Context, network string, destinat
 		attemptCtx, attemptCancel := selectionAttemptContext(outboundCtx, directive)
 		conn, err := member.outbound.DialContext(attemptCtx, network, destination)
 		if err == nil && hasSelectionTiers(directive) {
-			err = disarmSelectionSetup(attemptCtx)
+			err = completeTieredTCPSetup(attemptCtx, network, member.outbound.Type(), conn)
+			if err == nil {
+				err = disarmSelectionSetup(attemptCtx)
+			}
 			if err == nil {
 				err = disarmSelectionSetup(ctx)
 			}
