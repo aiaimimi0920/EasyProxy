@@ -114,8 +114,8 @@ def test_abort_failure_reports_writer_uncertainty_not_audit_success(refreshed, m
     assert state(refreshed[-3])["writer"] is not None
 
 
-@pytest.mark.parametrize("reason", ["COUNTS", "COUNT_DROP"])
-def test_known_promotion_count_rejection_aborts_only_its_own_unpublished_refresh(refreshed, monkeypatch, reason):
+@pytest.mark.parametrize("reason", ["COUNTS", "COUNT_DROP", "PUBLIC_UNKNOWN"])
+def test_known_promotion_preflight_failure_aborts_only_its_own_unpublished_refresh(refreshed, monkeypatch, reason):
     from artifact_store import ArtifactError
     def rejected(*_args, **_kwargs):
         raise ArtifactError("EASYPROXY_SBA_ARTIFACT_" + reason)
@@ -126,11 +126,12 @@ def test_known_promotion_count_rejection_aborts_only_its_own_unpublished_refresh
     assert "sync" not in refreshed[-2]["order"]
 
 
-def test_count_error_after_promotion_attempt_can_never_release_writer(refreshed, monkeypatch):
+@pytest.mark.parametrize("reason", ["COUNT_DROP", "PUBLIC_UNKNOWN"])
+def test_error_after_promotion_attempt_can_never_release_writer(refreshed, monkeypatch, reason):
     from artifact_store import ArtifactError
     def rejected(owner, permit, *_args, **_kwargs):
         owner.claim_stage(permit, "aggregator-promotion")
-        raise ArtifactError("EASYPROXY_SBA_ARTIFACT_COUNT_DROP")
+        raise ArtifactError("EASYPROXY_SBA_ARTIFACT_" + reason)
     monkeypatch.setattr(refresh, "promote_candidate", rejected)
     with pytest.raises(StageError, match="REFRESH_ABORT_UNKNOWN"):
         run(refreshed)

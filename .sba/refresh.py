@@ -69,9 +69,9 @@ def refresh_suite(config: SuiteConfig, release: dict, root: Path, image: AuditIm
             with phase("PROMOTION"):
                 promoted = promote_candidate(owner, permit, artifacts, public, candidate, audit=audit, root=root)
         except StageError as error:
-            # 数量门禁在 claim/write 之前明确拒绝，且成功 audit 已确认清理。
-            # 原 Permit 的本地 attempted-stage 栅栏仍会拒绝任何晋级尝试后的释放。
-            if error.stage == "PROMOTION" and error.reason in ("COUNTS", "COUNT_DROP"):
+            # 数量门禁或公开产物读取失败可能发生在晋级前；成功 audit 已确认清理。
+            # PUBLIC_UNKNOWN 也可能发生在写入后，原 Permit 的阶段栅栏必须拒绝此时释放。
+            if error.stage == "PROMOTION" and error.reason in ("COUNTS", "COUNT_DROP", "PUBLIC_UNKNOWN"):
                 with phase("REFRESH_ABORT"):
                     owner.abort_unpublished_refresh(permit)
             raise
