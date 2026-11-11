@@ -195,7 +195,7 @@ Current canonical ECH runtime baseline:
   - the managed connector reported `available = true`
 - historical transient evidence for this 2026-03-26 run was removed during
   workspace cleanup; the retained operator baseline is the validated runtime
-  behavior summarized below and in `docs/progress/`
+  behavior summarized below. Completed migration journals remain in Git history
 
 ## Full Runtime Validation
 
@@ -248,8 +248,7 @@ Verified scenarios:
 
 Detailed local runtime evidence was intentionally pruned during workspace
 cleanup after validation completed. The durable operator baseline is the
-validated behavior described in this README, the progress records under
-`docs/progress/`, and the published GHCR image below.
+validated behavior described in this README and the published GHCR image below.
 
 Historical published GHCR release from the source workspace:
 
