@@ -30,7 +30,7 @@ func TestBuildTunGatewayCreatesDualStackUDPAndDNSRuntime(t *testing.T) {
 	if tunOptions.InterfaceName != "easyproxy0" || tunOptions.AutoRoute || !tunOptions.StrictRoute {
 		t.Fatalf("unexpected TUN options: %+v", tunOptions)
 	}
-	if len(tunOptions.Address) != 2 || !tunOptions.SniffEnabled || !tunOptions.SniffOverrideDestination {
+	if len(tunOptions.Address) != 2 || !tunOptions.SniffEnabled || tunOptions.SniffOverrideDestination {
 		t.Fatalf("dual-stack/sniff TUN options incomplete: %+v", tunOptions)
 	}
 
@@ -91,6 +91,27 @@ func TestBuildTunGatewayWithoutNodesProducesDirectOnlyRuntime(t *testing.T) {
 		return
 	}
 	t.Fatal("gateway route outbound is missing")
+}
+
+func TestGatewayRuleInputsDoNotEnableExplicitDispatcher(t *testing.T) {
+	cfg := tunBuildConfig(true)
+	cfg.GeoIP = config.GeoIPConfig{Enabled: true, DatabasePath: "country.mmdb"}
+	cfg.Routing.Rules = []string{"DOMAIN,allowed.example,DIRECT"}
+	cfg.Routing.RuleProviders = []config.RuleProvider{{URL: "https://rules.example/list", Policy: "PROXY"}}
+	cfg.Gateway.Routing.FinalPolicy = "DIRECT"
+	options, err := buildGatewayRouteOptions(cfg, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.GeoIP != cfg.GeoIP || len(options.RuleProviders) != 1 || !options.UseDefaultRules {
+		t.Fatalf("missing gateway rule inputs: %+v", options)
+	}
+	if options.FinalPolicy != "DIRECT" || len(options.Rules) != 1 {
+		t.Fatalf("gateway rule ordering/fallback changed: %+v", options)
+	}
+	if cfg.Routing.Enabled || options.DeviceProfiles {
+		t.Fatal("default gateway rules must not enable explicit dispatch or device profiles")
+	}
 }
 
 func TestTunFakeIPDNSStrategyMatchesEnabledFamilies(t *testing.T) {

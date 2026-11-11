@@ -23,6 +23,7 @@ type recordingOutbound struct {
 	packetDials           atomic.Int32
 	dialErr               error
 	lastDirective         *pool.SelectionDirective
+	lastDestination       M.Socksaddr
 	lastPacketDestination M.Socksaddr
 }
 
@@ -31,8 +32,9 @@ func (o *recordingOutbound) Tag() string          { return o.tag }
 func (*recordingOutbound) Network() []string      { return []string{N.NetworkTCP, N.NetworkUDP} }
 func (*recordingOutbound) Dependencies() []string { return nil }
 
-func (o *recordingOutbound) DialContext(ctx context.Context, _ string, _ M.Socksaddr) (net.Conn, error) {
+func (o *recordingOutbound) DialContext(ctx context.Context, _ string, destination M.Socksaddr) (net.Conn, error) {
 	o.dials.Add(1)
+	o.lastDestination = destination
 	o.lastDirective = pool.DirectiveFrom(ctx)
 	if o.dialErr != nil {
 		return nil, o.dialErr

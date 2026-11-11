@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 
 	"easy_proxies/internal/config"
+	"easy_proxies/internal/geoip"
 	"easy_proxies/internal/outbound/pool"
 	"easy_proxies/internal/outbound/profileselect"
 	"easy_proxies/internal/routerule"
@@ -39,6 +40,9 @@ type Options struct {
 	DeviceProfiles         bool
 	SelectionTiers         []config.SelectionTier
 	Rules                  []string
+	UseDefaultRules        bool
+	RuleProviders          []config.RuleProvider
+	GeoIP                  config.GeoIPConfig
 	FinalPolicy            string
 	NoAvailableProxyPolicy string
 	DefaultStrategy        pool.Strategy
@@ -65,6 +69,9 @@ type routeOutbound struct {
 	manager         adapter.OutboundManager
 	options         Options
 	engine          *routerule.Engine
+	ctx             context.Context
+	geo             *geoip.Lookup
+	provider        *routerule.ProviderManager
 	direct          adapter.Outbound
 	pool            adapter.Outbound
 	resolveUDP      func(context.Context, M.Socksaddr) (M.Socksaddr, netip.Addr, error)
@@ -103,8 +110,10 @@ func newRoute(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag st
 		manager:         manager,
 		sharedSelection: pool.SharedSelectionFrom(ctx),
 		options:         options,
-		engine:          routerule.New(options.Rules, routerule.NormalizePolicy(options.FinalPolicy), nil),
+		ctx:             ctx,
 	}
+	route.engine = routerule.New(nil, routerule.NormalizePolicy(options.FinalPolicy), nil)
+	route.applyRules(nil)
 	route.admission = profileselect.AdmissionFrom(ctx)
 	if options.DeviceProfiles {
 		route.profiles = profileselect.FromContext(ctx)
@@ -147,10 +156,19 @@ func (r *routeOutbound) Start(stage adapter.StartStage) error {
 		}
 		r.pool = proxyPool
 	}
-	return nil
+	return r.startRules()
 }
 
-func (*routeOutbound) Close() error { return nil }
+func (r *routeOutbound) Close() error {
+	if r.provider != nil {
+		r.provider.Stop()
+	}
+	if r.geo != nil {
+		r.engine.SetGeoLookup(nil)
+		return r.geo.Close()
+	}
+	return nil
+}
 
 func (r *routeOutbound) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
 	if err := r.admission.Check(); err != nil {
@@ -166,7 +184,7 @@ func (r *routeOutbound) DialContext(ctx context.Context, network string, destina
 		return r.direct.DialContext(ctx, network, destination)
 	}
 	if r.pool != nil {
-		conn, err := r.pool.DialContext(pool.WithDirective(ctx, directive), network, destination)
+		conn, err := r.pool.DialContext(pool.WithDirective(ctx, directive), network, proxyDestination(ctx, destination))
 		if err == nil {
 			r.proxyCount.Add(1)
 			return conn, nil
@@ -218,7 +236,11 @@ func (r *routeOutbound) ListenPacketWithDestination(ctx context.Context, destina
 	if err != nil {
 		return nil, netip.Addr{}, err
 	}
-	resolvedDestination, destinationAddress := r.resolvePacketDestination(ctx, destination)
+	packetDestination := destination
+	if policy == routerule.PolicyProxy {
+		packetDestination = proxyDestination(ctx, destination)
+	}
+	resolvedDestination, destinationAddress := r.resolvePacketDestination(ctx, packetDestination)
 	if policy == routerule.PolicyDirect {
 		r.directCount.Add(1)
 		packetConn, err := r.direct.ListenPacket(ctx, resolvedDestination)
@@ -262,7 +284,16 @@ func (r *routeOutbound) policy(ctx context.Context, network string, destination 
 	if metadata := adapter.ContextFrom(ctx); metadata != nil && strings.TrimSpace(metadata.Domain) != "" {
 		host = metadata.Domain
 	}
-	return r.engine.MatchRequest(routerule.Request{Host: host, Port: destination.Port, Network: network})
+	return r.engine.MatchRequest(routerule.Request{Host: host, Port: destination.Port, Network: network, Address: destination.Addr})
+}
+
+// Preserve the pre-existing sniffed-domain proxy behavior without discarding
+// the original IP before routing (or re-resolving a DIRECT destination).
+func proxyDestination(ctx context.Context, destination M.Socksaddr) M.Socksaddr {
+	if metadata := adapter.ContextFrom(ctx); metadata != nil && M.IsDomainName(metadata.Domain) {
+		return M.ParseSocksaddrHostPort(metadata.Domain, destination.Port)
+	}
+	return destination
 }
 
 func (r *routeOutbound) failOpen() bool {

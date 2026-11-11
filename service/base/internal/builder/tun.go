@@ -56,8 +56,9 @@ func buildTunInbound(cfg *config.Config) (option.Inbound, error) {
 			Stack:         cfg.Gateway.Tun.Stack,
 			MTU:           cfg.Gateway.Tun.MTU,
 			InboundOptions: option.InboundOptions{
-				SniffEnabled:             true,
-				SniffOverrideDestination: true,
+				// Retain the real IP for GEOIP/IP-CIDR while exposing the sniffed
+				// domain in metadata. Fake-IP restoration is handled by sing-box.
+				SniffEnabled: true,
 			},
 		},
 	}, nil
@@ -73,9 +74,6 @@ func buildGatewayRouteOptions(cfg *config.Config, hasPool bool) (gatewayroute.Op
 	rules := make([]string, 0, len(cfg.Routing.Rules)+len(localRules)+64)
 	rules = append(rules, cfg.Routing.Rules...)
 	rules = append(rules, localRules...)
-	if cfg.RoutingUseDefaultRules() {
-		rules = append(rules, routerule.DefaultRules()...)
-	}
 	poolTag := ""
 	if hasPool {
 		poolTag = pool.Tag
@@ -84,6 +82,9 @@ func buildGatewayRouteOptions(cfg *config.Config, hasPool bool) (gatewayroute.Op
 		DeviceProfiles:         cfg.LocalServer.Enabled,
 		SelectionTiers:         append([]config.SelectionTier(nil), cfg.Routing.SelectionTiers...),
 		Rules:                  rules,
+		UseDefaultRules:        cfg.RoutingUseDefaultRules(),
+		RuleProviders:          append([]config.RuleProvider(nil), cfg.Routing.RuleProviders...),
+		GeoIP:                  cfg.GeoIP,
 		FinalPolicy:            cfg.Gateway.Routing.FinalPolicy,
 		NoAvailableProxyPolicy: cfg.Gateway.Routing.NoAvailableProxyPolicy,
 		DefaultStrategy:        pool.NormalizeStrategy(cfg.Routing.DefaultStrategy),

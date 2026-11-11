@@ -5,9 +5,9 @@
 // The engine is intentionally lightweight and allocation-free on the hot path.
 // Domain rules are matched via a suffix map / keyword scan, IP rules via netip
 // prefix containment, and GEOIP rules via an injected country lookup. Per the
-// design, GEOIP rules only apply when the destination is already a literal IP
-// (no per-request DNS resolution), so domain destinations fall through to the
-// domain rules and the FINAL policy.
+// design, GEOIP rules only apply when a real destination IP is already known
+// (no per-request DNS resolution). A gateway may retain that IP alongside a
+// sniffed domain; domain-only requests use domain rules and the FINAL policy.
 package routerule
 
 import (
@@ -75,6 +75,9 @@ type Request struct {
 	Host    string
 	Port    uint16
 	Network string
+	// Address is the real destination IP retained alongside a sniffed domain.
+	// Callers must not supply a synthetic Fake-IP address here.
+	Address netip.Addr
 }
 
 // Engine evaluates an ordered rule list against destinations.
@@ -187,7 +190,7 @@ func (e *Engine) MatchRequest(request Request) Policy {
 		return f
 	}
 
-	var addr netip.Addr
+	addr := request.Address
 	isIP := false
 	if a, err := netip.ParseAddr(host); err == nil {
 		addr = a
@@ -214,11 +217,11 @@ func (e *Engine) MatchRequest(request Request) Policy {
 				return r.policy
 			}
 		case kindIPCIDR:
-			if isIP && r.prefix.Contains(addr) {
+			if addr.IsValid() && r.prefix.Contains(addr) {
 				return r.policy
 			}
 		case kindGeoIP:
-			if isIP && e.geo != nil {
+			if addr.IsValid() && e.geo != nil {
 				if iso := e.geo.CountryISO(addr); iso != "" && strings.EqualFold(iso, r.value) {
 					return r.policy
 				}
