@@ -233,12 +233,24 @@ for (const purpose of ['production', 'preview']) test(`MiSub actual Pages Functi
         const uri = 'trojan://fixture@192.0.2.3:443#' + encodeURIComponent(`[epq:${await quotaKey(quota.id)}] quota`);
         const node = { id: 'proxy_runtime_node_2', kind: 'proxy_uri', enabled: true, input: uri, url: uri,
             probe_status: 'verified', options: { managed_by: 'easyproxy_runtime_sources' } };
-        for (const row of [quota, node]) await database.prepare('INSERT INTO subscriptions (id,data) VALUES (?,?)')
-            .bind(row.id, JSON.stringify(row)).run();
+        await database.prepare('INSERT INTO subscriptions (id,data) VALUES (?,?)')
+            .bind(quota.id, JSON.stringify(quota)).run();
         const profileRow = await database.prepare('SELECT data FROM profiles WHERE id = ?').bind('aggregator_global').first();
         const profile = JSON.parse(profileRow.data);
         profile.manualNodes.push(node.id);
-        await database.prepare('UPDATE profiles SET data = ? WHERE id = ?').bind(JSON.stringify(profile), profile.id).run();
+        // 使用真实写入口使 collection cache 失效，不能直接 SQL 改完就假定 handler 没有缓存。
+        const login = await mf.dispatchFetch('https://misub.invalid/api/login', { method: 'POST',
+            headers: { Origin: 'https://misub.invalid', 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password: 'fixture-admin-password' }) });
+        const saved = await mf.dispatchFetch('https://misub.invalid/api/sba/managed-sync', { method: 'POST',
+            headers: { Origin: 'https://misub.invalid', 'Content-Type': 'application/json',
+                Cookie: login.headers.get('Set-Cookie').split(';')[0] }, body: JSON.stringify({
+                operationId: 'e'.repeat(32), sourceSha: 'a'.repeat(40), before: {
+                    subscriptions: (await database.prepare('SELECT data FROM subscriptions').all()).results.map(row => JSON.parse(row.data)),
+                    profiles: (await database.prepare('SELECT data FROM profiles').all()).results.map(row => JSON.parse(row.data)) },
+                diff: { subscriptions: { added: [node], updated: [], removed: [] },
+                    profiles: { added: [], updated: [profile], removed: [] } } }) });
+        assert.equal(saved.status, 200);
         const before = (await database.prepare('SELECT * FROM subscriptions ORDER BY id').all()).results;
         for (const [header, allowed] of [['upload=0;download=100;total=100', false], [null, false],
             ['upload=0;download=1;total=100', true], ['upload=0;download=99;total=100', true]]) {
