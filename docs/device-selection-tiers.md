@@ -155,3 +155,27 @@ HTTP/CONNECT/SOCKS, TCP/UDP TUN, first/second/general fallthrough, missing metri
 failed dials, cancellation, hot edits, and stale revisions. A successful unit
 suite or WebUI build does not prove an actual NAS TUN deployment. Back up both
 runtime configuration and SQLite state before a separately approved deployment.
+
+## NAS rollout verification (2026-11-11 UTC)
+
+The NAS gateway VM is running image `easyproxy/nas:device-tiers-f3411333`,
+source commit `f3411333a3be834230f658498d0c18782ca6ff66`, since 03:47:28 UTC.
+The successful third cutover preserved configuration and network policy and
+retained the stopped old container/image and a consistent restore-tested backup.
+The backup verified 194 regular files and SQLite integrity; no rollback occurred.
+Candidate acceptance found 104 available nodes out of 147, gateway ready,
+HTTP CONNECT 204, and zero container restarts. At 04:20 UTC, independent Windows
+client HTTP CONNECT and SOCKS5 remote-DNS HTTPS requests returned 204, and a
+NAS transparent HTTPS request returned 204. This verifies actual deployed
+traffic, not merely an isolated image or unit test.
+
+Earlier attempts exposed a too-short readiness budget and a validator that
+compared unrelated nftables table enumeration order. The retry used 600-second
+candidate and rollback readiness budgets and a corrected validator with six
+regression cases. It preserves rule order within tables and checks ambiguous
+same-hook/priority chain ordering. No production network policy was relaxed.
+
+Existing runtime has one profile and no per-device mappings. New policy options
+are deployed but no device-specific country preference was silently enabled.
+Country remains node-server GeoIP; DIRECT fail-open and existing IPv6 settings
+are unchanged. Established connections cannot be transparently replayed.
