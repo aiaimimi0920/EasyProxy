@@ -137,11 +137,6 @@ func (m *Manager) applyConfigSettings(cfg *config.Config) {
 	if cfg == nil {
 		return
 	}
-	if cfg.SubscriptionRefresh.DrainTimeout > 0 {
-		m.drainTimeout = cfg.SubscriptionRefresh.DrainTimeout
-	} else if m.drainTimeout == 0 {
-		m.drainTimeout = defaultDrainTimeout
-	}
 	m.minAvailableNodes = cfg.SubscriptionRefresh.MinAvailableNodes
 	m.monitorCfg.Enabled = cfg.ManagementEnabled()
 	m.monitorCfg.Listen = cfg.Management.Listen
@@ -192,26 +187,6 @@ func (m *Manager) prepareMonitorServerTransition(activeCfg *config.Config) (*mon
 	server.SetNodeManager(m)
 	server.SetStore(store)
 	return server.PrepareListener(activeCfg.ManagementEnabled(), activeCfg.Management.Listen, activeCfg)
-}
-
-func (m *Manager) syncMonitorServerLifecycle(
-	ctx context.Context,
-	_ monitor.Config,
-	activeCfg *config.Config,
-) error {
-	transition, err := m.prepareMonitorServerTransition(activeCfg)
-	if err != nil || transition == nil {
-		return err
-	}
-	if err := transition.Activate(ctx); err != nil {
-		transition.Abort()
-		return err
-	}
-	transition.Finalize()
-	if server := m.MonitorServer(); server != nil {
-		server.SetConfig(activeCfg)
-	}
-	return nil
 }
 
 func hasRuntimeSourceRefs(cfg *config.Config) bool {
@@ -278,5 +253,3 @@ func (a monitorLoggerAdapter) Warn(args ...any) {
 		a.logger.Warnf("%s", fmt.Sprint(args...))
 	}
 }
-
-// --- NodeManager interface implementation ---

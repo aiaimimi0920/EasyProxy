@@ -88,7 +88,7 @@ export default function SettingsSourceCards(props: SettingsSourceCardsProps) {
                 />
               </fieldset>
               <fieldset className="fieldset">
-                <legend className="fieldset-legend font-semibold text-base-content/80">排空超时</legend>
+                <legend className="fieldset-legend font-semibold text-base-content/80">刷新等待余量</legend>
                 <input
                   type="text"
                   className="input input-md w-full bg-base-200/50 focus:bg-base-100 transition-colors focus:border-primary/50"

@@ -27,37 +27,22 @@ func (c *Config) normalizeInternal(skipSubscriptionFetch bool) error {
 		c.Nodes[idx].Source = NodeSourceInline
 	}
 
-	if skipSubscriptionFetch {
-		// ---- Reload mode ----
-		// Nodes persisted in SQLite are merged by the caller (app.go / boxmgr).
-		// Keep reload offline by skipping remote subscription fetches, but still
-		// re-read local nodes_file content so on-disk edits take effect.
-		if c.NodesFile != "" && len(c.Subscriptions) == 0 {
-			fileNodes, err := loadNodesFromFile(c.NodesFile)
-			if err != nil {
-				return fmt.Errorf("load nodes from file %q: %w", c.NodesFile, err)
-			}
-			for idx := range fileNodes {
-				fileNodes[idx].Source = NodeSourceFile
-			}
-			c.Nodes = append(c.Nodes, fileNodes...)
+	// Both startup and reload re-read local nodes unless subscriptions take priority.
+	if c.NodesFile != "" && len(c.Subscriptions) == 0 {
+		fileNodes, err := loadNodesFromFile(c.NodesFile)
+		if err != nil {
+			return fmt.Errorf("load nodes from file %q: %w", c.NodesFile, err)
 		}
+		for idx := range fileNodes {
+			fileNodes[idx].Source = NodeSourceFile
+		}
+		c.Nodes = append(c.Nodes, fileNodes...)
+	}
+
+	if skipSubscriptionFetch {
+		// Reload stays offline; the caller merges persisted/runtime nodes.
 		log.Printf("[config] reload mode: %d inline/file nodes from disk", len(c.Nodes))
 	} else {
-		// ---- Initial load mode ----
-
-		// Load nodes from file if specified (but NOT if subscriptions exist - subscription takes priority)
-		if c.NodesFile != "" && len(c.Subscriptions) == 0 {
-			fileNodes, err := loadNodesFromFile(c.NodesFile)
-			if err != nil {
-				return fmt.Errorf("load nodes from file %q: %w", c.NodesFile, err)
-			}
-			for idx := range fileNodes {
-				fileNodes[idx].Source = NodeSourceFile
-			}
-			c.Nodes = append(c.Nodes, fileNodes...)
-		}
-
 		// Load nodes from subscriptions (fetched into memory, persisted to Store by app.go)
 		if len(c.Subscriptions) > 0 {
 			var subNodes []NodeConfig

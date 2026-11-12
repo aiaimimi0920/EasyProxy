@@ -12,9 +12,18 @@ import yaml
 
 def verify(base_url: str, timeout: int) -> dict[str, object]:
     relay_url = f"{base_url.rstrip('/')}/issue91"
-    response = requests.get(relay_url, timeout=timeout)
-    response.raise_for_status()
-    payload = yaml.safe_load(response.text)
+    try:
+        response = requests.get(relay_url, timeout=timeout)
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else "unknown"
+        raise RuntimeError(f"relay returned HTTP {status}") from None
+    except requests.RequestException:
+        raise RuntimeError("relay request failed") from None
+    try:
+        payload = yaml.safe_load(response.text)
+    except yaml.YAMLError:
+        raise RuntimeError("relay response contains invalid YAML") from None
     if not isinstance(payload, dict):
         raise RuntimeError("relay response is not a YAML mapping")
     proxies = payload.get("proxies")

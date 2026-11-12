@@ -55,6 +55,30 @@ initialize_config_authority() {
     fi
 }
 
+quote_unit_path() {
+    printf '"'
+    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/%/%%/g'
+    printf '"'
+}
+
+render_service_unit() {
+    unit_state="$(quote_unit_path "${STATE_ROOT}")"
+    # WorkingDirectory is one raw path, unlike the word lists below.
+    unit_working_directory="$(printf '%s' "${STATE_ROOT}" | sed 's/%/%%/g')"
+    unit_config_dir="$(quote_unit_path "$(dirname "${CONFIG_PATH}")")"
+    # ExecStart also expands environment variables; literal dollars must be doubled.
+    unit_binary="$(quote_unit_path "${INSTALL_ROOT}/current/bin/easy-proxy" | sed 's/\$/$$/g')"
+    unit_config="$(quote_unit_path "${CONFIG_PATH}" | sed 's/\$/$$/g')"
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            WorkingDirectory=*) printf 'WorkingDirectory=%s\n' "${unit_working_directory}" ;;
+            ExecStart=*) printf 'ExecStart=%s --config %s\n' "${unit_binary}" "${unit_config}" ;;
+            ReadWritePaths=*) printf 'ReadWritePaths=%s %s\n' "${unit_state}" "${unit_config_dir}" ;;
+            *) printf '%s\n' "$line" ;;
+        esac
+    done < "$1"
+}
+
 backup_runtime() {
     previous_version="$1"
     backup="$(mktemp -d "${STATE_ROOT}/backups/before-${VERSION:-rollback}-$(date -u +%Y%m%dT%H%M%SZ)-XXXXXX")"
@@ -172,7 +196,8 @@ chown -R easyproxy:easyproxy "${STATE_ROOT}"
 
 [ -z "${current_version}" ] || ln -sfn "${INSTALL_ROOT}/releases/${current_version}" "${INSTALL_ROOT}/previous"
 ln -sfn "${release_dir}" "${INSTALL_ROOT}/current"
-install -m 0644 "${release_dir}/install/easyproxy.service" "${SYSTEMD_UNIT_PATH}"
+render_service_unit "${release_dir}/install/easyproxy.service" > "${work}/easyproxy.service"
+install -m 0644 "${work}/easyproxy.service" "${SYSTEMD_UNIT_PATH}"
 systemctl daemon-reload
 systemctl enable easyproxy.service
 if ! systemctl start easyproxy.service || ! systemctl is-active --quiet easyproxy.service; then

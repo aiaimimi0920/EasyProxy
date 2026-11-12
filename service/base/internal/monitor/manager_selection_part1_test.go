@@ -354,7 +354,9 @@ func TestSelectProxyCompatCandidateSnapshotsTreatsTrafficProvenNodesAsEffective(
 	proven.RecordFailure(errors.New("tls handshake: EOF"), "www.google.com:443")
 	proven.RecordSuccess("api.openai.com:443")
 
-	nodes, tier := selectProxyCompatCandidateSnapshots(manager.Snapshot())
+	nodes, tier := selectProxyCompatCandidateSnapshotsWithSelection(
+		manager.Snapshot(), manager.SourceSelectionStates(), manager.SecondarySelectionStates(),
+	)
 	if tier != "effective" {
 		t.Fatalf("expected traffic-proven node to stay in effective tier, got %q", tier)
 	}

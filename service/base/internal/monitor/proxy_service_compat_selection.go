@@ -249,19 +249,6 @@ func (s *Server) resolveProxyCompatCandidate(r *http.Request, request proxyCompa
 	return eligible[0], runtimeCfg, nil
 }
 
-func selectProxyCompatCandidateSnapshots(nodes []Snapshot) ([]Snapshot, string) {
-	effective := filterEffectiveSnapshots(nodes)
-	if len(effective) > 0 {
-		return effective, "effective"
-	}
-
-	degraded := filterCompatFallbackSnapshots(nodes)
-	if len(degraded) > 0 {
-		return degraded, "degraded"
-	}
-	return nil, ""
-}
-
 func selectProxyCompatCandidateSnapshotsWithSelection(
 	nodes []Snapshot,
 	sourceStates map[string]SourceSelectionState,
@@ -277,24 +264,6 @@ func selectProxyCompatCandidateSnapshotsWithSelection(
 		return degraded, "degraded"
 	}
 	return nil, ""
-}
-
-func filterCompatFallbackSnapshots(nodes []Snapshot) []Snapshot {
-	if len(nodes) == 0 {
-		return nil
-	}
-
-	nonBlacklisted := make([]Snapshot, 0, len(nodes))
-	for _, snap := range nodes {
-		if snap.Blacklisted {
-			continue
-		}
-		nonBlacklisted = append(nonBlacklisted, snap)
-	}
-	if len(nonBlacklisted) > 0 {
-		return nonBlacklisted
-	}
-	return append([]Snapshot(nil), nodes...)
 }
 
 func filterCompatFallbackSnapshotsWithSelection(

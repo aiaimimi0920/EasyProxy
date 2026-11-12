@@ -336,16 +336,6 @@ func (e *entry) setRelease(fn releaseFunc) {
 	e.release = fn
 }
 
-func (e *entry) recordProbeLatency(d time.Duration) {
-	e.mu.Lock()
-	now := time.Now()
-	e.lastProbeAt = now
-	e.lastProbeOK = now
-	e.lastProbe = d
-	e.recordProbeMetricLocked(now, d)
-	e.mu.Unlock()
-}
-
 func (e *entry) applyUsageReportSuccess() {
 	e.mu.Lock()
 	defer e.mu.Unlock()

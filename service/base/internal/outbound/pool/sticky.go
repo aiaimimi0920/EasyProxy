@@ -16,9 +16,8 @@ const defaultSessionTTL = 10 * time.Minute
 //   - sessions: a session key → member binding with an idle TTL, used for the
 //     session strategy so a crawler's session keeps the same egress IP.
 //
-// Expiry is handled lazily: every access runs a sweep at most once per TTL so
-// the maps cannot grow unbounded while there is traffic, without needing a
-// dedicated cleanup goroutine (the pool can have many instances).
+// Session expiry is swept on each keyed session selection without a dedicated
+// cleanup goroutine. Stable buckets live for the lifetime of this pool instance.
 type stickyState struct {
 	mu       sync.Mutex
 	buckets  map[string]string
@@ -29,7 +28,6 @@ type stickyState struct {
 
 type sessionBinding struct {
 	tag       string
-	lastSeen  time.Time
 	expiresAt time.Time
 }
 
@@ -105,15 +103,12 @@ func (s *stickyState) pickSession(key string, ttl time.Duration, candidates []*m
 	s.sweepExpiredLocked(now)
 
 	if binding, ok := s.sessions[key]; ok {
-		if !binding.expiresAt.IsZero() && !now.Before(binding.expiresAt) {
-			delete(s.sessions, key)
-		} else if member := candidateByTag(candidates, binding.tag); member != nil {
-			binding.lastSeen = now
+		if member := candidateByTag(candidates, binding.tag); member != nil {
 			binding.expiresAt = now.Add(ttl)
 			return member
 		}
 	}
-	s.sessions[key] = &sessionBinding{tag: fallback.tag, lastSeen: now, expiresAt: now.Add(ttl)}
+	s.sessions[key] = &sessionBinding{tag: fallback.tag, expiresAt: now.Add(ttl)}
 	return fallback
 }
 
@@ -130,34 +125,13 @@ func (s *stickyState) sweepExpiredLocked(now time.Time) {
 	}
 }
 
-// pruneTags drops stable/session bindings that point at members no longer
-// present in the live tag set. Called when the pool's member set is reloaded
-// (e.g. after a subscription refresh) so stale tags are not held forever.
-func (s *stickyState) pruneTags(liveTags map[string]struct{}) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for key, tag := range s.buckets {
-		if _, ok := liveTags[tag]; !ok {
-			delete(s.buckets, key)
-		}
-	}
-	for key, binding := range s.sessions {
-		if _, ok := liveTags[binding.tag]; !ok {
-			delete(s.sessions, key)
-		}
-	}
-}
-
 // StickySnapshot is an observability view of current affinity state.
 type StickySnapshot struct {
 	Buckets  map[string]string `json:"buckets"`
 	Sessions map[string]string `json:"sessions"`
 }
 
-// stickySnapshot is the unexported alias retained for internal callers.
-type stickySnapshot = StickySnapshot
-
-func (s *stickyState) snapshot() stickySnapshot {
+func (s *stickyState) snapshot() StickySnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	buckets := make(map[string]string, len(s.buckets))
@@ -168,5 +142,5 @@ func (s *stickyState) snapshot() stickySnapshot {
 	for k, v := range s.sessions {
 		sessions[k] = v.tag
 	}
-	return stickySnapshot{Buckets: buckets, Sessions: sessions}
+	return StickySnapshot{Buckets: buckets, Sessions: sessions}
 }

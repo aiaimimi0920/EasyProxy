@@ -276,6 +276,13 @@ aborts the candidate transaction. Handler dependencies are read as local
 snapshots before calling reload-capable managers, so a listener rebind cannot
 tear an interface value or hold a dependency lock across a reload.
 
+This management HTTP listener drain is not a sing-box connection drain. A full
+box reload closes the old instance before starting the candidate to release
+its ports, so existing proxy connections can be interrupted. The historical
+`subscription_refresh.drain_timeout` setting (shown as “刷新等待余量” in the UI)
+is retained as additional manual-refresh wait budget; it does not delay old-box
+closure or provide zero-downtime proxy reloads.
+
 ### Limitations / notes
 
 - GEOIP rules apply only to literal-IP destinations (no per-request DNS

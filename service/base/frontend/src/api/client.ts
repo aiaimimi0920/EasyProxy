@@ -9,7 +9,6 @@ import type {
   ConfigNodeMutationResponse,
   SubscriptionStatus,
   SourceSyncStatus,
-  ProbeSSEEvent,
   TrafficStreamEvent,
 } from '../types'
 
@@ -157,66 +156,6 @@ export async function releaseNode(tag: string): Promise<{ message: string }> {
   return request(`/api/nodes/${encodeURIComponent(tag)}/release`, { method: 'POST' })
 }
 
-/** Probe all nodes with SSE progress updates */
-export function probeAllNodes(
-  onEvent: (event: ProbeSSEEvent) => void,
-  onError?: (error: Error) => void
-): AbortController {
-  const controller = new AbortController()
-
-  const doFetch = async () => {
-    try {
-      const headers: Record<string, string> = {}
-      if (authToken) {
-        headers['Authorization'] = `Bearer ${authToken}`
-      }
-
-      const res = await fetch('/api/nodes/probe-all', {
-        method: 'POST',
-        headers,
-        credentials: 'include',
-        signal: controller.signal,
-      })
-
-      if (!res.ok) {
-        throw new ApiError(`探测失败: HTTP ${res.status}`, res.status)
-      }
-
-      const reader = res.body?.getReader()
-      if (!reader) throw new Error('No response body')
-
-      const decoder = new TextDecoder()
-      let buffer = ''
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() || ''
-
-        for (const line of lines) {
-          const trimmed = line.trim()
-          if (trimmed.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(trimmed.slice(6)) as ProbeSSEEvent
-              onEvent(data)
-            } catch { /* skip malformed events */ }
-          }
-        }
-      }
-    } catch (err) {
-      if ((err as Error).name !== 'AbortError') {
-        onError?.(err as Error)
-      }
-    }
-  }
-
-  doFetch()
-  return controller
-}
-
 // ---- Traffic Stream API ----
 
 /** Subscribe real-time traffic speeds via SSE */
@@ -250,28 +189,31 @@ export function streamTraffic(
       const decoder = new TextDecoder()
       let buffer = ''
 
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) throw new Error('流量流已断开')
 
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() || ''
+          buffer += decoder.decode(value, { stream: true })
+          const lines = buffer.split('\n')
+          buffer = lines.pop() || ''
 
-        for (const line of lines) {
-          const trimmed = line.trim()
-          if (trimmed.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(trimmed.slice(6)) as TrafficStreamEvent
-              if (data.type === 'traffic') {
-                onEvent(data)
-              }
-            } catch { /* skip malformed events */ }
+          for (const line of lines) {
+            const trimmed = line.trim()
+            if (trimmed.startsWith('data: ')) {
+              let data: TrafficStreamEvent
+              try {
+                data = JSON.parse(trimmed.slice(6)) as TrafficStreamEvent
+              } catch { continue }
+              if (data.type === 'traffic') onEvent(data)
+            }
           }
         }
+      } finally {
+        reader.releaseLock()
       }
     } catch (err) {
-      if ((err as Error).name !== 'AbortError') {
+      if (!controller.signal.aborted && (err as Error).name !== 'AbortError') {
         onError?.(err as Error)
       }
     }

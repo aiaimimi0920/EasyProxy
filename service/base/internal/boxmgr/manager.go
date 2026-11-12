@@ -22,7 +22,6 @@ import (
 var _ monitor.NodeManager = (*Manager)(nil)
 
 const (
-	defaultDrainTimeout       = 10 * time.Second
 	defaultHealthCheckTimeout = 2 * time.Minute
 	healthCheckPollInterval   = 500 * time.Millisecond
 	// periodicHealthInterval is configured via cfg.Management.HealthCheckInterval
@@ -135,7 +134,6 @@ type Manager struct {
 	monitorCfg    monitor.Config
 	store         store.Store
 
-	drainTimeout      time.Duration
 	minAvailableNodes int
 	logger            Logger
 
@@ -171,9 +169,6 @@ func New(cfg *config.Config, monitorCfg monitor.Config, opts ...Option) *Manager
 	}
 	if m.logger == nil {
 		m.logger = defaultLogger{}
-	}
-	if m.drainTimeout <= 0 {
-		m.drainTimeout = defaultDrainTimeout
 	}
 	return m
 }

@@ -466,6 +466,12 @@ The installer downloads the platform archive plus `SHA256SUMS`, verifies the
 hash, installs the systemd unit, enables startup, and requires the service to be
 active. `--archive` supports an already downloaded verified package.
 
+自定义 `EASYPROXY_INSTALL_ROOT`、`EASYPROXY_STATE_ROOT` 或
+`EASYPROXY_CONFIG_PATH` 时，安装器会据此生成 systemd 的程序路径、工作目录、
+配置参数和可写路径，不再保留默认目录。更新及回滚应使用同一组路径设置。
+自定义配置目录仍需允许 `easyproxy` 用户访问和写入；systemd 的可写路径声明
+不会替代文件系统权限，也不会解除 `ProtectHome=true` 的限制。
+
 ### Windows
 
 Run an elevated PowerShell prompt:

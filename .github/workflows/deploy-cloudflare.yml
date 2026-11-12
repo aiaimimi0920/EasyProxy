@@ -87,9 +87,9 @@ jobs:
         run: |
           python -m pytest -q tests
 
-      - name: Run ECH Worker authentication tests
+      - name: Run Worker authentication and relay tests
         shell: pwsh
-        run: node --test workers/ech-workers-cloudflare/src/auth.test.mjs workers/ech-workers-cloudflare/src/session.test.mjs
+        run: node --test workers/ech-workers-cloudflare/src/auth.test.mjs workers/ech-workers-cloudflare/src/session.test.mjs workers/aggregator-seed-relay/src/index.test.mjs
 
       - name: Run ECH helper tests
         shell: pwsh

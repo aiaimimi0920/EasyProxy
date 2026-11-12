@@ -62,14 +62,6 @@ func (d D1) Restore(ctx context.Context, database, input string) error {
 	return err
 }
 
-func (d D1) ApplyMigrations(ctx context.Context, database string) error {
-	if database == "" {
-		return errors.New("D1 database is required")
-	}
-	_, err := d.Runner.Run(ctx, "d1", "migrations", "apply", database, "--remote")
-	return err
-}
-
 func (d D1) Snapshot(ctx context.Context, database string) (D1Snapshot, error) {
 	tableRows, err := d.query(ctx, database, "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
 	if err != nil {

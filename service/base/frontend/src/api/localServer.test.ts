@@ -9,9 +9,7 @@ import {
   fetchDevices,
   fetchIPMappings,
   fetchLocalServerConfig,
-  fetchLocalServerStatus,
   fetchSharedProfile,
-  putDevice,
   putDeviceProfile,
   putSharedProfile,
   setDeviceProfileEnabled,
@@ -30,14 +28,12 @@ import {
 it('uses the canonical Local Server resource URLs', async () => {
   const fetchSpy = mockFetch(
     jsonResponse({ enabled: true }),
-    jsonResponse({ enabled: true }),
     jsonResponse(profileResourceFixture()),
     jsonResponse({ devices: deviceFixtures() }),
     jsonResponse({ ...deviceFixtures()[0], mappings: [] }),
     jsonResponse({ mappings: [mappingFixture()] }),
   )
 
-  await fetchLocalServerStatus()
   await fetchLocalServerConfig()
   await fetchSharedProfile()
   await fetchDevices()
@@ -45,7 +41,6 @@ it('uses the canonical Local Server resource URLs', async () => {
   await fetchIPMappings()
 
   expect(fetchSpy.mock.calls.map(([path]) => path)).toEqual([
-    '/api/local-server/status',
     '/api/local-server/config',
     '/api/local-server/profiles/shared',
     '/api/local-server/devices',
@@ -69,10 +64,9 @@ it('creates a device profile with If-None-Match', async () => {
   )
 })
 
-it('sends matching conditional revisions for profile and device mutations', async () => {
+it('sends matching conditional revisions for profile mutations', async () => {
   const fetchSpy = mockFetch(
     jsonResponse(mutationFixture(profileResourceFixture())),
-    jsonResponse(mutationFixture({ ...deviceFixtures()[0], mappings: [] })),
     jsonResponse(mutationFixture(profileResourceFixture())),
     jsonResponse(mutationFixture(profileResourceFixture())),
     jsonResponse(mutationFixture(profileResourceFixture())),
@@ -80,7 +74,6 @@ it('sends matching conditional revisions for profile and device mutations', asyn
   )
 
   await putSharedProfile(profileFixture(), 3)
-  await putDevice('Laptop', 'Laptop Work', 0)
   await setDeviceProfileEnabled('Laptop', false, 4)
   await copySharedProfile('Laptop')
   await deleteDeviceProfile('Laptop', 5)
@@ -90,22 +83,18 @@ it('sends matching conditional revisions for profile and device mutations', asyn
     method: 'PUT',
     headers: expect.objectContaining({ 'If-Match': '"3"' }),
   }))
-  expect(fetchSpy).toHaveBeenNthCalledWith(2, '/api/local-server/devices/laptop', expect.objectContaining({
-    method: 'PUT',
-    headers: expect.objectContaining({ 'If-None-Match': '*' }),
-  }))
-  expect(fetchSpy).toHaveBeenNthCalledWith(3, '/api/local-server/devices/laptop/profile/enabled', expect.objectContaining({
+  expect(fetchSpy).toHaveBeenNthCalledWith(2, '/api/local-server/devices/laptop/profile/enabled', expect.objectContaining({
     method: 'PATCH',
     headers: expect.objectContaining({ 'If-Match': '"4"' }),
   }))
-  expect(fetchSpy).toHaveBeenNthCalledWith(4, '/api/local-server/devices/laptop/profile/copy-shared', expect.objectContaining({
+  expect(fetchSpy).toHaveBeenNthCalledWith(3, '/api/local-server/devices/laptop/profile/copy-shared', expect.objectContaining({
     method: 'POST',
   }))
-  expect(fetchSpy).toHaveBeenNthCalledWith(5, '/api/local-server/devices/laptop/profile', expect.objectContaining({
+  expect(fetchSpy).toHaveBeenNthCalledWith(4, '/api/local-server/devices/laptop/profile', expect.objectContaining({
     method: 'DELETE',
     headers: expect.objectContaining({ 'If-Match': '"5"' }),
   }))
-  expect(fetchSpy).toHaveBeenNthCalledWith(6, '/api/local-server/config', expect.objectContaining({
+  expect(fetchSpy).toHaveBeenNthCalledWith(5, '/api/local-server/config', expect.objectContaining({
     method: 'PUT',
     body: JSON.stringify({ auth_username: 'easyproxy' }),
   }))

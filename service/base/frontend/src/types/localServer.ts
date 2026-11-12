@@ -49,19 +49,6 @@ export interface ProfileResource {
   provider_status: ProviderStatus
 }
 
-export interface LocalServerStatus {
-  enabled: boolean
-  listen: string
-  dispatcher_ready: boolean
-  registry_revision: number
-  credential_generation: number
-  profile_count: number
-  mapping_count: number
-  provider_degraded_count: number
-  peer_address_mode: 'tcp_peer'
-  source_ip_warning: string
-}
-
 export interface LocalServerConfig {
   enabled: boolean
   listen: string

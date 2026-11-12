@@ -159,7 +159,7 @@ func TestHTTPProbeRejectsProxyAuthenticationRequired(t *testing.T) {
 			}
 			defer conn.Close()
 			target := monitor.ProbeTargetSpec{Scheme: name, Host: "connectivitycheck.gstatic.com", Path: "/generate_204"}
-			if _, err := httpProbeTarget(conn, target, true); err == nil {
+			if _, err := httpProbeTargetContext(context.Background(), conn, target, true); err == nil {
 				t.Fatal("HTTP 407 was accepted as a healthy probe")
 			}
 		})
@@ -181,7 +181,7 @@ func TestHTTPProbeDoesNotHideFirstAuthenticationFailureWithWarmSuccess(t *testin
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	if _, err := httpProbeTarget(conn, monitor.ProbeTargetSpec{Scheme: "http", Host: "example.com"}); err == nil {
+	if _, err := httpProbeTargetContext(context.Background(), conn, monitor.ProbeTargetSpec{Scheme: "http", Host: "example.com"}); err == nil {
 		t.Fatal("warm success hid first authentication rejection")
 	}
 	if requests.Load() != 1 {

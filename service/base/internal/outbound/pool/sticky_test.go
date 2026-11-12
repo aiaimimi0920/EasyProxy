@@ -131,20 +131,28 @@ func TestStickyState_EmptySessionKeyNoStick(t *testing.T) {
 	}
 }
 
-func TestStickyState_PruneTags(t *testing.T) {
-	s := newStickyState(0)
+func TestStickyState_SessionSelectionRenewsAndSweepsExpiry(t *testing.T) {
+	s := newStickyState(time.Minute)
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
 	m1, m2 := fakeMember("n1"), fakeMember("n2")
-	s.pickStable("b1", []*memberState{m1}, m1)
-	s.pickSession("sess", 0, []*memberState{m2}, m2)
-
-	// Reload leaves only n2 alive.
-	s.pruneTags(map[string]struct{}{"n2": {}})
-
-	if _, ok := s.buckets["b1"]; ok {
-		t.Error("stale stable bucket pinned to n1 should be pruned")
+	all := []*memberState{m1, m2}
+	s.pickSession("active", 0, all, m1)
+	s.pickSession("idle", 0, all, m1)
+	now = now.Add(30 * time.Second)
+	if got := s.pickSession("active", 0, all, m2); got != m1 {
+		t.Fatal("unexpired session did not retain its member")
 	}
-	if _, ok := s.sessions["sess"]; !ok {
-		t.Error("session pinned to live n2 should survive prune")
+	now = now.Add(30 * time.Second)
+	if got := s.pickSession("active", 0, all, m2); got != m1 {
+		t.Fatal("renewed session expired at its original deadline")
+	}
+	if _, ok := s.snapshot().Sessions["idle"]; ok {
+		t.Fatal("selection did not sweep an idle session at its deadline")
+	}
+	now = now.Add(time.Minute)
+	if got := s.pickSession("active", 0, all, m2); got != m2 {
+		t.Fatal("expired session did not rebind at its renewed deadline")
 	}
 }
 

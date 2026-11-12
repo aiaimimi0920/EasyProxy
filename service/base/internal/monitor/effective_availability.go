@@ -8,10 +8,6 @@ func isProbeAvailable(snap Snapshot) bool {
 	return snap.InitialCheckDone && snap.Available && !snap.Blacklisted && !snap.UpstreamAuthFailed
 }
 
-func isTrafficProvenUsable(snap Snapshot) bool {
-	return isTrafficProvenUsableAt(snap, time.Now())
-}
-
 func isTrafficProvenUsableAt(snap Snapshot, now time.Time) bool {
 	if snap.Blacklisted || snap.UpstreamAuthFailed || snap.LastTrafficSuccessAt.IsZero() {
 		return false

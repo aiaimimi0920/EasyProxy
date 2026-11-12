@@ -31,10 +31,6 @@ func ParseSubscriptionContent(content string) ([]NodeConfig, error) {
 	return parseNodesFromContent(content)
 }
 
-func parseSubscriptionContent(content string) ([]NodeConfig, error) {
-	return ParseSubscriptionContent(content)
-}
-
 func looksLikeClashYAML(content string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(content))
 	if normalized == "" {

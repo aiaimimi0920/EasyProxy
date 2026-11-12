@@ -89,12 +89,6 @@ func FetchSubscriptionNodesWithClient(
 	return nil, err
 }
 
-// loadNodesFromSubscription fetches and parses nodes from a subscription URL
-// Supports multiple formats: base64 encoded, plain text, clash yaml, etc.
-func loadNodesFromSubscription(subURL string, timeout time.Duration) ([]NodeConfig, error) {
-	return FetchSubscriptionNodes(subURL, timeout, "", 0)
-}
-
 func fetchSubscriptionNodesRemote(subURL string, timeout time.Duration, client *http.Client) ([]NodeConfig, error) {
 	if timeout <= 0 {
 		timeout = 30 * time.Second

@@ -86,41 +86,6 @@ func (m *Manager) createManagedBox(ctx context.Context, cfg *config.Config) (man
 	return &profileGatedBox{managedBox: instance, gate: gate}, nil
 }
 
-// gracefulSwitch swaps the current box with a new one.
-func (m *Manager) gracefulSwitch(newBox managedBox) error {
-	if newBox == nil {
-		return errors.New("new box is nil")
-	}
-
-	m.mu.Lock()
-	old := m.currentBox
-	m.currentBox = newBox
-	drainTimeout := m.drainTimeout
-	m.mu.Unlock()
-
-	if old != nil {
-		go m.drainOldBox(old, drainTimeout)
-	}
-
-	m.logger.Infof("switched to new instance, draining old for %s", drainTimeout)
-	return nil
-}
-
-// drainOldBox waits for drain timeout then closes the old box.
-func (m *Manager) drainOldBox(oldBox managedBox, timeout time.Duration) {
-	if oldBox == nil {
-		return
-	}
-	if timeout > 0 {
-		time.Sleep(timeout)
-	}
-	if err := oldBox.Close(); err != nil {
-		m.logger.Errorf("failed to close old instance: %v", err)
-		return
-	}
-	m.logger.Infof("old instance closed after %s drain", timeout)
-}
-
 // waitForHealthCheck polls until enough nodes are available or timeout.
 func (m *Manager) waitForHealthCheck(timeout time.Duration) error {
 	return m.waitForHealthCheckAtLeast(timeout, m.minAvailableNodes)

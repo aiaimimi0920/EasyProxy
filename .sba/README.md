@@ -6,7 +6,7 @@
 
 ## 按操作查阅
 
-- [生命周期与调度](lifecycle.md)：正式入口、五个动作、周期刷新和恢复边界。
+- [生命周期与调度](lifecycle.md)：正式入口、五个常规生命周期动作、受限 repair、周期刷新和恢复边界。
 - [协调与产物边界](integration-notes.md)：持久 writer、条件写和 UNKNOWN 停写。
 - [数据迁移](migration.md)：加密备份、D1 数据保持、首次初始化。
 - [ECH 发布](ech.md)、[Pages 发布](pages.md)：阶段职责、归属校验、单次写入。

@@ -442,19 +442,6 @@ func (s *Server) writeHTTPAuthError(conn net.Conn, err error) {
 		"Content-Length: 0\r\n\r\n"))
 }
 
-// resolveDirective is the protocol-agnostic core shared by the HTTP and SOCKS5
-// entries: it layers the port-bound overlay (lowest priority) under the
-// per-request overlay, resolves defaults, and computes the routing policy for
-// the destination host. sessionFallback supplies the session stickiness key
-// (typically the client source IP) when the session strategy has no explicit
-// key.
-func (s *Server) resolveDirective(reqOverlay directiveOverlay, host, sessionFallback string) (resolved, routerule.Policy) {
-	overlay := s.bound.merge(reqOverlay)
-	res := overlay.resolve(s.DefaultStrategy(), sessionFallback)
-	policy := policyForSplit(res.split, s.currentEngine(), host)
-	return res, policy
-}
-
 // handleConnectConn tunnels an HTTPS CONNECT request directly on the connection.
 // The CONNECT authority may carry a token prefix ("stable+us/example.com:443").
 func (s *Server) handleConnectConn(conn net.Conn, req *http.Request, auth parsedProxyUsername) {
@@ -735,18 +722,6 @@ func splitHostPort(hostport string, defaultPort uint16) (string, uint16) {
 		h = h[1 : len(h)-1]
 	}
 	return h, defaultPort
-}
-
-// clientIP returns the bare IP from a RemoteAddr "ip:port" string, used as the
-// session stickiness fallback key.
-func clientIP(remoteAddr string) string {
-	if remoteAddr == "" {
-		return ""
-	}
-	if h, _, err := net.SplitHostPort(remoteAddr); err == nil {
-		return h
-	}
-	return remoteAddr
 }
 
 // proxyBasicAuth reads Proxy-Authorization basic credentials (net/http only

@@ -152,7 +152,7 @@ def test_application_seeds_previous_inputs_and_routes_to_backed_up_update(approv
     assert calls.index("previous") < calls.index("generation") and result["checks"]["repair-completed"]
 
 
-def test_current_manifest_exposes_only_exact_edge_recovery():
+def test_historical_manifest_1_0_17_exposes_only_exact_edge_recovery():
     root = Path(__file__).parents[1]
     manifest = json.loads((root / 'tests/fixtures/manifest-1.0.17.json').read_bytes())
     assert manifest['version'] == '1.0.17'

@@ -3,8 +3,9 @@
 ## 交付范围
 
 新套件使用 SpringBok 的 Ubuntu 24.04/x64 执行合同，不建立第四个常驻服务、不二次派发
-Linux 任务，也不跨进程序列化共同 Permit。本目录目前仍无完整五动作入口和可部署声明；
-本文的本机实测不代表 EasyProxy 已通过 SpringBok 上线。
+Linux 任务，也不跨进程序列化共同 Permit。正式入口为 `springbok.ps1`，动作与部署声明
+分别由 `manifest.json` 和 `deployment.json` 定义；执行边界见 [生命周期与调度](lifecycle.md)。
+本文的本机实测不代表当前实例已通过 SpringBok 上线验收。
 
 `toolchain.py` 固定官方 Node **22.23.3**、独立 npm **10.9.7**、esbuild **0.28.2**、Go
 **1.27.3** 的准确包 URL、SHA256、平台与版本输出。安装到全新源码外目录，执行位显式设置，

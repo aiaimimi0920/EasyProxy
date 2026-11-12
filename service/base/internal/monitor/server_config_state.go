@@ -62,24 +62,12 @@ func cloneRuntimeConfig(cfg Config) Config {
 	return cfg
 }
 
-func (s *Server) applyPreparedConfig(source *config.Config, snapshot persistedServerConfig) {
-	s.configUpdateMu.Lock()
-	defer s.configUpdateMu.Unlock()
-	s.applyPreparedConfigLocked(source, snapshot)
-}
-
 func (s *Server) applyPreparedConfigLocked(source *config.Config, snapshot persistedServerConfig) {
 	s.cfgMu.Lock()
 	s.cfgSrc = source
 	applyPersistedServerConfig(&s.cfg, snapshot)
 	s.cfgMu.Unlock()
 	s.localServerReloadPending = false
-}
-
-func (s *Server) restorePreparedConfig(source *config.Config, runtimeCfg Config) {
-	s.configUpdateMu.Lock()
-	defer s.configUpdateMu.Unlock()
-	s.restorePreparedConfigLocked(source, runtimeCfg)
 }
 
 func (s *Server) restorePreparedConfigLocked(source *config.Config, runtimeCfg Config) {
@@ -179,5 +167,3 @@ func settingsChangeRequiresReload(c *config.Config, req allSettingsRequest) bool
 	}
 	return false
 }
-
-// allSettingsResponse is the JSON structure for GET /api/settings.

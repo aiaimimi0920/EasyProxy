@@ -65,9 +65,12 @@ contract is in [`docs/architecture.md#topology`](docs/architecture.md#topology).
 
 ### Local runtime config
 
-`deploy/service/base/config.yaml` is the EasyProxy runtime authority. It owns
-listeners, management access, source sync, subscriptions, connectors, routing,
-gateway/TUN, refresh, and probing behavior. Initialize it once:
+The selected runtime configuration file is the EasyProxy runtime authority. It
+owns listeners, management access, source sync, subscriptions, connectors,
+routing, gateway/TUN, refresh, and probing behavior. Source-checkout deployment
+defaults to `deploy/service/base/config.yaml`; `deploy-host.ps1` defaults to
+`easyproxy-runtime.yaml` beside the launcher. Both deployment paths accept
+`-RuntimeConfigPath`. Initialize the source-checkout default once:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\initialize-config.ps1 -Target runtime

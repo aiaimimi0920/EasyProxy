@@ -42,6 +42,7 @@ def fetch_text_curl(url: str, timeout: int) -> str:
     completed = subprocess.run(
         [
             "curl",
+            "--fail",
             "-L",
             "--max-time",
             str(timeout),

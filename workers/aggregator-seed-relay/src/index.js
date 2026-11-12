@@ -1,28 +1,29 @@
 const ISSUE91_PATH = "/issue91";
 const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36";
-const DEFAULT_CACHE_URL = "https://sub.aiaimimi.com/internal/issue91.shared.yaml";
+
+class RelayError extends Error {}
 
 function decodeBase64Utf8(value) {
   try {
     return new TextDecoder().decode(Uint8Array.from(atob(value), (ch) => ch.charCodeAt(0))).trim();
-  } catch (error) {
-    throw new Error(`failed to decode ISSUE91_UPSTREAM_URL_B64: ${error instanceof Error ? error.message : String(error)}`);
+  } catch {
+    throw new RelayError("failed to decode ISSUE91_UPSTREAM_URL_B64");
   }
 }
 
 function resolveUpstreamUrl(env) {
   const encoded = String(env.ISSUE91_UPSTREAM_URL_B64 || "").trim();
   if (!encoded) {
-    throw new Error("missing ISSUE91_UPSTREAM_URL_B64 secret");
+    throw new RelayError("missing ISSUE91_UPSTREAM_URL_B64 secret");
   }
   const decoded = decodeBase64Utf8(encoded);
   if (!decoded.startsWith("http://") && !decoded.startsWith("https://")) {
-    throw new Error("decoded ISSUE91 upstream URL is not an absolute HTTP(S) URL");
+    throw new RelayError("decoded ISSUE91 upstream URL is not an absolute HTTP(S) URL");
   }
   return decoded;
 }
 
-async function fetchIssue91Payload(upstreamUrl) {
+async function fetchIssue91Payload(upstreamUrl, source) {
   const response = await fetch(upstreamUrl, {
     method: "GET",
     headers: {
@@ -40,11 +41,11 @@ async function fetchIssue91Payload(upstreamUrl) {
 
   const body = await response.text();
   if (!response.ok) {
-    throw new Error(`upstream returned ${response.status}: ${body.slice(0, 200)}`);
+    throw new RelayError(`${source} returned HTTP ${response.status}`);
   }
 
   if (!body.includes("proxies:")) {
-    throw new Error(`upstream body does not contain a Clash proxies list: ${body.slice(0, 200)}`);
+    throw new RelayError(`${source} body does not contain a Clash proxies list`);
   }
 
   return body;
@@ -53,35 +54,12 @@ async function fetchIssue91Payload(upstreamUrl) {
 async function fetchIssue91WithFallback(env) {
   const upstreamUrl = resolveUpstreamUrl(env);
   try {
-    const body = await fetchIssue91Payload(upstreamUrl);
+    const body = await fetchIssue91Payload(upstreamUrl, "upstream");
     return { body, source: "upstream" };
   } catch (upstreamError) {
-    const cacheUrl = String(env.ISSUE91_CACHE_URL || DEFAULT_CACHE_URL).trim();
-    const cacheResponse = await fetch(cacheUrl, {
-      method: "GET",
-      headers: {
-        "User-Agent": USER_AGENT,
-        Accept: "text/yaml, application/yaml, text/plain, */*",
-        "Cache-Control": "no-cache",
-        Pragma: "no-cache",
-      },
-      redirect: "follow",
-      cf: {
-        cacheTtl: 0,
-        cacheEverything: false,
-      },
-    });
-    const cacheBody = await cacheResponse.text();
-    if (!cacheResponse.ok) {
-      throw new Error(
-        `upstream failed (${upstreamError instanceof Error ? upstreamError.message : String(upstreamError)}); cache returned ${cacheResponse.status}: ${cacheBody.slice(0, 200)}`,
-      );
-    }
-    if (!cacheBody.includes("proxies:")) {
-      throw new Error(
-        `upstream failed (${upstreamError instanceof Error ? upstreamError.message : String(upstreamError)}); cache body does not contain a Clash proxies list: ${cacheBody.slice(0, 200)}`,
-      );
-    }
+    const cacheUrl = String(env.ISSUE91_CACHE_URL || "").trim();
+    if (!cacheUrl) throw upstreamError;
+    const cacheBody = await fetchIssue91Payload(cacheUrl, "cache");
     return { body: cacheBody, source: "cache" };
   }
 }
@@ -127,7 +105,7 @@ export default {
       return jsonResponse(502, {
         ok: false,
         error: "upstream_fetch_failed",
-        message: error instanceof Error ? error.message : String(error),
+        message: error instanceof RelayError ? error.message : "relay request failed",
       });
     }
   },

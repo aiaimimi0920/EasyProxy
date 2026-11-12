@@ -130,14 +130,6 @@ func (state *proxyCompatState) serviceFeedbackForRef(hostID string, ref proxyCom
 	return *feedback, true
 }
 
-func (state *proxyCompatState) recordServiceSuccess(hostID, nodeTag string) {
-	state.recordServiceSuccessForRefs(hostID, []proxyCompatServiceFeedbackRef{{
-		Key:        proxyCompatServiceFeedbackKey(proxyCompatFeedbackScopeNode, nodeTag),
-		ScopeKind:  proxyCompatFeedbackScopeNode,
-		ScopeValue: strings.TrimSpace(nodeTag),
-	}})
-}
-
 func (state *proxyCompatState) recordServiceSuccessForRefs(hostID string, refs []proxyCompatServiceFeedbackRef) {
 	normalizedHostID := normalizeProxyCompatHostID(hostID)
 	if normalizedHostID == "" || len(refs) == 0 {

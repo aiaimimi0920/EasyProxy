@@ -93,6 +93,13 @@ end-to-end acceptance gate. A matching tag push publishes with `draft=false`;
 a manual workflow defaults to `draft=true`. Complete and record the required
 validation before pushing a public release tag or promoting a draft.
 
+原生发布的三个 job 均检出本次 workflow 的准确 `github.sha`。
+构建前与发布前会查询远端 tag：已有 tag（含 annotated tag）必须指向该提交，
+否则停止，不能用另一分支的构建覆盖它。手工发布已有 tag 时，应从该 tag 运行；
+新 tag 则由发布步骤绑定本次提交。远端查询失败不会被当作 tag 不存在。
+版本以 `v` 或 `release-` 开头，后续只接受字母、数字、点、下划线和连字符，
+并拒绝 `..`、尾随点及 `.lock` 后缀，以兼容原生安装目录与 Git ref。
+
 ### Release Artifacts
 
 原生归档 `README.md` 与发布附件 `native-install-update.md` 由

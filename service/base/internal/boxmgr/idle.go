@@ -147,5 +147,3 @@ func (m *Manager) enterIdleLockedWithEphemeralNodes(
 	m.logger.Infof("entered idle state (0 enabled nodes); re-enable nodes and reload to resume")
 	return nil
 }
-
-// CurrentPortMap returns the current port mapping from the active configuration.

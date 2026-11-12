@@ -34,66 +34,29 @@ EasyProxy 是一个轻量级、高性能的代理池与订阅管理工具，底�
 
 ---
 
-## 🚀 最推荐：直接使用 Release 二进制（Linux / Windows）
+## 🚀 原生发布包（Linux / Windows）
 
-你不需要本地安装 Go 和 Node，直接下载发布产物即可使用。
+无需本地安装 Go 和 Node。从所用 Fork 的 GitHub Release 下载对应平台的
+服务包、同平台的 `easyproxyctl` 包，以及 `SHA256SUMS` 和
+`release-manifest.json`：
 
-### 1) 下载文件
+| 平台 | 服务包 |
+| --- | --- |
+| Linux amd64 | `easyproxy-linux-amd64.tar.gz` |
+| Linux arm64 | `easyproxy-linux-arm64.tar.gz` |
+| Windows amd64 | `easyproxy-windows-amd64.zip` |
 
-从 GitHub Releases 下载这两个文件之一：
+Windows arm64 不在发布支持范围。服务包内的可执行文件是
+`bin/easy-proxy` 或 `bin/easy-proxy.exe`，并附带配置模板、ECH helper 和安装脚本；
+不是旧版按平台命名的裸二进制。
 
-- Linux: `easy-proxy-linux-amd64`
-- Windows: `easy-proxy-windows-amd64.exe`
+安装、校验、升级和回滚统一遵循
+[`原生安装与更新`](../../docs/deployment.md#native-install-update)，避免维护第二套安装步骤。
+保留安装目录中的 helper 与配置路径，不要只复制 EXE 后假定所有 connector 都能运行。
 
-并同时准备配置文件：
-
-- 将仓库里的 `config.example.yaml` 复制为 `config.yaml`
-- 按需修改端口、账号密码、订阅链接等
-
----
-
-## 🐧 Linux 使用方法
-
-### 1) 赋予执行权限
-```bash
-chmod +x ./easy-proxy-linux-amd64
-```
-
-### 2) 准备配置
-```bash
-cp ./config.example.yaml ./config.yaml
-```
-
-### 3) 启动程序
-```bash
-./easy-proxy-linux-amd64 --config ./config.yaml
-```
-
-### 4) 访问管理面板
-默认访问地址：
-- `http://127.0.0.1:29888`（本机）
-- 或 `http://<服务器IP>:29888`
-- 默认密码：`123456`
-> 默认管理监听来自配置项 `management.listen`，默认值见 `config.example.yaml`。
-
----
-
-## 💻 Windows EXE 使用方法
-
-### 1) 准备文件
-把下面两个文件放到同一目录：
-
-- `easy-proxy-windows-amd64.exe`
-- `config.yaml`（由 `config.example.yaml` 复制并修改）
-
-### 2) 启动程序（PowerShell 或 CMD）
-```powershell
-.\easy-proxy-windows-amd64.exe --config .\config.yaml
-```
-
-### 3) 访问管理面板
-浏览器打开：
-- `http://127.0.0.1:29888`
+管理面板默认监听 `http://127.0.0.1:29888`，配置模板的管理密码为空，
+没有预设的通用登录密码。绑定非 loopback 地址必须配置非空密码；启用 Local Server
+时使用其 canonical 用户名/密码。实际地址和认证以所选运行时配置为准。
 
 ---
 
@@ -104,7 +67,7 @@ cp ./config.example.yaml ./config.yaml
 - `mode`: `pool` / `multi-port` / `hybrid`
 - `listener`: 代理入口监听与认证（新增 `listener.protocol`: `http` / `socks5` / `mixed`）
 - `multi_port`: 多端口入口参数（新增 `multi_port.protocol`: `http` / `socks5` / `mixed`）
-- `management.listen`: Web 管理面板地址（默认 `0.0.0.0:29888`）
+- `management.listen`: Web 管理面板地址（模板默认 `127.0.0.1:29888`）
 - `management.password`: 面板登录密码（为空则不需要登录）；服务间调用时也可直接作为 `Authorization` 头值访问管理 API
 - `subscriptions` / `nodes_file` / `nodes`: 节点来源（三选一或混用）
 - `source_sync.*`: 从 MiSub 拉取 machine manifest，并在失败时启用本地 fallback 订阅
@@ -162,6 +125,7 @@ npm run build
 
 ### 2) 构建后端
 ```bash
+cd ..
 go mod download
 go build -tags "with_utls with_quic with_grpc with_wireguard with_gvisor" -o easy-proxy ./cmd/easy_proxies
 ```
@@ -170,12 +134,10 @@ go build -tags "with_utls with_quic with_grpc with_wireguard with_gvisor" -o eas
 
 ## 📦 Docker（可选）
 
-如果你偏好容器部署，可使用现成的 `Dockerfile` 与 `docker-compose.yml`：
-
-```bash
-docker build -t easy-proxy-monorepo:latest .
-docker compose up -d
-```
+容器构建与 Compose 资产由仓库的 `deploy/service/base` 维护，本模块目录没有
+独立的 `docker-compose.yml`。从仓库根目录按
+[`本地 EasyProxy 部署`](../../README.md#local-easyproxy-deployment) 使用统一部署入口；
+NAS 固定镜像部署见 [`deploy/nas`](../../deploy/nas/README.md)。
 
 如果你的运行时配置不准备使用默认的
 `/var/lib/easyproxy/config/config.yaml`，
@@ -184,14 +146,8 @@ docker compose up -d
 镜像中的 `/etc/easyproxy/config.yaml` 只用于首次启动和旧部署迁移，不是
 WebUI/API 的持久化写入目标。
 
-迁移期并行运行建议：
-
-- 容器名默认使用 `easy-proxy-monorepo`
-- 默认代理监听端口使用 `22323`
-- 默认管理面板端口使用 `29888`
-- 默认多端口起始端口使用 `25000`
-
-这样可以和旧的多仓部署实例并存。
+需要并行验证时，显式覆盖容器名、Compose project、端口与网络别名，
+不要依赖历史迁移时期的默认命名来隔离实例。
 
 ## 📁 目录结构简述
 

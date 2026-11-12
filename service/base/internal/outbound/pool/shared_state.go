@@ -84,15 +84,6 @@ func acquireSharedState(tag string) *sharedMemberState {
 	return actual.(*sharedMemberState)
 }
 
-// lookupSharedState returns the shared state if it exists.
-func lookupSharedState(tag string) (*sharedMemberState, bool) {
-	v, ok := currentSharedStateRegistry().states.Load(tag)
-	if !ok {
-		return nil, false
-	}
-	return v.(*sharedMemberState), true
-}
-
 // ResetSharedStateStore clears all shared state (used during config reload).
 func ResetSharedStateStore() {
 	old := sharedStateStore.Swap(&sharedStateRegistry{})

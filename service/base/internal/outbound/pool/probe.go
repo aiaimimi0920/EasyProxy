@@ -15,26 +15,10 @@ import (
 
 	"github.com/sagernet/sing-box/adapter"
 	E "github.com/sagernet/sing/common/exceptions"
-	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
 )
 
 const maxProbeFallbackReserve = 5 * time.Second
-
-func httpProbe(conn net.Conn, destination M.Socksaddr, skipCertVerify ...bool) (time.Duration, error) {
-	return httpProbeTarget(conn, monitor.ProbeTargetSpec{
-		Scheme:  map[bool]string{true: "https", false: "http"}[destination.Port == 443],
-		Host:    destination.AddrString(),
-		Port:    destination.Port,
-		Path:    "/generate_204",
-		HostHdr: destination.AddrString(),
-		Dst:     destination,
-	}, skipCertVerify...)
-}
-
-func httpProbeTarget(conn net.Conn, target monitor.ProbeTargetSpec, skipCertVerify ...bool) (time.Duration, error) {
-	return httpProbeTargetContext(context.Background(), conn, target, skipCertVerify...)
-}
 
 func httpProbeTargetContext(ctx context.Context, conn net.Conn, target monitor.ProbeTargetSpec, skipCertVerify ...bool) (time.Duration, error) {
 	stopContextInterrupt := context.AfterFunc(ctx, func() {
@@ -233,18 +217,6 @@ func (p *poolOutbound) makeProbeByTagFunc(tag string) func(ctx context.Context) 
 		duration, err := p.runProbeTargetsForMember(ctx, member, targets)
 		return duration, err
 	}
-}
-
-func probeTargetLabels(targets []monitor.ProbeTargetSpec) []string {
-	labels := make([]string, 0, len(targets))
-	for _, target := range targets {
-		if target.Original != "" {
-			labels = append(labels, target.Original)
-			continue
-		}
-		labels = append(labels, target.Dst.String())
-	}
-	return labels
 }
 
 func normalizeLocalProbeHost(host string) string {

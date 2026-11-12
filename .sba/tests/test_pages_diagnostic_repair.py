@@ -263,7 +263,7 @@ def test_two_cas_contenders_cannot_both_get_permits(partial, monkeypatch):
     assert claims.count(True) == 1
 
 
-def test_manifest_has_six_exact_scopes_and_unchanged_secret_set():
+def test_historical_manifest_1_0_15_preserves_pages_diagnostic_scope_and_secrets():
     manifest = json.loads((Path(__file__).resolve().parents[1] / "tests/fixtures/manifest-1.0.15.json").read_bytes())
     assert manifest["version"] == "1.0.15" and len(manifest["repairs"]) == 11
     scope = next(row for row in manifest["repairs"] if row["id"] == CONTEXT["repairId"])

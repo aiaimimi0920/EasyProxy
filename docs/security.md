@@ -120,6 +120,22 @@ These names are migration adapters, not a second topology authority. Resource
 identity and schedule decisions must move behind `easyproxyctl` rather than be
 reimplemented in workflow YAML.
 
+#### Seed relay 的现有兼容边界
+
+`deploy-cloudflare.yml` 的 `both` 和 `aggregator-seed-relay` 目标仍部署
+`workers/aggregator-seed-relay`。这两个目标要求配置
+`EASYPROXY_AGGREGATOR_ISSUE91_UPSTREAM_URL_B64` 和
+`EASYPROXY_AGGREGATOR_ISSUE91_RELAY_URL`；前者同步为 Worker secret
+`ISSUE91_UPSTREAM_URL_B64`，Base64 编码本身不是加密。
+
+Worker 优先请求上游，仅在显式设置 `ISSUE91_CACHE_URL` 时才在失败后请求缓存。
+未配置或配置为空时，上游失败直接返回 502，不再隐式访问维护者的缓存。
+需要回退的部署应配置自己控制的缓存地址；现有 workflow 不会同步这个可选 binding，
+可通过 `wrangler secret put ISSUE91_CACHE_URL --config workers/aggregator-seed-relay/wrangler.jsonc`
+交互式设置（不要把含凭据的 URL 写进仓库或命令行参数）。
+公开失败响应只包含固定错误类别及 HTTP 状态等安全诊断，
+不回显上游或缓存响应正文、请求 URL 或底层网络异常。
+
 MiSub source synchronization also accepts the optional repository variable
 `EASYPROXY_MISUB_ADDITIONAL_SUBSCRIPTIONS_JSON`. Its value is a JSON array of
 operator-owned additional subscription URLs. Leave it unset rather than using

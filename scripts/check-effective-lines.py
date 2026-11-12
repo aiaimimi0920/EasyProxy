@@ -162,9 +162,9 @@ def count_effective_lines(source: str, path: PurePosixPath) -> int:
     return count
 
 
-def tracked_source_paths(repo_root: Path) -> list[PurePosixPath]:
+def source_paths(repo_root: Path) -> list[PurePosixPath]:
     result = subprocess.run(
-        ["git", "ls-files", "-z"],
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
         cwd=repo_root,
         capture_output=True,
         check=True,
@@ -174,6 +174,8 @@ def tracked_source_paths(repo_root: Path) -> list[PurePosixPath]:
         if not raw_path:
             continue
         path = PurePosixPath(raw_path)
+        if not (repo_root / Path(*path.parts)).exists():
+            continue
         if not raw_path.startswith(INCLUDED_PREFIXES):
             continue
         if path.suffix.lower() in INCLUDED_SUFFIXES or path.name in INCLUDED_NAMES:
@@ -206,7 +208,7 @@ def inspect_repository(repo_root: Path, baseline_path: Path) -> int:
     warnings: list[tuple[str, int]] = []
     failures: list[str] = []
 
-    for relative_path in tracked_source_paths(repo_root):
+    for relative_path in source_paths(repo_root):
         path = repo_root / Path(*relative_path.parts)
         count = count_effective_lines(path.read_text(encoding="utf-8-sig"), relative_path)
         source_path = relative_path.as_posix()

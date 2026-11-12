@@ -1,6 +1,9 @@
+import json
 import re
 import unittest
 from pathlib import Path
+
+import yaml
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -64,13 +67,27 @@ class OperatorDocumentationContractTests(unittest.TestCase):
         paths = [REPO_ROOT / "docs" / name for name in topics]
         for path in paths:
             self.assertTrue(path.is_file(), str(path))
-        for path in [REPO_ROOT / "README.md", *paths]:
+        for path in [REPO_ROOT / "README.md", REPO_ROOT / "service/base/README.md", *paths]:
             for target in re.findall(r"\]\(([^\s)]+)\)", path.read_text(encoding="utf-8")):
                 if "://" in target or target.startswith("#"):
                     continue
                 relative = target.split("#", 1)[0]
                 if relative:
                     self.assertTrue((path.parent / relative).exists(), f"{path}: {target}")
+
+    def test_service_guide_matches_native_release_and_management_defaults(self):
+        service = REPO_ROOT / "service/base"
+        guide = (service / "README.md").read_text(encoding="utf-8")
+        contract = json.loads((REPO_ROOT / "release-contract.json").read_text(encoding="utf-8"))
+        native = next(item for item in contract["workflows"] if item["component"] == "native-release")
+        for name in native["releaseFiles"]:
+            if name.startswith("easyproxy-"):
+                self.assertIn(name, guide)
+        config = yaml.safe_load((service / "config.example.yaml").read_text(encoding="utf-8"))
+        self.assertIn(f'http://{config["management"]["listen"]}', guide)
+        self.assertEqual("", config["management"]["password"])
+        self.assertNotIn("默认密码：`123456`", guide)
+        self.assertNotIn("docker compose up -d", guide)
 
     def test_development_gate_limits_match_checker(self):
         guide = (REPO_ROOT / "docs/development.md").read_text(encoding="utf-8")

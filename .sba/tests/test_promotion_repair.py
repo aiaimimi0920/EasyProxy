@@ -150,7 +150,7 @@ def test_application_seeds_previous_inputs_and_routes_to_backed_up_update(approv
     assert calls.index("previous") < calls.index("generation") and result["checks"]["repair-completed"]
 
 
-def test_current_manifest_exposes_only_current_repair_and_keeps_historical_declaration_fixture():
+def test_historical_manifest_1_0_16_exposes_only_promotion_recovery():
     root = Path(__file__).parents[1]
     manifest = json.loads((root / "tests/fixtures/manifest-1.0.16.json").read_bytes())
     assert manifest["version"] == "1.0.16" and len(manifest["repairs"]) == 1

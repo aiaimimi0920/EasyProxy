@@ -361,8 +361,9 @@ func manualRefreshWaitTimeout(fetchTimeout, healthCheckTimeout, drainTimeout tim
 	if drainTimeout <= 0 {
 		drainTimeout = manualRefreshDefaultDrain
 	}
-	// Source sync can make one manifest request followed by one source request
-	// before the reload drains the old box and probes the candidate generation.
+	// Source sync can make one manifest request followed by one source request.
+	// Reload closes the old box before probing the candidate generation; the
+	// legacy drain timeout remains an additional manual-refresh wait allowance.
 	waitTimeout := manualRefreshCompletionGrace
 	for _, stageTimeout := range []time.Duration{fetchTimeout, fetchTimeout, healthCheckTimeout, drainTimeout} {
 		if stageTimeout > maximumDuration-waitTimeout {

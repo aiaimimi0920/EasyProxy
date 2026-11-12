@@ -5,7 +5,6 @@ import type {
   ForwardingProfile,
   IPMapping,
   LocalServerConfig,
-  LocalServerStatus,
   MutationResponse,
   ProfileResource,
 } from '../types/localServer'
@@ -37,10 +36,6 @@ function updateHeaders(revision: number): HeadersInit {
 
 function createOrUpdateHeaders(revision: number): HeadersInit {
   return revision === 0 ? createHeaders() : updateHeaders(revision)
-}
-
-export function fetchLocalServerStatus(): Promise<LocalServerStatus> {
-  return apiRequest('/api/local-server/status')
 }
 
 export function fetchLocalServerConfig(): Promise<LocalServerConfig> {
@@ -77,18 +72,6 @@ export function fetchDevices(): Promise<{ devices: DeviceSummary[] }> {
 
 export function fetchDevice(deviceId: string): Promise<DeviceResource> {
   return apiRequest(`/api/local-server/devices/${devicePath(deviceId)}`)
-}
-
-export function putDevice(
-  deviceId: string,
-  displayName: string,
-  expectedRevision: number,
-): Promise<MutationResponse<DeviceResource>> {
-  return apiRequest(`/api/local-server/devices/${devicePath(deviceId)}`, {
-    method: 'PUT',
-    headers: createOrUpdateHeaders(expectedRevision),
-    body: JSON.stringify({ expected_revision: expectedRevision, display_name: displayName }),
-  })
 }
 
 export function putDeviceProfile(

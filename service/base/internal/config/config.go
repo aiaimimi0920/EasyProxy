@@ -284,7 +284,7 @@ type SubscriptionRefreshConfig struct {
 	Interval           time.Duration `yaml:"interval"`             // 刷新间隔，默认 24 小时
 	Timeout            time.Duration `yaml:"timeout"`              // 获取订阅的超时时间
 	HealthCheckTimeout time.Duration `yaml:"health_check_timeout"` // 新节点健康检查超时
-	DrainTimeout       time.Duration `yaml:"drain_timeout"`        // 旧实例排空超时时间
+	DrainTimeout       time.Duration `yaml:"drain_timeout"`        // 兼容字段：手动刷新额外等待预算，不延迟关闭旧实例
 	MinAvailableNodes  int           `yaml:"min_available_nodes"`  // 最少可用节点数，低于此值不切换
 }
 

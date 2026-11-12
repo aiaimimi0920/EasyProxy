@@ -239,12 +239,3 @@ func TestSplitHostPort(t *testing.T) {
 		}
 	}
 }
-
-func TestClientIP(t *testing.T) {
-	if got := clientIP("203.0.113.5:51234"); got != "203.0.113.5" {
-		t.Errorf("clientIP = %q", got)
-	}
-	if got := clientIP("203.0.113.5"); got != "203.0.113.5" {
-		t.Errorf("clientIP no-port = %q", got)
-	}
-}

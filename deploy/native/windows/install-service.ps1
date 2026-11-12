@@ -18,7 +18,6 @@ $releaseRoot = Join-Path $InstallRoot 'releases'
 $configPath = Join-Path $DataRoot 'config.yaml'
 $statePath = Join-Path $DataRoot 'data'
 $backupRoot = Join-Path $DataRoot 'backups'
-$serviceExistedBefore = $null -ne (Get-Service $serviceName -ErrorAction SilentlyContinue)
 
 function Assert-Administrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -51,6 +50,7 @@ function Set-ServiceBinary {
         & sc.exe config $serviceName binPath= $binaryPath start= auto | Out-Null
     } else {
         & sc.exe create $serviceName binPath= $binaryPath start= auto DisplayName= 'EasyProxy' | Out-Null
+        if ($LASTEXITCODE -eq 0) { $script:serviceCreated = $true }
     }
     if ($LASTEXITCODE -ne 0) { throw 'Failed to configure the EasyProxy Windows Service.' }
 }
@@ -80,7 +80,11 @@ function Restore-RuntimeBackup {
     }
 }
 
+if (-not $PSCmdlet.ShouldProcess($InstallRoot, $(if ($Rollback) { 'Roll back EasyProxy' } else { "Install EasyProxy $Version" }))) {
+    return
+}
 Assert-Administrator
+$serviceCreated = $false
 $null = New-Item -ItemType Directory -Force -Path $releaseRoot, $DataRoot, $statePath, $backupRoot
 if ($Rollback) {
     if ([string]::IsNullOrWhiteSpace($BackupPath)) {
@@ -102,6 +106,7 @@ $temporary = Join-Path ([IO.Path]::GetTempPath()) "easyproxy-$([guid]::NewGuid()
 $null = New-Item -ItemType Directory -Path $temporary
 $backup = ''
 $release = ''
+$releaseCreated = $false
 try {
     if ([string]::IsNullOrWhiteSpace($PackagePath)) {
         if ([string]::IsNullOrWhiteSpace($BaseUrl)) {
@@ -122,6 +127,8 @@ try {
     }
     $release = Join-Path $releaseRoot $Version
     if (Test-Path $release) { throw "Release already installed: $Version" }
+    $null = New-Item -ItemType Directory -Path $release
+    $releaseCreated = $true
     Expand-Archive $PackagePath $release
     if (-not (Test-Path (Join-Path $release 'bin\easy-proxy.exe'))) { throw 'Package lacks bin\easy-proxy.exe.' }
 
@@ -168,11 +175,11 @@ catch {
         Write-Warning "Install failed; restoring runtime backup $backup"
         try { Restore-RuntimeBackup -Path $backup } catch { Write-Warning "Automatic runtime restore failed: $_" }
     }
-    if (-not $serviceExistedBefore) {
+    if ($serviceCreated) {
         Stop-Service $serviceName -Force -ErrorAction SilentlyContinue
         & sc.exe delete $serviceName | Out-Null
     }
-    if (-not [string]::IsNullOrWhiteSpace($release)) {
+    if ($releaseCreated) {
         Remove-Item $release -Recurse -Force -ErrorAction SilentlyContinue
     }
     throw $failure

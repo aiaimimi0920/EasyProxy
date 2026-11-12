@@ -1,6 +1,6 @@
 import { expect, it, vi } from 'vitest'
 
-import { apiRequest, checkAuth, getToken, login, setToken } from './client'
+import { apiRequest, checkAuth, getToken, login, setToken, streamTraffic } from './client'
 import { jsonResponse, mockFetch } from '../test/http'
 
 it('preserves structured 409 payloads', async () => {
@@ -58,4 +58,29 @@ it('exposes structured login failures', async () => {
     status: 401,
     payload: { error: '密码错误', retry_after: 1 },
   })
+})
+
+it('reports a closed traffic stream so the monitor can reconnect', async () => {
+  const event = { type: 'traffic', upload_speed: 10, download_speed: 20 }
+  const response = new Response(`data: ${JSON.stringify(event)}\n\n`)
+  mockFetch(response)
+  const onEvent = vi.fn()
+  const onError = vi.fn()
+
+  streamTraffic(onEvent, onError)
+
+  await vi.waitFor(() => expect(onError).toHaveBeenCalledOnce())
+  expect(onEvent).toHaveBeenCalledWith(event)
+  expect(response.body?.locked).toBe(false)
+})
+
+it('does not request reconnection after the traffic subscription is aborted', async () => {
+  const response = new Response('data: {"type":"traffic"}\n\n')
+  mockFetch(response)
+  const onError = vi.fn()
+  const controller = streamTraffic(() => controller.abort(), onError)
+
+  await vi.waitFor(() => expect(controller.signal.aborted).toBe(true))
+  expect(onError).not.toHaveBeenCalled()
+  expect(response.body?.locked).toBe(false)
 })

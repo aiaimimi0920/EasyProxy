@@ -14,7 +14,7 @@ import (
 	"easy_proxies/internal/monitor"
 )
 
-func TestSyncMonitorServerLifecycleRebindsSameServerOnListenChange(t *testing.T) {
+func TestPrepareMonitorServerTransitionRebindsSameServerOnListenChange(t *testing.T) {
 	getFreeListenPair := func(t *testing.T) (string, string) {
 		t.Helper()
 		first, err := net.Listen("tcp", "127.0.0.1:0")
@@ -66,6 +66,7 @@ func TestSyncMonitorServerLifecycleRebindsSameServerOnListenChange(t *testing.T)
 	if err != nil {
 		t.Fatalf("NewManager() error = %v", err)
 	}
+	defer monitorMgr.Stop()
 
 	prevCfg := monitor.Config{Enabled: true, Listen: oldListen}
 	currentServer := monitor.NewServer(prevCfg, monitorMgr, log.New(io.Discard, "", 0))
@@ -75,6 +76,7 @@ func TestSyncMonitorServerLifecycleRebindsSameServerOnListenChange(t *testing.T)
 	if err := currentServer.Start(ctx); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
+	defer currentServer.Shutdown(context.Background())
 	waitReachable(t, oldListen, true)
 
 	manager := &Manager{
@@ -92,9 +94,16 @@ func TestSyncMonitorServerLifecycleRebindsSameServerOnListenChange(t *testing.T)
 	activeCfg.Management.Enabled = &enabled
 	activeCfg.Management.Listen = newListen
 
-	if err := manager.syncMonitorServerLifecycle(ctx, prevCfg, activeCfg); err != nil {
-		t.Fatalf("syncMonitorServerLifecycle() error = %v", err)
+	transition, err := manager.prepareMonitorServerTransition(activeCfg)
+	if err != nil {
+		t.Fatalf("prepareMonitorServerTransition() error = %v", err)
 	}
+	defer transition.Abort()
+	waitReachable(t, oldListen, true)
+	if err := transition.Activate(ctx); err != nil {
+		t.Fatalf("Activate() error = %v", err)
+	}
+	transition.Finalize()
 
 	waitReachable(t, newListen, true)
 	waitReachable(t, oldListen, false)
@@ -106,10 +115,9 @@ func TestSyncMonitorServerLifecycleRebindsSameServerOnListenChange(t *testing.T)
 		t.Fatal("listen change replaced the monitor server runtime")
 	}
 
-	manager.monitorServer.Shutdown(context.Background())
 }
 
-func TestSyncMonitorServerLifecycleBindFailureKeepsOldListener(t *testing.T) {
+func TestPrepareMonitorServerTransitionBindFailureKeepsOldListener(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	oldListen := fmt.Sprintf("127.0.0.1:%d", reserveFreePort(t))
@@ -145,8 +153,11 @@ func TestSyncMonitorServerLifecycleBindFailureKeepsOldListener(t *testing.T) {
 		Enabled: &enabled,
 		Listen:  occupied.Addr().String(),
 	}}
-	if err := manager.syncMonitorServerLifecycle(ctx, prevCfg, activeCfg); err == nil {
-		t.Fatal("syncMonitorServerLifecycle() error = nil, want bind failure")
+	if transition, err := manager.prepareMonitorServerTransition(activeCfg); err == nil {
+		if transition != nil {
+			transition.Abort()
+		}
+		t.Fatal("prepareMonitorServerTransition() error = nil, want bind failure")
 	}
 	if manager.monitorServer != currentServer {
 		t.Fatal("bind failure replaced the monitor server runtime")

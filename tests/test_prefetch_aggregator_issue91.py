@@ -4,6 +4,8 @@ import io
 import json
 import os
 import sys
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -95,3 +97,31 @@ def test_s3_cache_operations_use_selected_bucket():
         module.upload_cached_snapshot(PAYLOAD, "fork-cache")
     assert client.get_object.call_args.kwargs["Bucket"] == "fork-cache"
     assert client.put_object.call_args.kwargs["Bucket"] == "fork-cache"
+
+
+@pytest.mark.parametrize("status", [200, 503])
+def test_curl_checks_http_status_even_when_body_contains_proxies(status):
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = PAYLOAD.encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            pass
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            url = f"http://127.0.0.1:{server.server_port}/seed"
+            if status == 200:
+                assert module.fetch_text_curl(url, 5) == PAYLOAD.strip()
+            else:
+                with pytest.raises(RuntimeError, match="curl prefetch failed"):
+                    module.fetch_text_curl(url, 5)
+        finally:
+            server.shutdown()
+            thread.join()

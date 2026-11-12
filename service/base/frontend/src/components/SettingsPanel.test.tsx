@@ -24,6 +24,7 @@ beforeEach(() => {
   for (const mock of Object.values(apiMocks)) mock.mockReset()
   apiMocks.fetchSettings.mockResolvedValue({
     local_server_enabled: true,
+    sub_refresh_enabled: true,
     subscriptions: [],
     source_sync_fallback_subscriptions: [],
   })
@@ -41,6 +42,8 @@ it('hides derived legacy credentials without hiding pool scheduling', async () =
   expect(screen.queryByText('默认密码')).not.toBeInTheDocument()
   expect(screen.queryByText('WebUI 密码')).not.toBeInTheDocument()
   expect(screen.getByText('调度模式')).toBeInTheDocument()
+  expect(screen.getByText('刷新等待余量')).toBeInTheDocument()
+  expect(screen.queryByText('排空超时')).not.toBeInTheDocument()
 })
 
 it('updates legacy credential visibility after the card enables Local Server', async () => {

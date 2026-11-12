@@ -166,10 +166,6 @@ export interface AuthResponse {
   username_required?: boolean
 }
 
-export interface ErrorResponse {
-  error: string
-}
-
 // ---- Config Node CRUD types ----
 
 export interface ConfigNodePayload {
@@ -225,34 +221,6 @@ export interface SourceSyncStatus {
   manifest_source_count?: number
   fallback_source_count?: number
 }
-
-// ---- SSE Probe types ----
-
-export interface ProbeSSEStart {
-  type: 'start'
-  total: number
-}
-
-export interface ProbeSSEProgress {
-  type: 'progress'
-  tag: string
-  name: string
-  latency: number
-  status: 'success' | 'error'
-  error: string
-  current: number
-  total: number
-  progress: number
-}
-
-export interface ProbeSSEComplete {
-  type: 'complete'
-  total: number
-  success: number
-  failed: number
-}
-
-export type ProbeSSEEvent = ProbeSSEStart | ProbeSSEProgress | ProbeSSEComplete
 
 // ---- SSE Traffic stream types ----
 

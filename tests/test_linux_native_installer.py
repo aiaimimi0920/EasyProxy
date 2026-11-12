@@ -5,6 +5,8 @@ import tarfile
 import tempfile
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).parents[1]
 INSTALLER = ROOT / "deploy/native/linux/install.sh"
@@ -86,15 +88,20 @@ def shell_path(path: Path) -> str:
     return converted.stdout.strip() if converted.returncode == 0 else str(path)
 
 
-def test_linux_installer_migrates_preserves_and_rolls_back_config_authority():
+@pytest.mark.parametrize("directory_name,external_config", [
+    ("install", False), ("install space %n $HOME &", False), ("install", True),
+])
+def test_linux_installer_migrates_preserves_and_rolls_back_config_authority(directory_name, external_config):
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
-        install_root = root / "install"
+        install_root = root / directory_name
         config_root = root / "etc"
-        state_root = root / "state"
+        state_root = root / f"state-{directory_name}"
         fake_bin = root / "bin"
         unit_path = root / "systemd" / "easyproxy.service"
         archive = root / "easyproxy-linux-amd64.tar.gz"
+        runtime_config = (root / "custom config %n $HOME" / "runtime.yaml"
+                          if external_config else state_root / "config/config.yaml")
         fake_bin.mkdir()
         config_root.mkdir()
         (state_root / "data").mkdir(parents=True)
@@ -111,6 +118,7 @@ def test_linux_installer_migrates_preserves_and_rolls_back_config_authority():
                 "EASYPROXY_INSTALL_ROOT": shell_path(install_root),
                 "EASYPROXY_CONFIG_ROOT": shell_path(config_root),
                 "EASYPROXY_STATE_ROOT": shell_path(state_root),
+                "EASYPROXY_CONFIG_PATH": shell_path(runtime_config),
                 "EASYPROXY_SYSTEMD_UNIT_PATH": shell_path(unit_path),
             }
         )
@@ -119,10 +127,19 @@ def test_linux_installer_migrates_preserves_and_rolls_back_config_authority():
         )
         assert installed.returncode == 0, installed.stderr or installed.stdout
 
-        runtime_config = state_root / "config/config.yaml"
         assert runtime_config.read_text(encoding="utf-8") == "sentinel: legacy\n"
         assert (config_root / "config.yaml").read_text(encoding="utf-8") == "sentinel: legacy\n"
-        assert "/var/lib/easyproxy/config/config.yaml" in unit_path.read_text(encoding="utf-8")
+        def quote_path(path, *, command=False):
+            value = shell_path(path).replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%")
+            if command:
+                value = value.replace("$", "$$")
+            return f'"{value}"'
+
+        unit = unit_path.read_text(encoding="utf-8")
+        assert f"WorkingDirectory={shell_path(state_root).replace('%', '%%')}" in unit
+        assert f"ExecStart={quote_path(install_root / 'current/bin/easy-proxy', command=True)} --config {quote_path(runtime_config, command=True)}" in unit
+        assert f"ReadWritePaths={quote_path(state_root)} {quote_path(runtime_config.parent)}" in unit
+        assert "/var/lib/easyproxy" not in unit
         backups = list((state_root / "backups").glob("before-v-test-*"))
         assert len(backups) == 1
         assert (backups[0] / "config.yaml").read_text(encoding="utf-8") == "sentinel: legacy\n"

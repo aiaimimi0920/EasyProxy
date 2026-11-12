@@ -133,7 +133,7 @@ def test_success_cannot_be_repeated_and_wrong_context_never_observes_resources(p
     assert before == (len(store.writes), len(store.stages))
 
 
-def test_manifest_has_five_separate_scopes_and_no_additional_secrets():
+def test_historical_manifest_1_0_15_preserves_generation_scope_and_secrets():
     manifest = json.loads((Path(__file__).resolve().parents[1] / "tests/fixtures/manifest-1.0.15.json").read_bytes())
     assert manifest["version"] == "1.0.15" and len(manifest["repairs"]) == 11
     scope = next(row for row in manifest["repairs"] if row["id"] == GENERATION_CONTEXT["repairId"])

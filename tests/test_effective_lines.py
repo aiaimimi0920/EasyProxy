@@ -84,6 +84,21 @@ class EffectiveLineGateTests(unittest.TestCase):
 
         self.assertEqual(result, 1)
 
+    def test_deleted_tracked_source_is_not_read(self):
+        self.write_tracked_source(3).unlink()
+        self.assertEqual(CHECKER.inspect_repository(self.repo, self.write_baseline()), 0)
+
+    def test_new_untracked_source_is_checked(self):
+        source = self.repo / "service/base/internal/sample/new.go"
+        source.write_text("package sample\n" + "var _ = 1\n" * 700, encoding="utf-8")
+        self.assertEqual(CHECKER.inspect_repository(self.repo, self.write_baseline()), 1)
+
+    def test_ignored_untracked_source_is_not_checked(self):
+        (self.repo / ".gitignore").write_text("generated.go\n", encoding="utf-8")
+        source = self.repo / "service/base/internal/sample/generated.go"
+        source.write_text("package sample\n" + "var _ = 1\n" * 700, encoding="utf-8")
+        self.assertEqual(CHECKER.inspect_repository(self.repo, self.write_baseline()), 0)
+
     def test_accepts_ratcheted_legacy_violation(self):
         self.write_tracked_source(701)
         entries = {

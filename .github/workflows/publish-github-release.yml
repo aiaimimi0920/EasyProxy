@@ -34,9 +34,23 @@ jobs:
       owner_lc: ${{ steps.release_meta.outputs.owner_lc }}
       draft: ${{ steps.release_meta.outputs.draft }}
     steps:
+      - name: Checkout exact source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          submodules: recursive
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
       - name: Resolve release metadata
         id: release_meta
         shell: bash
+        env:
+          INPUT_RELEASE_TAG: ${{ inputs.release_tag }}
+          INPUT_DRAFT: ${{ inputs.draft }}
         run: |
           set -euo pipefail
           owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
@@ -44,10 +58,10 @@ jobs:
             tag="${GITHUB_REF_NAME}"
             draft="false"
           else
-            tag="${{ inputs.release_tag }}"
-            draft="${{ inputs.draft }}"
+            tag="${INPUT_RELEASE_TAG}"
+            draft="${INPUT_DRAFT}"
           fi
-          [[ "${tag}" =~ ^(release-|v) ]] || { echo "release tag must start with release- or v" >&2; exit 1; }
+          python scripts/verify-release-source.py --tag "${tag}" --commit "${GITHUB_SHA}"
           echo "release_tag=${tag}" >> "$GITHUB_OUTPUT"
           echo "version=${tag}" >> "$GITHUB_OUTPUT"
           echo "owner_lc=${owner_lc}" >> "$GITHUB_OUTPUT"
@@ -84,6 +98,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
+          ref: ${{ github.sha }}
           submodules: recursive
 
       - name: Set up Go
@@ -153,6 +168,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
+          ref: ${{ github.sha }}
           submodules: recursive
 
       - name: Set up Python
@@ -205,6 +221,7 @@ jobs:
           set -euo pipefail
           tag='${{ needs.metadata.outputs.release_tag }}'
           draft='${{ needs.metadata.outputs.draft }}'
+          python scripts/verify-release-source.py --tag "${tag}" --commit "${GITHUB_SHA}"
           if gh release view "${tag}" >/dev/null 2>&1; then
             gh release edit "${tag}" --title "${tag}" --notes-file github-release-notes.md --draft="${draft}"
           else
