@@ -274,7 +274,7 @@ npm run lint
 npm run build
 ```
 
-See [`docs/DEVELOPMENT_STANDARD.md`](docs/DEVELOPMENT_STANDARD.md) for ownership,
+See [`docs/development.md`](docs/development.md) for ownership,
 size, test, security, and submodule rules.
 
 ## Repository Map

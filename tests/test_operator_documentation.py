@@ -57,7 +57,7 @@ class OperatorDocumentationContractTests(unittest.TestCase):
 
     def test_consolidated_topic_documents_and_local_links_exist(self):
         topics = (
-            "architecture.md", "security.md", "release.md", "DEVELOPMENT_STANDARD.md",
+            "architecture.md", "security.md", "release.md", "development.md",
             "routing.md", "local-server.md", "deployment-records.md",
             "cloud-operations.md", "deployment.md",
         )
@@ -71,6 +71,22 @@ class OperatorDocumentationContractTests(unittest.TestCase):
                 relative = target.split("#", 1)[0]
                 if relative:
                     self.assertTrue((path.parent / relative).exists(), f"{path}: {target}")
+
+    def test_topic_document_format_is_consistent(self):
+        for path in (REPO_ROOT / "docs").glob("*.md"):
+            self.assertRegex(path.name, r"^[a-z]+(?:-[a-z]+)*\.md$")
+            text = path.read_text(encoding="utf-8")
+            self.assertIn("## 适用范围", text)
+            self.assertIn("## 目录", text)
+            fenced = False
+            headings = []
+            for line in text.splitlines():
+                if line.startswith("```"):
+                    fenced = not fenced
+                elif not fenced and line.startswith("# "):
+                    headings.append(line)
+            self.assertEqual(1, len(headings), str(path))
+            self.assertTrue(headings[0].startswith("# EasyProxy "))
 
     def test_readme_screenshots_are_not_shipped_as_runtime_assets(self):
         service = REPO_ROOT / "service" / "base"

@@ -1,10 +1,14 @@
-# Deployment, installation, and recovery
+# EasyProxy 部署、安装与恢复
+
+## 适用范围
 
 This guide covers local quick start, an independent cloud topology, native
 installers, the root host entrypoint, and optional private configuration snapshots.
 Use your own resource identities and verify the target environment before acting.
 Commands that publish, change permissions, restore data, rotate secrets, or remove
 resources require the relevant operator authorization; this guide is not approval.
+
+## 目录
 
 - [Quick start](#quickstart)
 - [Cloud bootstrap, update, and recovery](#fork-operator-guide)

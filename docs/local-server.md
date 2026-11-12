@@ -1,10 +1,13 @@
-# Local Server 与设备策略
+# EasyProxy Local Server 与设备策略
+
+## 适用范围
 
 本文按主题集中维护相关合同，按目录查阅；不包含后续阶段计划。
 
 ## 目录
-- [local-server](#local-server)
-- [device-selection-tiers](#device-selection-tiers)
+
+- [设备配置与接口](#local-server)
+- [三级节点选择策略](#device-selection-tiers)
 
 <a id="local-server"></a>
 

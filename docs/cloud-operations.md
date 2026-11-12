@@ -1,4 +1,6 @@
-# 云端运行、数据保护与恢复
+# EasyProxy 云端运行、数据保护与恢复
+
+## 适用范围
 
 本文按生命周期、数据保护、ECH、节点发布与额度保护组织云端操作合同。
 
@@ -9,7 +11,7 @@
 - 两条路径的写入协调和失败处理不同，不应对同一实例并行启用写入者，也不能把独立发布脚本的 rollback/retry 套用到 SBA UNKNOWN。
 - 文档中的命令是操作说明，不替代权限、具体资源核验和所需确认。源码、静态测试及历史回执不证明当前线上健康。
 
-## 内容导航
+## 目录
 
 - [Cloudflare 生命周期](#cloud-lifecycle)
 - [MiSub 数据保护与恢复](#misub-data-protection)
@@ -26,7 +28,7 @@
 
 This document defines the operator contract for the root-owned Cloudflare lifecycle. The forked applications own their runtime code; `easyproxyctl`, root workflows, topology, manifests, and data protection are controlled by this repository.
 
-## Authority and identity
+### Authority and identity
 
 1. `topology.yaml` is the desired-state authority. Secrets in topology are environment-variable names, never values.
 2. `easyproxyctl cloud bootstrap` may create a missing Pages project or D1 database. It re-lists the resource after creation and requires exactly one exact-name result.
@@ -36,7 +38,7 @@ This document defines the operator contract for the root-owned Cloudflare lifecy
 
 The MiSub D1 binding is always `MISUB_DB`. Names alone are not sufficient identity for a destructive or data-bearing operation.
 
-## Bootstrap
+### Bootstrap
 
 Use bootstrap only for a new topology:
 
@@ -62,7 +64,7 @@ with `deployment_mode=bootstrap`, `target=both`, an exact Pages project name,
 and verification enabled. The complete prerequisite and input sequence is in
 [`deployment.md#fork-operator-guide`](deployment.md#fork-operator-guide).
 
-## Update
+### Update
 
 The protected order is mandatory:
 
@@ -75,7 +77,7 @@ The protected order is mandatory:
 
 `.github/workflows/deploy-cloudflare.yml` implements this order. A failed backup or artifact upload prevents migration and deployment. The workflow does not treat arbitrary resource-creation errors as “already exists.”
 
-## Verify
+### Verify
 
 ```bash
 easyproxyctl cloud verify \
@@ -95,12 +97,12 @@ Token rotation is not part of update; its overlap, connector switch, real
 traffic validation, revocation, and rollback contract is documented in
 [`cloud-operations.md#ech-lifecycle`](#ech-lifecycle).
 
-## Backup and restore
+### Backup and restore
 
 完整加密备份格式、drill 和 production restore 的命令与失败处理统一见
 [MiSub 数据保护与恢复](#misub-data-protection)。更新前备份的要求不变。
 
-## Migrations
+### Migrations
 
 MiSub migrations live in `upstreams/misub/migrations` and are applied with:
 
@@ -116,7 +118,7 @@ Rules:
 - destructive contract cleanup is a later, separately approved stable release;
 - a populated update must have a retained encrypted backup before migration begins.
 
-## GitHub configuration
+### GitHub configuration
 
 Required repository secrets for MiSub lifecycle:
 
@@ -144,7 +146,7 @@ before running either a restore drill or production recovery.
 
 ## MiSub data protection and restore
 
-## What is protected
+### What is protected
 
 Each `.age` backup is an encrypted `age` scrypt envelope containing a gzip/tar archive with exactly four entries:
 
@@ -157,7 +159,7 @@ The archive extractor rejects unknown names, duplicate entries, unsafe entry typ
 
 The preferred logical export is the authenticated MiSub API. For an upgrade from an older deployed MiSub that lacks this endpoint, `easyproxyctl` builds the same logical payload directly from the exact D1 storage rows. The D1 snapshot is taken before and after export; if it changes, the tool retries and refuses to publish an inconsistent backup after three attempts.
 
-## Create a backup
+### Create a backup
 
 Set the secret values named by topology:
 
@@ -187,7 +189,7 @@ The manual GitHub equivalent is **Backup MiSub** (`backup-misub.yml`). It upload
 
 Run **Restore MiSub** with the exact workflow run ID and artifact name. Both drill and production runs use the protected `easyproxy-misub-restore` Environment and require its approval before receiving credentials. Production additionally requires `confirm_production_database_id` matching the protected D1 and a retained pre-restore backup.
 
-## Restore drill
+### Restore drill
 
 Always run an isolated drill before considering production restore. Create a temporary D1 named with the protected database prefix:
 
@@ -214,7 +216,7 @@ The tool requires exactly one target matching the supplied name and ID, rejects 
 
 The **Restore MiSub** workflow defaults to `drill`. It creates a uniquely named D1, runs the restore verification, and deletes only that exact run-created D1 after rechecking its name and ID.
 
-## Production restore
+### Production restore
 
 Production restore is intentionally harder:
 
@@ -244,7 +246,7 @@ easyproxyctl cloud restore \
 
 The pre-restore backup must finish before SQL import starts. Retain both the original recovery archive and the automatic pre-restore archive. A restore command never creates or deletes a D1 database; only the drill workflow manages the temporary D1 it created itself.
 
-## Failure rules
+### Failure rules
 
 - Missing, ambiguous, or mismatched Cloudflare resources: stop.
 - Manifest, topology, D1 binding, source identity, archive, or checksum mismatch: stop.
@@ -262,7 +264,7 @@ The pre-restore backup must finish before SQL import starts. Retain both the ori
 This document is the operator contract for the first-party Cloudflare Worker,
 the forked Go helper, MiSub connector state, and EasyProxy validation.
 
-## Stable identity and ordinary updates
+### Stable identity and ordinary updates
 
 `workers/ech-workers-cloudflare/wrangler.jsonc` owns the Worker name. Before an
 update, `scripts/verify-cloudflare-worker-identity.py` performs an exact
@@ -282,7 +284,7 @@ An ordinary `.github/workflows/deploy-cloudflare.yml` run:
 Use `--drop-server-ips` with `scripts/sync-misub-ech-profile.py` only when the
 operator intentionally wants to discard those values.
 
-## Safe token rotation
+### Safe token rotation
 
 Token rotation is separate from deployment. Run **Rotate ECH Token** only after
 configuring the protected `easyproxy-ech-rotation` GitHub Environment.
@@ -334,7 +336,7 @@ token, MiSub connector state, and the repository canonical secret. A failed
 rollback keeps the workflow failed and requires operator intervention; it is
 never reported as success.
 
-## Worker token semantics
+### Worker token semantics
 
 The Worker always requires `ECH_TOKEN`. During rotation it also accepts
 `ECH_TOKEN_PREVIOUS` only when `ECH_TOKEN_PREVIOUS_EXPIRES_AT` parses as a
@@ -344,7 +346,7 @@ previous-token metadata is fail-closed. Arbitrary invalid tokens remain rejected
 The overlap maximum is 240 minutes. The workflow first expires the previous
 token, proves it is rejected, and then deletes both temporary bindings.
 
-## Go helper release
+### Go helper release
 
 `upstreams/ech-workers` is the public fork submodule. Its tag workflow uses the
 Go version declared in `go.mod`, runs all packages before cross-compilation,
@@ -355,7 +357,7 @@ the environment variable in automation so the token is absent from process
 arguments. `scripts/verify-ech-helper-e2e.py` starts the helper and proves both
 HTTP and SOCKS5 traffic through a real Worker tunnel.
 
-## Live acceptance evidence
+### Live acceptance evidence
 
 Local unit tests and workflow validation do not prove a production rotation.
 Phase acceptance requires one protected workflow run against real Cloudflare,
@@ -363,7 +365,7 @@ MiSub, and a dedicated EasyProxy validation instance. Retain the workflow URL,
 Worker name, root and submodule commits, overlap/revocation results, and rollback
 result without retaining secret values.
 
-## Socket shutdown and production diagnostics
+### Socket shutdown and production diagnostics
 
 TCP sockets expose independent `opened` and `closed` promises. Handle `closed`
 rejections even when connection setup fails, and observe the promise returned
@@ -398,7 +400,7 @@ is the supported single-writer boundary. Direct R2 writes and a second enabled
 publication workflow are unsupported because they bypass rollback snapshots and
 the stable-manifest commit order.
 
-## Object layout
+### Object layout
 
 For release ID `<run-id>` and a canonical key such as `subs/effective.txt`:
 
@@ -418,7 +420,7 @@ manifest changes; any error restores every attempted key from the pre-promotion
 snapshot. Consumers that need a consistent multi-file view must read the stable
 manifest and use its immutable `release_key` entries.
 
-## Publication gates
+### Publication gates
 
 The workflow performs these steps in order:
 
@@ -441,7 +443,7 @@ Failures before step 11 never touch stable. Failures during step 11 restore the
 previous stable bytes and leave the previous manifest as the committed version.
 Candidate and immutable release objects may remain for diagnosis.
 
-### V2Ray 兼容产物
+#### V2Ray 兼容产物
 
 仓库固定版本的 subconverter 在 `target=v2ray` 下仅导出 VMess；当候选只有
 SS、VLESS 或 Trojan 时会成功退出却生成空文件。`list` 开关不改变这个协议范围。
@@ -477,7 +479,7 @@ candidate. Each fixed object write is atomic; readers of several related files
 must still use immutable release keys from the manifest to avoid observing an
 in-progress compatibility-key sequence.
 
-## Fork configuration
+### Fork configuration
 
 Configure the secrets and variables in
 [`security.md#github-secrets`](security.md#github-secrets), then enable the `Deploy Aggregator`
@@ -501,7 +503,7 @@ release copy before synchronizing MiSub. Local EasyProxy uses the same stable
 URL only under `source_sync.fallback_subscriptions`, so the fallback remains
 available when MiSub is unreachable.
 
-## Recovery
+### Recovery
 
 Normal retry creates a new release ID and never reuses an immutable key. To
 inspect or manually recover the previous version, use:
@@ -520,7 +522,7 @@ an availability contract.
 
 ## 云端可用池与本地 connector
 
-## 目标与边界
+### 目标与边界
 
 普通订阅和 agg 采集节点在云端汇总并接受同一轮 EasyProxy 运行时审计。
 NAS 使用的 `aggregator-global` manifest 只包含审计通过的实际代理 URI，以及选中的
@@ -531,7 +533,7 @@ ZenProxy/ECH connector 参数；不包含普通订阅的原始地址。
 刷新不再带入该来源的旧节点。现有 HTTPS 来源使用其 `customUserAgent`（默认 `clash.meta`）。
 云端输入只接受无 URL 用户名密码、无 fragment 的公开 HTTPS 地址，重定向逐跳校验且最多三跳。
 
-## 一条生成与发布链路
+### 一条生成与发布链路
 
 1. 正常 update 和周期 refresh 从准确项目 `pages.dev` 的备份导出接口读取来源登记；不调用
    有迁移/Cron 副作用的 `/api/data`，不把管理密码交给第三方订阅或 upstream 子进程。
@@ -548,7 +550,7 @@ ZenProxy/ECH connector 参数；不包含普通订阅的原始地址。
 Global runtime manifest 或 `subs/effective.txt` / `subs/effective.json`，不能把 raw Clash
 候选列表当作可用性承诺。云端可用与 NAS 所在网络可用仍是两个独立结论。
 
-## 轮换与失败语义
+### 轮换与失败语义
 
 每轮 Clash 候选附带不含订阅 URL、密钥或源内容的用户节点摘要。下一轮继承 agg 候选时，
 先剔除这部分用户节点，再使用订阅的本轮内容；因此每日轮换、来源禁用/删除不会把旧订阅
@@ -558,7 +560,7 @@ Global runtime manifest 或 `subs/effective.txt` / `subs/effective.json`，不�
 不以空源伪装成功、不发布半批新池。生成在获取发布 writer 之前完成，因此这类失败保留
 上一成功发布的池，不占用新的持久 writer。已进入发布阶段的 UNKNOWN 继续遵循原有停写规则。
 
-## 周期
+### 周期
 
 现有 GitHub Actions `sba-aggregator-refresh.yml` 每六小时运行一次（UTC `25 */6 * * *`；
 北京时间 02:25、08:25、14:25、20:25，实际开始时间可能受 Actions 调度延迟影响）。
@@ -567,7 +569,7 @@ Global runtime manifest 或 `subs/effective.txt` / `subs/effective.json`，不�
 NAS 现有 source-sync 每小时刷新一次可用池和 connector；不需要在 NAS 再保存两条原始订阅。
 云端或本地刷新失败均不得被报告为本轮刷新成功。
 
-## 历史部署证据
+### 历史部署证据
 
 [2026-11-08 上线与验收记录](deployment-records.md#cloud-usable-pool-2026-11-08) 保存当次部署和业务验收。
 它不是当前版本或节点数量的长期承诺；核验当前状态需重新读取实际发布版本、刷新回执及 NAS。
@@ -580,7 +582,7 @@ NAS 现有 source-sync 每小时刷新一次可用池和 connector；不需要�
 
 仅处理 `kind=subscription` 且 `options.managed_by=aggregator_sync` 的来源。手工机场、Aggregator Stable、健康检查来源、运行时代理和 Connector 不在删除范围。
 
-## 判断规则
+### 判断规则
 
 - 上游 export 缺失：MiSub 只标记 `aggregator_missing`，不再直接禁用。
 - 已停用或上游缺失的发现来源：由 `Maintain MiSub Discovery` 每 6 小时复查。
@@ -598,7 +600,7 @@ python scripts/maintain-misub-discovery.py --apply
 
 认证从环境变量 `MISUB_ADMIN_PASSWORD` 读取；`MISUB_PUBLIC_URL` 指定站点。运行需要 Docker、requests、PyYAML，节点审核复用 `easyproxy_source_audit.py`。本地运行用 `--work-dir` 将审核产物指向 `linshi`；完整审核产物可能含节点凭据，禁止提交或作为公开 CI artifact 上传。
 
-## ECH 订阅组
+### ECH 订阅组
 
 NAS 使用 `aggregator-global`，不依赖独立 `easyproxies-ech-runtime` 组。ECH 部署与 Token 轮换统一使用 `--connector-only --attach-profile-id aggregator-global`，只更新受管 ECH 来源引用，不重建独立组。删除该独立组不删除 Connector 或 Worker。
 
@@ -608,7 +610,7 @@ NAS 使用 `aggregator-global`，不依赖独立 `easyproxies-ech-runtime` 组�
 
 ## 月额度订阅保护
 
-## 规则
+### 规则
 
 MiSub 普通订阅登记的 `options.trafficQuota.enabled=true` 启用额度保护。
 用户的 `enabled` 仍是手动总开关，额度检查不修改它。保护按机场响应头
@@ -617,7 +619,7 @@ MiSub 普通订阅登记的 `options.trafficQuota.enabled=true` 启用额度保�
 成功读取到重置或充值后低于等于阈值的额度，下一次检查自动允许使用。
 未知、缺失、重复、非法或零总额度统计暂不允许受控来源，不视作零用量。
 
-## 节点池与下发
+### 节点池与下发
 
 每轮云端生成仍读取启用的受控来源，包括之前因额度被排除的来源；根据本轮响应头
 决定是否进入转换与审计。未取得可用额度的来源不进入该轮候选；既有注册节点 hash
@@ -638,7 +640,7 @@ MiSub 普通订阅登记的 `options.trafficQuota.enabled=true` 启用额度保�
 管理员可使用已登录 Cookie 读取 `/api/sba/quota-status` 查看状态、原始字节统计及检查时间。
 preview 不访问真实机场、不执行生产额度过滤；认证和隔离规则保持。
 
-## 生效边界
+### 生效边界
 
 这不是实时硬限流：机场统计本身可能延迟，客户端在下一次成功获取 manifest 并
 应用节点池后才停止选择该来源，已建立连接不保证即时终止。当前 NAS 检查时配置为
@@ -662,13 +664,13 @@ preview 不访问真实机场、不执行生产额度过滤；认证和隔离规
 `dc-11293c42b5134efabfefb45113f1691b` 的准确 `EASYPROXY_SBA_WRITER_UNKNOWN` 回执。
 这是现有实例的应用修复，不是新建实例，也不是把失败任务改成成功。
 
-## 为什么不能继续普通升级
+### 为什么不能继续普通升级
 
 SpringBok 仅对最近任务为 `succeeded` 或 `deployed-unverified` 的实例启用普通升级。
 该父任务已消耗执行许可并返回 `unknown`，因此不符合未启动任务的“恢复升级”条件。
 即使 EasyProxy 的写入占用已经解除，平台仍需通过正式 repair 新建关联执行记录。
 
-## 修复边界
+### 修复边界
 
 - 精确绑定父任务、run、请求摘要、结果摘要、执行器 SHA 和回执 artifact 摘要。
 - 平台请求的 previous 是失败目标 `1.0.21`；实际云端 active 必须仍是 `1.0.20`。
@@ -679,7 +681,7 @@ SpringBok 仅对最近任务为 `succeeded` 或 `deployed-unverified` 的实例�
   迁移、发布和业务验证；最终获得新的 repair 回执，旧 unknown 记录保留。
 - 该动作只接受本次准确父回执及候选版本 `1.0.23`，不是通用恢复许可。
 
-## 验收状态
+### 验收状态
 
 请求边界、父回执读取、只读检查、正常 update 路由及相关部署回归已在本地验证。
 生产升级是否成功，必须另行核对 SpringBok 新任务回执、实际发布版本及数据保留；

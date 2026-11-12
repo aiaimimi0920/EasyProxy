@@ -1,11 +1,14 @@
-# 发布、验收与发布说明
+# EasyProxy 发布、验收与发布说明
+
+## 适用范围
 
 本文按主题集中维护相关合同，按目录查阅；不包含后续阶段计划。
 
 ## 目录
-- [release-checklist](#release-checklist)
-- [release-contract](#release-contract)
-- [release-notes-template](#release-notes-template)
+
+- [发布检查清单](#release-checklist)
+- [发布产物合同](#release-contract)
+- [发布说明模板](#release-notes-template)
 
 <a id="release-checklist"></a>
 

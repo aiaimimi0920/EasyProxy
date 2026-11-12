@@ -72,7 +72,7 @@ For `upstreams/aggregator` and `upstreams/ech-workers`:
 - keep local patches narrow and easy to identify
 - run `go test ./...` for `upstreams/ech-workers`
 
-For the complete fork-to-root procedure, use `docs/DEVELOPMENT_STANDARD.md#upstream-sync` and the
+For the complete fork-to-root procedure, use `docs/development.md#upstream-sync` and the
 upstream-sync pull request template.
 
 For deployment changes:

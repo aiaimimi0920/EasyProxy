@@ -1,11 +1,14 @@
-# 架构与配置权威
+# EasyProxy 架构与配置权威
+
+## 适用范围
 
 本文按主题集中维护相关合同，按目录查阅；不包含后续阶段计划。
 
 ## 目录
-- [architecture](#architecture)
-- [topology](#topology)
-- [unified-source-architecture](#unified-source-architecture)
+
+- [系统架构](#architecture)
+- [拓扑配置](#topology)
+- [统一来源架构](#unified-source-architecture)
 
 <a id="architecture"></a>
 

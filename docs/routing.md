@@ -1,12 +1,15 @@
-# 路由、透明网关与 GeoIP
+# EasyProxy 路由、透明网关与 GeoIP
+
+## 适用范围
 
 本文按主题集中维护相关合同，按目录查阅；不包含后续阶段计划。
 
 ## 目录
-- [smart-routing](#smart-routing)
-- [default-gateway-routing](#default-gateway-routing)
-- [transparent-gateway](#transparent-gateway)
-- [geoip-data-sources](#geoip-data-sources)
+
+- [智能分流](#smart-routing)
+- [默认网关分流](#default-gateway-routing)
+- [透明网关](#transparent-gateway)
+- [GeoIP 数据来源](#geoip-data-sources)
 
 <a id="smart-routing"></a>
 

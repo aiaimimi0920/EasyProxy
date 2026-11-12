@@ -1,11 +1,16 @@
-# 开发标准与上游协作
+# EasyProxy 开发标准与上游协作
+
+## 适用范围
 
 本文按主题集中维护相关合同，按目录查阅；不包含后续阶段计划。
 
 ## 目录
-- [DEVELOPMENT_STANDARD](#DEVELOPMENT_STANDARD)
-- [upstream-sync](#upstream-sync)
 
+- [增量开发规范](#development-standard)
+- [上游协作](#upstream-sync)
+- [文档格式约定](#文档格式约定)
+
+<a id="development-standard"></a>
 <a id="DEVELOPMENT_STANDARD"></a>
 
 ## EasyProxy 增量开发规范
@@ -612,3 +617,12 @@ The root pull request must record:
 `workers/ech-workers-cloudflare` is self-owned in this repository. It does not
 follow the fork/submodule workflow above, but deployment notes and
 private credentials must still stay separated.
+
+## 文档格式约定
+
+- `docs/` 文件名使用小写英文单词，以连字符分隔，扩展名为 `.md`。
+- 每份文档只有一个一级标题，格式为 `EasyProxy + 中文主题`；先说明适用范围，再提供目录。
+- 主题使用二级标题，主题内按三级及以下组织；命令、配置键和技术术语保留原文。
+- 正文可按读者需要保留中英文；目录使用可读主题名称，不使用旧文件名充当说明。
+- 已发布的显式锚点保持兼容；更名时同步更新仓库引用、打包入口和文档测试。
+- 部署记录保留日期与验收边界，不把历史回执写成当前运行状态。

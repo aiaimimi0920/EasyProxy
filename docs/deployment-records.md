@@ -1,11 +1,14 @@
-# 部署与恢复记录
+# EasyProxy 部署与恢复记录
+
+## 适用范围
 
 本文按主题集中维护相关合同；部署记录仅描述其标注日期的事实，不代表实时状态。
 
 ## 目录
-- [cloud-usable-pool-2026-11-08](#cloud-usable-pool-2026-11-08)
-- [nas-pc2-acceptance-2026-11-11](#nas-pc2-acceptance-2026-11-11)
-- [default-gateway-deployment-2026-11-12](#default-gateway-deployment-2026-11-12)
+
+- [2026-11-08 云端可用池验收](#cloud-usable-pool-2026-11-08)
+- [2026-11-11 NAS 与 PC2 验收](#nas-pc2-acceptance-2026-11-11)
+- [2026-11-12 默认网关部署](#default-gateway-deployment-2026-11-12)
 
 <a id="cloud-usable-pool-2026-11-08"></a>
 

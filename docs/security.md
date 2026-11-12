@@ -1,10 +1,13 @@
-# 凭据、权限与 GitHub 配置
+# EasyProxy 凭据、权限与 GitHub 配置
+
+## 适用范围
 
 本文按主题集中维护相关合同，按目录查阅；不包含后续阶段计划。
 
 ## 目录
-- [github-secrets](#github-secrets)
-- [secrets-and-permissions](#secrets-and-permissions)
+
+- [GitHub 变量与凭据](#github-secrets)
+- [凭据与权限边界](#secrets-and-permissions)
 
 <a id="github-secrets"></a>
 
