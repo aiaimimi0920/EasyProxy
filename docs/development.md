@@ -151,8 +151,7 @@ Markdown 等纯文档不执行源代码行数门禁，但应按主题拆分、�
 | 100-250 | 推荐区间 | 通常无需额外说明 |
 | 251-500 | 可接受 | 必须保持一个清晰职责和合理内部结构 |
 | 501-700 | 软上限例外 | 必须说明凝聚性理由、风险和保护测试 |
-| 701-1500 | 不可作为新增完成状态 | 继续按真实职责拆分 |
-| >1500 | 硬上限违规 | 无条件二次拆分，不允许豁免 |
+| >700 | 当前 checker 硬上限违规 | 新文件必须拆分；仅既有 baseline 项按记录上限 ratchet |
 
 `150` 是设计目标，不是要求每个文件达到相同长度。拆出大量仅转发调用、没有
 独立 owner 的薄文件，同样违反本规范。
@@ -245,8 +244,10 @@ Markdown 等纯文档不执行源代码行数门禁，但应按主题拆分、�
 #### 8.2 配置权威与本地状态
 
 `topology.yaml` 是非敏感部署拓扑权威，只能保存 Secret 的环境变量引用；
-`deploy/service/base/config.yaml` 是本地运行时和 WebUI 持久化权威。拓扑更新与普通
-部署不得覆盖已经存在的运行时文件。
+通过部署入口选择的 `RuntimeConfigPath` 是本地运行时和 WebUI 持久化权威：根
+`deploy-host.ps1` 默认为启动器所在目录的 `easyproxy-runtime.yaml`，底层
+`scripts/deploy-easyproxy.ps1` 默认为 `deploy/service/base/config.yaml`；可显式指定路径。
+拓扑更新与普通部署不得覆盖已经存在的运行时文件。
 
 官方 Docker 部署必须把该宿主机文件以可写方式映射到
 `/var/lib/easyproxy/config/config.yaml`。镜像内 `/etc/easyproxy/config.yaml` 只能作为
@@ -255,8 +256,8 @@ Markdown 等纯文档不执行源代码行数门禁，但应按主题拆分、�
 `%ProgramData%\EasyProxy\config.yaml`。
 
 `upstreams/misub/.env`、`workers/ech-workers-cloudflare/.dev.vars`、bootstrap 和
-部署 manifest 属于本地或平台状态，不得提交真实秘密。旧根 `config.yaml`、派生
-renderer 和自动同步 GitHub 配置的入口已经删除，不得重新引入第二套配置决策逻辑。
+部署 manifest 属于本地或平台状态，不得提交真实秘密。根目录偶然存在的 ignored `config.yaml` 不因此成为部署入口的权威；必须核对实际参数与挂载。
+不得通过派生 renderer 或自动同步 GitHub 配置重新引入第二套配置决策逻辑。
 
 运行时恢复来源优先级必须清晰：已有配置文件优先，其次显式 bootstrap，再其次是
 import code 创建 bootstrap；启用远端后台同步时，应明确远端是否拥有后续更新权。
@@ -386,9 +387,9 @@ import code 创建 bootstrap；启用远端后台同步时，应明确远端是�
 #### 11.3 部署边界
 
 - GitHub Actions 用于验证、Cloudflare 部署、aggregator 发布、GHCR/R2/config/
-  release 发布；
+  release 发布；私有运行配置快照当前通过显式脚本入口发布，并非独立配置发布工作流；
 - 客户端本地运行时部署保持 script-driven，以根 `deploy-host.ps1` 为首选入口；
-- `deploy-host.ps1` 必须保持单文件可下载、空白宿主可 bootstrap、可无副作用自检；
+- `deploy-host.ps1` 必须保持单文件可下载、空白宿主可 bootstrap、可在不启动运行时的情况下检查源码解析（可能下载并创建缓存）；
 - 发布镜像不得依赖 bind mount 当前源码树；
 - 正式 release-grade 验证应从 GHCR 拉取目标镜像，在接近空白宿主的环境验证，
   而不是依赖开发机已有本地镜像或源码。
@@ -411,15 +412,27 @@ import code 创建 bootstrap；启用远端后台同步时，应明确远端是�
 baseline/ratchet 门禁，并在 `.github/workflows/reusable-validate.yml` 中执行。门禁
 阻止新增硬超限、旧债增长和已经下降但未移除的过期例外；软超限仍需在评审中说明。
 当前 legacy baseline 为空，后续不得用新增例外替代职责拆分。
+实际扫描仅覆盖 checker 的 `INCLUDED_PREFIXES`、扩展名和 Git 已跟踪文件；
+`.sba/`、根启动脚本和 submodule 内部不在这个根 checker 的扫描集合内，
+仍需按所属模块独立评审，不能把根门禁通过等同于全仓所有文件已自动检查。
 
 #### 12.2 根脚本与发布合同
 
 ```powershell
+python -m pip install -r requirements-ci.txt
 python -m pytest -q tests
 python -m unittest discover -s "upstreams/aggregator/tests" -p "test_*.py" -v
 python scripts/validate-release-contract.py
 git diff --check
 ```
+
+当前 `reusable-validate.yml` 根验证 job 使用 Windows；`test_linux_native_installer.py`
+依赖 POSIX shell/tar。Windows 的 shell 路径转换不匹配时可报 `Cannot connect to C:`，
+此时应单独在 Linux 验证该项，并明确记录 Windows 子集结果，不能将其算作通过。
+
+CLI 有独立 Go module，涉及拓扑或云端 CLI 时还需在 `tools/easyproxyctl` 执行
+`go test -count=1 ./...`、`go vet ./...`，并用 `go run ./cmd/easyproxyctl topology validate
+--file ../../topology.example.yaml` 校验示例。
 
 #### 12.3 `service/base`
 

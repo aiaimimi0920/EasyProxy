@@ -79,7 +79,25 @@ CI workflows:
 - `.github/workflows/deploy-cloudflare.yml`
 - `.github/workflows/deploy-aggregator.yml`
 
+### What native publication does and does not validate
+
+`publish-github-release.yml` builds all three target pairs and runs only
+`--help` / CLI-version smoke checks on Linux amd64 and Windows amd64. Linux
+arm64 is cross-built without that smoke execution. Its publish job depends on
+metadata and native builds, not on completion of the separate repository
+validation workflow. None of these steps replaces actual service startup,
+proxy traffic, update, or rollback acceptance on the target systems.
+
+The checklist above is an operator release gate, not an automatically enforced
+end-to-end acceptance gate. A matching tag push publishes with `draft=false`;
+a manual workflow defaults to `draft=true`. Complete and record the required
+validation before pushing a public release tag or promoting a draft.
+
 ### Release Artifacts
+
+原生归档 `README.md` 与发布附件 `native-install-update.md` 由
+`scripts/lib/native_guide.py` 从部署指南的原生安装节导出，不携带整本
+checkout/云部署指南；两个产物共用同一段操作说明，避免归档内出现缺失的跨文档相对链接。
 
 1. If WebUI code changed, confirm `service/base/internal/monitor/assets` was rebuilt from the current frontend source.
 2. Confirm GHCR image owner and image names are correct for the release target.

@@ -90,11 +90,13 @@ only when running the protected rotation workflow described in
 
 ### 4. Deploy the local runtime
 
-Use the repository-root launcher first. It also works when downloaded alone:
+Use the repository-root launcher first. In the checkout initialized above, explicitly select the runtime config you edited:
 
 ```powershell
-pwsh .\deploy-host.ps1 -Project easyproxy-ghcr -GhcrOwner <owner> -ReleaseTag <tag>
+pwsh .\deploy-host.ps1 -Project easyproxy-ghcr -GhcrOwner <owner> -ReleaseTag <tag> -RuntimeConfigPath .\deploy\service\base\config.yaml
 ```
+
+When downloaded alone, the launcher defaults to `easyproxy-runtime.yaml` beside itself; initialize and edit that file instead. The checkout command above deliberately selects `deploy/service/base/config.yaml` to avoid creating a second configuration authority.
 
 `deploy-host.ps1` recursively clones all public submodules and keeps
 `topology.yaml` plus `easyproxy-runtime.yaml` outside the replaceable source
@@ -446,9 +448,10 @@ curl -fLO "${base}/install.sh"
 curl -fLO "${base}/SHA256SUMS"
 grep '  install.sh$' SHA256SUMS | sha256sum -c -
 sudo sh install.sh --version "${version}" --repository "${owner_repo}"
-# Explicit config replacement only when intended:
+# Alternative to the preceding install, not a subsequent command:
+# Explicit config replacement only when installing a not-yet-installed version.
 sudo sh install.sh --version "${version}" --repository "${owner_repo}" --replace-config
-# Restore both program pointer and data snapshot:
+# Separate recovery operation: restore program pointer and data snapshot.
 sudo sh install.sh --rollback /var/lib/easyproxy/backups/before-<RELEASE_TAG>-...
 ```
 
@@ -469,12 +472,26 @@ Invoke-WebRequest "$base/SHA256SUMS" -OutFile .\SHA256SUMS
 $expected = (((Get-Content .\SHA256SUMS | Where-Object { $_ -match '\s+install-service\.ps1$' }) -split '\s+')[0]).ToLowerInvariant()
 $actual = (Get-FileHash .\install-service.ps1 -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actual -ne $expected) { throw 'installer checksum mismatch' }
+# Normal installation/update; preserve existing configuration.
 .\install-service.ps1 -Version $version -Repository $repository
+```
+
+The following are alternative operations, not subsequent steps. Both installers
+reject a release version that is already installed. To deliberately replace the
+configuration during installation of a new version, use only the first command
+below; to restore a selected backup instead, use only the second.
+
+```powershell
+# Optional: replaces active configuration with the new package example.
 .\install-service.ps1 -Version $version -Repository $repository -ReplaceConfig
+# Alternative: restore program and data from a verified, selected backup.
 .\install-service.ps1 -Rollback -BackupPath 'C:\ProgramData\EasyProxy\backups\before-<RELEASE_TAG>-...'
 ```
 
-The installer verifies `SHA256SUMS`, registers a real SCM service with an
+For downloaded packages, the installer verifies `SHA256SUMS`. With an explicit
+`-PackagePath`, it does not perform that download/checksum step: independently
+verify the local package against the trusted release checksums before invoking it.
+The installer registers a real SCM service with an
 absolute config path, enables automatic startup, opens TCP ports 22323/29888,
 and waits for the service to enter `Running`. Keep a copy of the selected
 backup until the updated service has passed application-level checks.
@@ -506,9 +523,9 @@ The contract for that file is:
 8. When the product supports blank-host deployment from GHCR or import-code
    style bootstrap, the root script should prefer that path over local-image
    shortcuts.
-9. The script should expose at least one no-side-effect self-check mode such
-   as `-ResolveRepoOnly`, so future maintainers can verify the bootstrap path
-   without launching the full runtime.
+9. The script exposes `-ResolveRepoOnly` to resolve the source checkout without
+   starting deployment or the runtime. It may still create a source cache and
+   download recursive Git submodules; it is not a filesystem/network-free check.
 
 Future deploy changes must preserve this contract.
 

@@ -343,7 +343,7 @@ The Worker always requires `ECH_TOKEN`. During rotation it also accepts
 strictly future ISO timestamp or Unix epoch. Missing, malformed, or expired
 previous-token metadata is fail-closed. Arbitrary invalid tokens remain rejected.
 
-The overlap maximum is 240 minutes. The workflow first expires the previous
+The workflow accepts overlap windows from 5 through 240 minutes. The workflow first expires the previous
 token, proves it is rejected, and then deletes both temporary bindings.
 
 ### Go helper release
@@ -566,7 +566,7 @@ Global runtime manifest 或 `subs/effective.txt` / `subs/effective.json`，不�
 北京时间 02:25、08:25、14:25、20:25，实际开始时间可能受 Actions 调度延迟影响）。
 每次都从当前 active 的批准源码执行，重新读取 MiSub 登记、下载普通订阅、合并并重新审计。
 
-NAS 现有 source-sync 每小时刷新一次可用池和 connector；不需要在 NAS 再保存两条原始订阅。
+source-sync 的默认刷新间隔为一小时（`service/base/internal/config/defaults.go`）；实际 NAS 周期以运行配置为准。原始普通订阅由云端登记和生成，不需要在 NAS 再保存副本。
 云端或本地刷新失败均不得被报告为本轮刷新成功。
 
 ### 历史部署证据
@@ -640,11 +640,17 @@ MiSub 普通订阅登记的 `options.trafficQuota.enabled=true` 启用额度保�
 管理员可使用已登录 Cookie 读取 `/api/sba/quota-status` 查看状态、原始字节统计及检查时间。
 preview 不访问真实机场、不执行生产额度过滤；认证和隔离规则保持。
 
+额度实时读取与候选生成的重定向规则不同：`.sba/misub-quota.mjs` 使用
+`redirect: 'manual'`，3xx 不跟随，会将该受控来源视作 unknown 并排除。
+因此生成阶段允许的最多三跳公开 HTTPS 重定向，不代表 manifest 额度检查也接受；
+对启用额度保护的来源，应使用能直接返回有效 `subscription-userinfo` 的 HTTPS 地址。
+
 ### 生效边界
 
 这不是实时硬限流：机场统计本身可能延迟，客户端在下一次成功获取 manifest 并
-应用节点池后才停止选择该来源，已建立连接不保证即时终止。当前 NAS 检查时配置为
-每小时同步、请求超时一分钟、无 fallback 或额外订阅。云端完整生成仍为每六小时；
+应用节点池后才停止选择该来源，已建立连接不保证即时终止。历史 NAS 验收配置是
+每小时同步、请求超时一分钟、无 fallback 或额外订阅，不代表所有安装默认值或当前现场。
+代码默认 source-sync 请求超时为 15 秒、刷新间隔为一小时；实际值须读取运行配置。云端完整生成仍为每六小时；
 已经从池中移除的节点在额度恢复后，需下一轮成功生成并下发才重新出现。
 
 单机场额度获取失败会返回成功但排除该来源的 manifest；数据库故障、整个 manifest

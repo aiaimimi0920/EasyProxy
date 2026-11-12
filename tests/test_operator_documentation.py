@@ -72,6 +72,15 @@ class OperatorDocumentationContractTests(unittest.TestCase):
                 if relative:
                     self.assertTrue((path.parent / relative).exists(), f"{path}: {target}")
 
+    def test_development_gate_limits_match_checker(self):
+        guide = (REPO_ROOT / "docs/development.md").read_text(encoding="utf-8")
+        checker = (REPO_ROOT / "scripts/check-effective-lines.py").read_text(encoding="utf-8")
+        hard_limit = re.search(r"^HARD_LIMIT = (\d+)$", checker, re.MULTILINE).group(1)
+        self.assertIn(f"| >{hard_limit} | 当前 checker 硬上限违规", guide)
+        self.assertIn("INCLUDED_PREFIXES", guide)
+        self.assertIn("easyproxy-runtime.yaml", guide)
+        self.assertIn("deploy/service/base/config.yaml", guide)
+
     def test_topic_document_format_is_consistent(self):
         for path in (REPO_ROOT / "docs").glob("*.md"):
             self.assertRegex(path.name, r"^[a-z]+(?:-[a-z]+)*\.md$")

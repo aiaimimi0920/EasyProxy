@@ -11,6 +11,8 @@ import tempfile
 import zipfile
 from pathlib import Path
 
+from lib.native_guide import native_guide
+
 
 ROOT = Path(__file__).parents[1]
 FIXED_TIME = (1980, 1, 1, 0, 0, 0)
@@ -106,8 +108,8 @@ def build(args: argparse.Namespace) -> list[Path]:
         (service / "VERSION").write_text(args.version + "\n", encoding="utf-8")
         (ctl / "VERSION").write_text(args.version + "\n", encoding="utf-8")
         (service / "config.example.yaml").write_text(render_config(args.platform, args.version), encoding="utf-8")
-        shutil.copyfile(ROOT / "docs/deployment.md", service / "README.md")
-        shutil.copyfile(ROOT / "docs/deployment.md", ctl / "README.md")
+        (service / "README.md").write_text(native_guide(), encoding="utf-8")
+        (ctl / "README.md").write_text(native_guide(), encoding="utf-8")
         if args.platform == "linux":
             install = service / "install"
             install.mkdir()

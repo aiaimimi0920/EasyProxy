@@ -131,12 +131,16 @@ go -C tools/easyproxyctl run ./cmd/easyproxyctl topology validate --file ../../t
   only environment variable names.
 - Cloudflare APIs own live resource identity. A deployment manifest records the
   observed IDs and versions but does not replace API discovery.
-- `deploy/service/base/config.yaml` owns EasyProxy runtime settings and WebUI
-  persistence. Topology does not overwrite that file during ordinary updates.
+- The selected runtime configuration file owns EasyProxy settings and WebUI
+  persistence. `deploy-host.ps1` defaults to `easyproxy-runtime.yaml` relative
+  to the launcher root; `scripts/deploy-easyproxy.ps1` defaults to
+  `deploy/service/base/config.yaml`. Both accept `-RuntimeConfigPath`. Topology
+  does not overwrite the selected file during ordinary updates.
 
-The former root `config.yaml` and derived-config renderer were removed. Local
-runtime initialization copies `deploy/service/base/config.template.yaml` once;
-ordinary deploys and topology updates never overwrite the resulting file.
+Runtime initialization uses `deploy/service/base/config.template.yaml` when
+the selected file is missing. An ignored legacy root `config.yaml` is not a
+second configuration authority. Ordinary deploys and topology updates preserve
+the selected runtime file.
 
 ### Deterministic Names
 

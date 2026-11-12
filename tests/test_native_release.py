@@ -40,6 +40,10 @@ class NativeReleaseTests(unittest.TestCase):
             self.assertEqual(hashlib.sha256(archive.read_bytes()).digest(), hashlib.sha256((second_dist / archive.name).read_bytes()).digest())
             with tarfile.open(archive) as package:
                 names = package.getnames()
+                readme = package.extractfile("README.md").read().decode("utf-8")
+                self.assertIn("Native install, update, and rollback", readme)
+                self.assertNotIn("Cloud bootstrap", readme)
+                self.assertNotIn("](security.md", readme)
             self.assertIn("bin/easy-proxy", names)
             self.assertIn("bin/ech-workers", names)
             self.assertIn("config.example.yaml", names)

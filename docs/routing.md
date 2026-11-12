@@ -122,14 +122,18 @@ values restore the defaults above without rebuilding sing-box.
 
 ### Stickiness semantics
 
-- **stable buckets** — keyed by a stable hash of the (normalized) filter. The
-  default entry (no filter) is one bucket; `cc=US` is another; `jp` is another.
+- **stable buckets** — keyed by the normalized filter and preferred protocol
+  families, namespaced by Profile ID/revision and selection tier when present.
+  Within that same namespace, the default entry (no filter) is one bucket;
+  `cc=US` is another; `jp` is another.
   All traffic in a bucket shares one node; on failure the bucket promotes the
   next best healthy candidate. A manually pinned tag (`pin=`) is used if it is a
   live candidate, otherwise it falls through to bucket promotion (auto fail-over
   to the next stable node).
 - **session bindings** — keyed by the client-supplied session key, or the client
-  source IP when no key is given. Idle bindings expire after `routing.session.ttl`
+  source IP when no key is given, and namespaced by Profile ID/revision and
+  selection tier when present. See [device selection tiers](local-server.md#device-selection-tiers).
+  Idle bindings expire after `routing.session.ttl`
   (default 10m). If the bound node dies mid-session the session is rebound to a
   new candidate (stickiness is necessarily broken on death).
 
@@ -157,7 +161,8 @@ Tokens (case-insensitive, `+`-separated):
 | `jp` `kr` `us` `hk` `tw` `other` | region filter (repeatable) |
 | `cc=US` | country ISO filter (repeatable) |
 | `long` / `nolong` | long-lived filter on/off |
-| `pin=<tag>` | manual node pin |
+| `pin=<tag>` | preferred node pin; eligible alternatives may be used on failure |
+| `pin-strict=<tag>` | required node tag; fails closed rather than selecting another node |
 | `sid=<key>` | session key |
 | `split` / `nosplit` | enable/disable splitting (nosplit = force PROXY) |
 
@@ -165,6 +170,11 @@ Tokens (case-insensitive, `+`-separated):
 
 `X-Proxy-Strategy`, `X-Proxy-Country`, `X-Proxy-Region`, `X-Proxy-Long-Lived`,
 `X-Proxy-Pin`, `X-Proxy-Session`, `X-Proxy-Split`.
+
+There is no strict-pin HTTP header. Use the `pin-strict=<tag>` token in the
+path/username channel for a required node. It remains subject to eligibility
+and hard filters; it does not force an unavailable node to become usable.
+Unlike ordinary `pin=`, it never permits failover to a different tag.
 
 `X-Proxy-Split: off` disables splitting (force all-proxy; common for crawlers).
 

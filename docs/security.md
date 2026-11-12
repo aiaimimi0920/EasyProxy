@@ -156,31 +156,24 @@ command lines, committed `.env` files, or public API responses.
 
 ## Secrets And Permissions
 
-Topology stores environment variable names only. Resolved values belong in a
-GitHub Environment or the local process environment and must never enter Git,
+Topology stores environment variable names only. Resolved values belong in
+the repository/Environment scope selected below or the local process environment, and must never enter Git,
 artifacts, manifests, summaries, or command arguments that are logged.
 
-| Topology reference | Recommended GitHub location | Required for | Minimum purpose |
-| --- | --- | --- | --- |
-| `CLOUDFLARE_API_TOKEN` | Environment secret | cloud components | Pages, D1, Workers, and configured R2 resources |
-| `CLOUDFLARE_ACCOUNT_ID` | Repository variable | cloud components | select one exact account; never pick the first account implicitly |
-| `CLOUDFLARE_ZONE_ID` | Repository variable | custom domains | select the exact DNS zone |
-| `CLOUDFLARE_DNS_TOKEN` | Environment secret | managed custom DNS | DNS edit for the selected zone only |
-| `MISUB_ADMIN_PASSWORD` | Environment secret | MiSub | administrative login |
-| `MISUB_COOKIE_SECRET` | Environment secret | MiSub | stable session signing key |
-| `MISUB_MANIFEST_TOKEN` | Environment secret | MiSub/EasyProxy | machine manifest authentication |
-| `MISUB_CRON_SECRET` | Environment secret | MiSub cron | cron endpoint authentication |
-| `EASYPROXY_BACKUP_PASSPHRASE` | Environment secret | MiSub backup/restore | independent age archive encryption |
-| `ECH_TOKEN` | Environment secret | ECH Worker | WebSocket connector authentication |
-| `ECH_TOKEN_NEXT` | rotation Environment secret | ECH rotation | candidate token; ordinary update never reads it |
-| `EASYPROXY_REPOSITORY_ADMIN_TOKEN` | rotation Environment secret | ECH rotation | repository Secrets write only |
-| `EASYPROXY_MANAGEMENT_PASSWORD` | rotation Environment secret | ECH rotation | dedicated EasyProxy validator authentication |
-| `R2_ACCESS_KEY_ID` | Environment secret | Aggregator/backup | selected bucket access key ID |
-| `R2_SECRET_ACCESS_KEY` | Environment secret | Aggregator/backup | selected bucket secret key |
+Use the [core matrix](#core-matrix) as the single credential-location reference.
+The root standalone deploy/backup workflows consume repository secrets; putting
+those values only in an Environment does not make them available to these jobs.
+SBA instance secrets use their separate prefixed names and instance Environment,
+as described under [SpringBok 套件刷新](#springbok-套件刷新).
 
-Use separate DNS and deployment tokens when custom DNS is enabled. Production
-deployments use a protected GitHub Environment; pull-request validation receives
-no production secrets. Restore and token rotation require manual approval.
+Use separate DNS and deployment tokens when custom DNS is enabled. The current
+`deploy-cloudflare.yml`, `deploy-aggregator.yml`, and `backup-misub.yml` jobs do
+not declare a protected Environment. `restore-misub.yml` binds
+`easyproxy-misub-restore`, and `rotate-ech-token.yml` binds
+`easyproxy-ech-rotation`; configure required reviewers on those Environments.
+An `environment:` name alone does not create an approval gate. SBA refresh binds
+its selected instance Environment. Pull-request validation has only `contents:
+read` permission and no declared secret inputs.
 
 Pass secret values to child processes only through inherited environment
 variables or standard input. Do not expose them as PowerShell or executable

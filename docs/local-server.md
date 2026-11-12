@@ -168,11 +168,14 @@ network mode has been verified to preserve the original LAN source address.
 
 `topology.yaml` selects the local component, install mode, access mode, and
 release channel. It never owns listeners, credentials, routing rules, devices,
-or Profiles. Those fields live directly in
-`deploy/service/base/config.yaml`, which is initialized once and then preserved
-across ordinary deploys and updates.
+or Profiles. Those fields live in the selected runtime configuration file.
+The root `deploy-host.ps1` defaults to `easyproxy-runtime.yaml` relative to its
+launcher root; the repository helper `scripts/deploy-easyproxy.ps1` defaults to
+`deploy/service/base/config.yaml`. `-RuntimeConfigPath` selects a different
+file. The selected file is initialized when missing and preserved across
+ordinary deploys and updates.
 
-Initialize and deploy from the repository root:
+For the repository-helper default path, initialize and deploy from the repository root:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\init-runtime-config.ps1
