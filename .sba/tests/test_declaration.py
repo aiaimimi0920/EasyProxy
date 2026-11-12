@@ -13,7 +13,7 @@ def test_published_contract_matches_real_entry_actions_and_exact_secret_set():
     manifest = json.loads((root / "manifest.json").read_bytes())
     declaration = json.loads((root / "deployment.json").read_bytes())
     assert manifest["schemaVersion"] == 3 and declaration["schemaVersion"] == 2
-    assert manifest["id"] == APPLICATION_ID and set(manifest["actions"]) == ACTIONS
+    assert manifest["id"] == APPLICATION_ID and set(manifest["actions"]) == ACTIONS - {"repair"}
     assert manifest["runtime"] == {"runner": "ubuntu-24.04", "powershell": "7.6.9", "python": "3.12", "node": "22"}
     assert set(manifest["secrets"]) == SECRETS and len(manifest["secrets"]) == len(SECRETS)
     assert (root / manifest["entrypoint"]).is_file()
@@ -22,14 +22,20 @@ def test_published_contract_matches_real_entry_actions_and_exact_secret_set():
     assert all(0 < value["timeoutSeconds"] <= 3600 for value in manifest["actions"].values())
 
 
-def test_release_only_advertises_exact_writer_idle_update_recovery():
+def test_historical_release_only_advertised_exact_writer_idle_update_recovery():
     from repair_context import WRITER_IDLE_CONTEXT
-    manifest = json.loads((Path(__file__).parents[1] / "manifest.json").read_bytes())
+    manifest = json.loads((Path(__file__).parent / "fixtures/manifest-1.0.23.json").read_bytes())
     assert manifest["version"] == "1.0.23"
     repair, = manifest["repairs"]
     assert repair["id"] == WRITER_IDLE_CONTEXT["repairId"]
     assert repair["fromErrorCodes"] == [WRITER_IDLE_CONTEXT["errorCode"]]
     assert repair["fromActions"] == ["update"] and set(repair["secretNames"]) == SECRETS
+
+
+def test_current_release_retires_version_bound_one_time_repairs():
+    manifest = json.loads((Path(__file__).parents[1] / "manifest.json").read_bytes())
+    assert manifest["version"] == "1.0.24"
+    assert "repair" not in manifest["actions"] and "repairs" not in manifest
 
 
 def test_declaration_templates_produce_the_exact_seven_resource_application_inventory():
