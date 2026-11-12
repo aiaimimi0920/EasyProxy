@@ -175,7 +175,7 @@ jobs:
           cp deploy/native/linux/easyproxy.service dist/easyproxy.service
           cp deploy/native/linux/install.sh dist/install.sh
           cp deploy/native/windows/install-service.ps1 dist/install-service.ps1
-          cp docs/native-install-update.md dist/native-install-update.md
+          cp docs/deployment.md dist/native-install-update.md
           python scripts/build-native-release-manifest.py \
             --directory dist \
             --version '${{ needs.metadata.outputs.version }}' \

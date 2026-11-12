@@ -9,7 +9,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACT_PATH = ROOT / "release-contract.json"
-DOC_PATH = ROOT / "docs" / "release-contract.md"
+DOC_PATH = ROOT / "docs" / "release.md"
 
 
 def load_contract() -> dict[str, Any]:

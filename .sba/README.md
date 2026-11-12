@@ -12,7 +12,7 @@
 - [ECH 发布](ech.md)、[Pages 发布](pages.md)：阶段职责、归属校验、单次写入。
 - [Aggregator](aggregator.md)：生成、真实消费审计、晋级和受限同步。
 - [工具链](toolchain.md)：固定依赖、TLS 与测试运行条件。
-- [云端可用池](../docs/cloud-usable-pool.md)：普通订阅、agg 与 connector 分工。
+- [云端可用池](../docs/cloud-operations.md#cloud-usable-pool)：普通订阅、agg 与 connector 分工。
 
 ## 不变的操作边界
 

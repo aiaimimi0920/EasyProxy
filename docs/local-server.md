@@ -1,4 +1,14 @@
-# Local Server Device Profiles
+# Local Server 与设备策略
+
+本文按主题集中维护相关合同，按目录查阅；不包含后续阶段计划。
+
+## 目录
+- [local-server](#local-server)
+- [device-selection-tiers](#device-selection-tiers)
+
+<a id="local-server"></a>
+
+## Local Server Device Profiles
 
 Local Server turns one EasyProxy instance into a trusted-LAN proxy gateway for
 multiple devices. Every client uses the same canonical username/password and
@@ -9,7 +19,7 @@ No standalone client, device agent, browser extension, or companion daemon is
 required. Configure the operating system, browser, command-line tool, or
 application to use EasyProxy as a normal HTTP or SOCKS5 proxy.
 
-## Topology
+### Topology
 
 ```text
 trusted LAN clients
@@ -41,15 +51,15 @@ The standard ports are:
 - `22323/tcp`: one mixed HTTP/CONNECT/SOCKS5 proxy entry.
 - `29888/tcp`: embedded Web Console and management API.
 
-## Device selection tiers
+### Device selection tiers
 
 Profiles support two optional country/latency/stability priorities and a fixed
-final general-pool fallback. See [Device selection tiers](device-selection-tiers.md)
+final general-pool fallback. See [Device selection tiers](local-server.md#device-selection-tiers)
 for metrics, bounded retries, hard-filter compatibility, and TUN/transparent
 source-address resolution. The final proxy-pool tier is separate from DIRECT
 routing and the gateway's existing fail-open setting.
 
-## Shared And Independent Profiles
+### Shared And Independent Profiles
 
 The shared Profile is stored in the normal YAML `routing` block. An independent
 Profile is stored in SQLite and is a complete snapshot owned by one device ID.
@@ -77,7 +87,7 @@ Important lifecycle rules:
 - If the pool is empty or idle, the listener remains available: `DIRECT`
   requests continue to work and `PROXY` requests fail explicitly.
 
-## Canonical Credential
+### Canonical Credential
 
 Local Server has one canonical credential under `local_server.auth`. The
 runtime derives the proxy listener and management password from it, so the Web
@@ -110,7 +120,7 @@ rebinding `22323`; established relay connections may finish, while new requests
 must use the new credential. Enabling/disabling Local Server or changing its
 listen address still requires a topology reload.
 
-## Device Resolution
+### Device Resolution
 
 Identity resolution has fixed precedence:
 
@@ -134,7 +144,7 @@ clients still use the canonical shared credential, and an authenticated client
 can claim another valid device ID. This is an intentional single-owner/trusted-
 LAN boundary, not multi-tenant isolation.
 
-### Docker And NAT Warning
+#### Docker And NAT Warning
 
 The resolver reads the actual TCP peer address. It does not trust
 `X-Forwarded-For`, and it does not automatically learn mappings.
@@ -149,9 +159,9 @@ Use explicit `+dev=<device_id>` identities whenever device selection must be
 stable. Treat IP/CIDR mappings as best-effort fallback unless the deployed
 network mode has been verified to preserve the original LAN source address.
 
-## Configuration
+### Configuration
 
-### Deployment Topology And Runtime Config
+#### Deployment Topology And Runtime Config
 
 `topology.yaml` selects the local component, install mode, access mode, and
 release channel. It never owns listeners, credentials, routing rules, devices,
@@ -172,7 +182,7 @@ Official Docker deployments mount that host file at the writable container path
 `/var/lib/easyproxy/config/config.yaml`; the image's `/etc/easyproxy/config.yaml`
 is bootstrap-only.
 
-### Runtime Config Example
+#### Runtime Config Example
 
 For the root deployment wrapper, a directly launched binary, or a service-level
 Docker mount, use the direct service schema:
@@ -229,14 +239,14 @@ Local Server enabled mode rejects:
 To use legacy multi-port, hybrid, extra-listener, or route-B behavior, set
 `local_server.enabled: false`. Legacy Smart Routing remains available in that
 mode through the `routing` configuration described in
-[`smart-routing.md`](./smart-routing.md).
+[`routing.md#smart-routing`](./routing.md#smart-routing).
 
-## Client Examples
+### Client Examples
 
 The examples below use an explicit `laptop` device ID. Remove `+dev=laptop` to
 allow IP mapping or shared fallback resolution.
 
-### Plain HTTP Proxy
+#### Plain HTTP Proxy
 
 An HTTP URL sent through an HTTP proxy uses absolute-form requests:
 
@@ -246,7 +256,7 @@ curl --proxy http://192.168.10.20:22323 \
   http://example.com/
 ```
 
-### HTTPS CONNECT
+#### HTTPS CONNECT
 
 An HTTPS target through the HTTP proxy causes `curl` to establish a CONNECT
 tunnel:
@@ -257,7 +267,7 @@ curl --proxy http://192.168.10.20:22323 \
   https://example.com/
 ```
 
-### SOCKS5
+#### SOCKS5
 
 Use `socks5h` when DNS should be resolved through the proxy path:
 
@@ -272,7 +282,7 @@ device syntax. HTTP keep-alive requests resolve the current Registry per
 request. A SOCKS5 CONNECT relay keeps the identity selected during its
 authentication handshake; a new connection reads the current Registry.
 
-## Web Console
+### Web Console
 
 Open `http://<easyproxy-host>:29888/`, sign in with the canonical username and
 password, then open `#devices` (the **Device Profiles** / `设备策略` tab).
@@ -291,9 +301,9 @@ Unsaved Profile edits are guarded when changing devices, tabs, or browser hash
 routes. A `409` conflict does not overwrite the local form; reload the server
 version or discard the local edit explicitly.
 
-## Management API And CAS
+### Management API And CAS
 
-### Authentication
+#### Authentication
 
 The Web Console uses `POST /api/auth` to create a session cookie/token:
 
@@ -317,7 +327,7 @@ curl --user 'easyproxy:replace-with-the-real-password' \
 `Proxy-Authorization` is intentionally ignored by management APIs; proxy
 authentication cannot impersonate management authentication.
 
-### Resource Paths
+#### Resource Paths
 
 ```text
 GET /api/local-server/status
@@ -345,7 +355,7 @@ The legacy `/api/routing/config` and `/api/routing/status` paths are shared-
 Profile compatibility aliases. New device-aware integrations should use the
 `/api/local-server/*` resources.
 
-### Revision And CAS Example
+#### Revision And CAS Example
 
 Profile, device, and mapping writes use optimistic concurrency. Create with
 `If-None-Match: *` / `expected_revision: 0`; update or delete with
@@ -403,7 +413,7 @@ and a resource summary. Full Profile updates are complete replacements; there
 is no implicit JSON merge. Only the dedicated `/profile/enabled` endpoint is a
 partial Profile mutation.
 
-## Network Security Boundary
+### Network Security Boundary
 
 Local Server is designed for a trusted private LAN. The shared credential does
 not provide per-device authorization, and the standard proxy and management
@@ -426,7 +436,7 @@ credential over untrusted plaintext networks. A TLS reverse proxy must also be
 configured carefully if it fronts proxy traffic; IP mapping remains based on
 the TCP peer and does not trust forwarded-address headers.
 
-## Troubleshooting
+### Troubleshooting
 
 | Symptom | Meaning and action |
 | --- | --- |
@@ -440,3 +450,177 @@ the TCP peer and does not trust forwarded-address headers.
 | Several devices unexpectedly use one Profile | Docker/NAT/reverse proxying probably collapsed their observed source IP. Check `peer_address_mode` and `source_ip_warning`, inspect last-seen addresses, and switch clients to explicit `+dev=<device_id>`. |
 | Independent Profile did not follow a shared edit | This is expected. Independent Profiles are snapshots with separate revisions. Delete the independent Profile to return to shared, or edit/copy it explicitly. |
 | Password field is blank after refresh | This is expected redaction. `password_set: true` confirms a stored secret; enter a value only when rotating it. |
+
+<a id="device-selection-tiers"></a>
+
+## Device selection tiers
+
+The local runtime supports two optional ordered node-selection tiers, followed
+by the existing general proxy pool. This is a local policy feature: cloud
+manifests, subscriptions, connectors, and their refresh contracts do not change.
+There is one global pool, not one pool or container per device.
+
+### Configuration and compatibility
+
+Set `selection_tiers` on a shared or independent forwarding Profile. The shared
+Profile persists as `routing.selection_tiers` in the runtime YAML. Independent
+Profiles persist in SQLite as complete snapshots with their existing revisions.
+The same editor serves both scopes; copying shared creates a one-time snapshot.
+
+```yaml
+routing:
+  selection_tiers:
+    - kind: country
+      country: US
+    - kind: latency
+```
+
+At most two configured tiers are accepted. Supported kinds are `country`,
+`latency`, and `stability`. Country requires a two-letter country code, normalized
+to uppercase. The other kinds reject a country value. Ordering is preserved.
+The implicit final tier cannot be removed or configured. Disabling the first
+configured tier in the editor promotes the second to first.
+
+An omitted or empty chain retains legacy selection behavior. The older
+`/api/routing/config` alias preserves a saved chain when old clients omit the
+field; an explicit empty array clears it. Full Profile PUT remains a complete
+replacement: omitting `selection_tiers` clears it, just like an explicit empty array.
+Full Profile clients should GET the current definition, edit it, and PUT with
+the current revision; stale revisions return 409. Validation precedes publication and existing revision/CAS conflict
+handling still applies.
+
+Existing `node_filter` fields, request-level country filters, strict required
+node tags, authentication quarantine, and network/protocol support remain hard
+constraints across every tier. Thus the general tier means all otherwise
+eligible nodes in the global pool, not permission to escape a hard filter.
+For country *preference*, use a country tier rather than a country hard filter.
+Country labels use the node server address's existing GeoIP metadata, not a new
+measurement or promise about actual public egress geography.
+
+### Choosing and falling through
+
+1. A country tier chooses eligible nodes with that country label.
+2. A latency tier chooses the lowest fresh successful probe duration.
+3. A stability tier chooses the smallest population standard deviation of
+   recent successful probe durations, measured in time units.
+4. When a configured tier has no eligible candidate or its bounded dial budget
+   is exhausted, selection advances. The final tier uses existing general-pool
+   selection.
+
+Each tier may try at most two distinct nodes; failed node tags are excluded
+across the whole dial. With two configured tiers there are at most six attempts,
+with one at most four. Each setup attempt is bounded to five seconds and the
+whole tiered selection to thirty seconds, or the caller's earlier deadline.
+This is a bounded availability attempt, not exhaustive proof that every node in
+a large country is unusable. It prevents a large failing preferred set from
+starving the second and general tiers. Legacy empty chains retain existing
+`MaxRetries` behavior. Caller cancellation is not evidence of node failure.
+
+For Hysteria2 TCP, a tier is not ready merely because a cached QUIC session
+returns a lazy stream. Before exposing the connection, the pool sends only the
+destination request header and validates the protocol's TCP response within the
+setup budget. No application payload is sent or read during this check, so a
+failed handshake can safely advance to another tier without replaying a request.
+This is specific to the pinned Hysteria2 implementation, not a generic empty
+read/write trick for other protocols. It adds a handshake round trip before
+application traffic instead of coalescing the first payload into that handshake.
+A failed attempt may already have opened an empty TCP connection at the target
+before its confirmation was lost. This avoids replaying application requests;
+it is not an exactly-once guarantee for TCP connection establishment.
+
+Known unavailable nodes are not preference candidates. Existing mandatory
+protocol constraints remain in effect, including available native UDP protocol
+requirements. Country and general tiers use `auto`, `stable`, or `session`
+within their candidate set. Latency and stability tiers rank by their stated
+metric and do not let a sticky binding or an ordinary `pin=`/`X-Proxy-Pin`
+override it. A strict required tag remains a hard constraint.
+
+Stable/session bindings are isolated by Profile ID, revision, and tier. A
+recovered preferred tier is reconsidered for new flows. Established connections
+are not forcibly migrated. Unknown peers have no synthetic session key; NAT
+clients with the same observed IP and shared Profile may still share an IP-based
+session, as before. Independent Profile IDs or explicit session keys avoid that
+ambiguity.
+
+### Probe measurements and cold starts
+
+Latency history is a bounded ring of at most eight successful probe durations.
+Stability requires at least three valid samples. Samples are actual probe
+measurements, not traffic success counters, health scores, or synthetic copies
+of a persisted last latency.
+
+The latest sample must be no older than `max(10 minutes, 2 × health interval)`.
+History spans at most `max(10 minutes, 8 × health interval)`. At the default
+2-hour health interval these limits are 4 hours and 16 hours; jitter becomes
+usable after three successful probes for the same node. A reload preserves
+in-memory samples and their timestamps only when the tag and nonempty node URI
+are unchanged. Changed or unknown node identity starts cold; persisted last
+latency never becomes artificial history. No new background probe frequency
+is introduced. Missing, stale, or insufficient
+measurements skip that metric tier and allow the next tier/general pool.
+Concurrent updates and stale probe generations cannot overwrite current samples.
+
+### Device resolution and entry paths
+
+With Local Server enabled, explicit HTTP, HTTPS CONNECT, SOCKS5, native TUN,
+and legacy transparent TCP use the same live Profile registry. Explicit proxy
+identity takes precedence, then enabled source IP/CIDR mappings, then shared
+fallback. TUN uses the original inbound source address, never the destination or
+forwarded HTTP headers. Legacy transparent TCP uses the socket peer. Missing
+source metadata selects shared fallback without inventing a device.
+
+TUN applies the selected Profile's rules, enabled state, filters, tier chain,
+long-lived policy, and session policy to both TCP and UDP. Disabled Profiles
+retain the existing DIRECT behavior. UDP keeps its separate affinity namespace
+and native-protocol availability requirements. When Local Server is disabled,
+legacy gateway behavior remains in effect, with optional shared tier selection.
+
+A newly started replacement TUN instance admits no TCP or UDP flows until the
+matching configuration and Profile publication has committed. Failed candidates
+remain closed, and rollback admits flows only after the restored configuration
+has been published. This admission check runs before DIRECT rules and fail-open
+handling, preventing traffic through a half-published reload.
+
+IP/CIDR mappings are policy selectors, not authentication. Docker/NAT/VPN or
+reverse-proxy topology can collapse several clients to one peer. Explicit
+`+dev=<id>` is preferred for stable explicit-proxy identification. Transparent
+clients need verified source preservation and stable IP mappings; the service
+cannot recover identities erased by NAT. Existing shared canonical credentials
+do not enforce separate device authorization.
+
+### Direct routing and failure boundary
+
+The three tiers apply only after a routing decision selects PROXY. Existing
+DIRECT rules, a disabled Profile, and gateway fail-open settings remain separate
+controls. The third tier is a proxy-pool fallback, never DIRECT itself. If the
+entire proxy selection fails, explicit proxy requests fail as before; a gateway
+with `no_available_proxy_policy: DIRECT` may then use its existing direct
+fallback. This feature therefore does not promise strict-US routing or prevent
+all direct traffic, IPv6 bypass, or unsupported UDP paths.
+
+Selection cannot guarantee delivery after a connection has been returned. An
+established TCP stream, UDP session, or another protocol whose readiness is not
+acknowledged may still fail before health monitoring detects the outage. The
+pool never replays application bytes or datagrams onto a different node. Such
+failures remain visible to the caller; new flows can use the next healthy node.
+
+### Validation before deployment
+
+Use isolated configuration/data and loopback ports. Cover shared and independent
+Profiles concurrently, missing/unknown source, IPv4/IPv6 source identities,
+HTTP/CONNECT/SOCKS, TCP/UDP TUN, first/second/general fallthrough, missing metrics,
+failed dials, cancellation, hot edits, and stale revisions. A successful unit
+suite or WebUI build does not prove an actual NAS TUN deployment. Back up both
+runtime configuration and SQLite state before a separately approved deployment.
+
+### Legacy pool 与 TUN 共享策略热更新
+
+共享 `selection_tiers` 不以 Local Server 或 smart routing 开关为前提。
+旧版 pool 模式的默认 HTTP/SOCKS 入口及额外 pool 监听器，在每条新连接上读取已发布的共享选择快照；
+无策略或清空策略时保持原 pool 模式行为。显式设备 directive 始终优先，不由共享选择覆盖。
+非 Local Server TUN 每条新 TCP/UDP 流读取共享选择快照，但保留原 gateway 路由策略，
+不会因 shared profile 的 routing.enabled=false 而改成全直连，也不会隐式启用设备映射。
+UDP 仍要求可用的原生 UDP 节点。地域池、单节点池和 bootstrap 池不受共享默认策略覆盖。
+
+热更新只影响新流，不中断或重放现有连接。新增 generation admission 防止未提交或失败候选
+box 使用上一代策略接收新连接；回滚快照包含策略、共享修订号及硬过滤条件。

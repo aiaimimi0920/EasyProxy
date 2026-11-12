@@ -140,7 +140,7 @@ Fork-neutral aggregator fallback example:
 Replace the base domain with `cloudflare.resources.r2_public_base_url` from the
 operator topology. The path must stay bound to the `public-effective` entry in
 `manifests/stable.json`; see
-[`docs/aggregator-publication.md`](../../../docs/aggregator-publication.md).
+[`docs/cloud-operations.md#aggregator-publication`](../../../docs/cloud-operations.md#aggregator-publication).
 
 Recommended management probe target for ECH-heavy profiles:
 
@@ -459,7 +459,7 @@ bootstrap the runtime config from private R2 storage before starting
 
 See:
 
-- [`service-base-config-distribution.md`](../../../docs/service-base-config-distribution.md)
+- [`deployment.md#service-base-config-distribution`](../../../docs/deployment.md#service-base-config-distribution)
 
 ## Local Source Management
 

@@ -106,8 +106,8 @@ def build(args: argparse.Namespace) -> list[Path]:
         (service / "VERSION").write_text(args.version + "\n", encoding="utf-8")
         (ctl / "VERSION").write_text(args.version + "\n", encoding="utf-8")
         (service / "config.example.yaml").write_text(render_config(args.platform, args.version), encoding="utf-8")
-        shutil.copyfile(ROOT / "docs/native-install-update.md", service / "README.md")
-        shutil.copyfile(ROOT / "docs/native-install-update.md", ctl / "README.md")
+        shutil.copyfile(ROOT / "docs/deployment.md", service / "README.md")
+        shutil.copyfile(ROOT / "docs/deployment.md", ctl / "README.md")
         if args.platform == "linux":
             install = service / "install"
             install.mkdir()

@@ -111,9 +111,9 @@ cp ./config.example.yaml ./config.yaml
 - `source_sync.connector_runtime.*`: 当 manifest 含有 `connector_type = ech_worker` 时，本地拉起 `ech-workers` 并转换成临时上游代理
 - `connectors[]` / manifest `connector`: 也支持 `connector_type = zenproxy_client`，运行时会请求 ZenProxy `/api/client/fetch` 并把返回的 sing-box outbound 转成临时节点
 - 纯 `source_sync` / 纯 connector 场景现在也可直接启动，不再需要本地占位节点
-- `routing.*`: 智能分流入口（默认关闭）。开启后接管 `listener` 端口，HTTP/HTTPS 与 SOCKS5 同端口共存，提供「规则分流（直连/代理）+ 选节点策略（stable/session/auto）+ 节点属性筛选（国家/地区/长效）」三层能力。默认入口（系统代理、无参数）走「中国直连 + 其余 stable 长效稳定」；API 调用可用路径前缀 / `X-Proxy-*` 头 / SOCKS5 username 令牌覆盖。详见 [`docs/smart-routing.md`](../../docs/smart-routing.md)
+- `routing.*`: 智能分流入口（默认关闭）。开启后接管 `listener` 端口，HTTP/HTTPS 与 SOCKS5 同端口共存，提供「规则分流（直连/代理）+ 选节点策略（stable/session/auto）+ 节点属性筛选（国家/地区/长效）」三层能力。默认入口（系统代理、无参数）走「中国直连 + 其余 stable 长效稳定」；API 调用可用路径前缀 / `X-Proxy-*` 头 / SOCKS5 username 令牌覆盖。详见 [`docs/routing.md#smart-routing`](../../docs/routing.md#smart-routing)
 - `local_server.*`: 局域网 Local Server（默认关闭）。开启后要求 `mode: pool`、`listener.protocol: mixed`，由一套 canonical 用户名/密码同时保护 Web、管理 API、HTTP/CONNECT 和 SOCKS5；支持 shared Profile、完全独立的设备 Profile，以及显式 `+dev=<device_id>` / IP-CIDR 映射选择。设备无需安装独立客户端。详见 [`docs/local-server.md`](../../docs/local-server.md)
-- `gateway.*`: Linux/NAS 原生透明 TCP 网关（默认关闭）。支持物理 LAN、Tailscale、星空组网等承载层，通过接口/CIDR 接入同一 EasyProxy 规则和节点池；无可用节点时按 fail-open DIRECT。需要 host networking、`NET_ADMIN`/`NET_RAW` 和宿主机 forwarding/policy routing。详见 [`docs/transparent-gateway.md`](../../docs/transparent-gateway.md)
+- `gateway.*`: Linux/NAS 原生透明 TCP 网关（默认关闭）。支持物理 LAN、Tailscale、星空组网等承载层，通过接口/CIDR 接入同一 EasyProxy 规则和节点池；无可用节点时按 fail-open DIRECT。需要 host networking、`NET_ADMIN`/`NET_RAW` 和宿主机 forwarding/policy routing。详见 [`docs/routing.md#transparent-gateway`](../../docs/routing.md#transparent-gateway)
 
 Local Server 的 IP 映射只读取实际 TCP peer address。Docker bridge、端口
 映射和 NAT 可能让多个设备显示为同一个网关 IP，因此稳定设备选择应优先

@@ -72,7 +72,7 @@ For `upstreams/aggregator` and `upstreams/ech-workers`:
 - keep local patches narrow and easy to identify
 - run `go test ./...` for `upstreams/ech-workers`
 
-For the complete fork-to-root procedure, use `docs/upstream-sync.md` and the
+For the complete fork-to-root procedure, use `docs/DEVELOPMENT_STANDARD.md#upstream-sync` and the
 upstream-sync pull request template.
 
 For deployment changes:
@@ -80,11 +80,11 @@ For deployment changes:
 - update the corresponding notes under `deploy/`
 - update the corresponding private operator notes under `AIRead` outside this
   repository when needed
-- if the change affects release or publish flow, check `docs/release-checklist.md`
+- if the change affects release or publish flow, check `docs/release.md#release-checklist`
 - if the change affects GitHub-hosted deployment or secret usage, update
-  `docs/github-secrets.md`
+  `docs/security.md#github-secrets`
 - if the change affects import-code/bootstrap flow, update
-  `docs/service-base-config-distribution.md`
+  `docs/deployment.md#service-base-config-distribution`
 
 ## Commit Style
 

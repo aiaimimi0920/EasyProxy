@@ -71,8 +71,8 @@ Current note:
   - behavior:
     - triggers the native `deploy-aggregator.yml` workflow in this repository
 - GitHub repository secrets and variables are documented in
-  [`docs/github-secrets.md`](../../../docs/github-secrets.md).
+  [`docs/security.md#github-secrets`](../../../docs/security.md#github-secrets).
 - GitHub Actions runtime and verification notes are documented in
-  [`docs/aggregator-publication.md`](../../../docs/aggregator-publication.md).
+  [`docs/cloud-operations.md#aggregator-publication`](../../../docs/cloud-operations.md#aggregator-publication).
 - The legacy external-repository dispatch path is retired; the active
   deployment and verification baseline is the native GitHub Actions batch flow above.

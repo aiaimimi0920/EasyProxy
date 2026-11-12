@@ -400,7 +400,7 @@ Observed read-only on 2026-08-19; this is evidence for that deployment only:
 - Auth: service/base/internal/monitor/server.go:1875-1922.
 - Local Server schema/routes: service/base/internal/monitor/local_server.go:32-146.
 - Dispatch protocol: service/base/internal/dispatch/server.go:53-55,280-304.
-- Gateway contract: docs/transparent-gateway.md:8-92.
+- Gateway contract: docs/routing.md#transparent-gateway:8-92.
 - Gateway assets: deploy/gateway/debian/README.md and docker-compose.yaml.
 - CI gates: .github/workflows/validate.yml and
   .github/workflows/reusable-validate.yml.

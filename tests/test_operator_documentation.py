@@ -32,7 +32,7 @@ class OperatorDocumentationContractTests(unittest.TestCase):
         )
         operator_docs = "\n".join(
             (REPO_ROOT / "docs" / name).read_text(encoding="utf-8")
-            for name in ("github-secrets.md", "fork-operator-guide.md")
+            for name in ("security.md", "deployment.md")
         )
 
         for context in ("secrets", "vars"):
@@ -54,6 +54,23 @@ class OperatorDocumentationContractTests(unittest.TestCase):
         )
 
         self.assertNotIn("/C:/Users/", markdown)
+
+    def test_consolidated_topic_documents_and_local_links_exist(self):
+        topics = (
+            "architecture.md", "security.md", "release.md", "DEVELOPMENT_STANDARD.md",
+            "routing.md", "local-server.md", "deployment-records.md",
+            "cloud-operations.md", "deployment.md",
+        )
+        paths = [REPO_ROOT / "docs" / name for name in topics]
+        for path in paths:
+            self.assertTrue(path.is_file(), str(path))
+        for path in [REPO_ROOT / "README.md", *paths]:
+            for target in re.findall(r"\]\(([^\s)]+)\)", path.read_text(encoding="utf-8")):
+                if "://" in target or target.startswith("#"):
+                    continue
+                relative = target.split("#", 1)[0]
+                if relative:
+                    self.assertTrue((path.parent / relative).exists(), f"{path}: {target}")
 
     def test_readme_screenshots_are_not_shipped_as_runtime_assets(self):
         service = REPO_ROOT / "service" / "base"
@@ -77,7 +94,7 @@ class OperatorDocumentationContractTests(unittest.TestCase):
         self.assertNotIn("aiaimimi0920/EasyProxy/releases", windows)
 
     def test_fork_guide_names_protected_lifecycle_workflows(self):
-        guide = (REPO_ROOT / "docs/fork-operator-guide.md").read_text(encoding="utf-8")
+        guide = (REPO_ROOT / "docs/deployment.md").read_text(encoding="utf-8")
 
         for required in (
             "Deploy Cloudflare Apps",

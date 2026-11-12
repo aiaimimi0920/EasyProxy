@@ -1,8 +1,18 @@
-# EasyProxy 增量开发规范
+# 开发标准与上游协作
+
+本文按主题集中维护相关合同，按目录查阅；不包含后续阶段计划。
+
+## 目录
+- [DEVELOPMENT_STANDARD](#DEVELOPMENT_STANDARD)
+- [upstream-sync](#upstream-sync)
+
+<a id="DEVELOPMENT_STANDARD"></a>
+
+## EasyProxy 增量开发规范
 
 生效日期：2026-08-28
 
-## 1. 文档地位与适用范围
+### 1. 文档地位与适用范围
 
 本文是 EasyProxy 仓库的通用开发基线，适用于仓库自行维护或携带的以下区域：
 
@@ -26,14 +36,14 @@ EasyProxy 的第一方集成与部署代码位于根仓库；三个 `upstreams/*
 相关合同文档：
 
 - [架构说明](architecture.md)
-- [统一来源架构](unified-source-architecture.md)
-- [发布合同](release-contract.md)
-- [发布检查表](release-checklist.md)
-- [根宿主部署标准](root-host-deploy-standard.md)
+- [统一来源架构](architecture.md#unified-source-architecture)
+- [发布合同](release.md#release-contract)
+- [发布检查表](release.md#release-checklist)
+- [根宿主部署标准](deployment.md#root-host-deploy-standard)
 - [Local Server](local-server.md)
-- [透明网关](transparent-gateway.md)
+- [透明网关](routing.md#transparent-gateway)
 
-## 2. 目标
+### 2. 目标
 
 这套规则用于同时改善：
 
@@ -49,9 +59,9 @@ EasyProxy 的第一方集成与部署代码位于根仓库；三个 `upstreams/*
 行数是设计报警器，不是机械 KPI。短文件也可能职责混乱；高度凝聚的状态机
 可以申请软上限例外，但必须给出真实理由和保护证据。
 
-## 3. 仓库 owner 与变更边界
+### 3. 仓库 owner 与变更边界
 
-### 3.1 模块 owner
+#### 3.1 模块 owner
 
 - `service/base` 拥有本地执行面：代理运行时、来源合并、connector 执行、节点
   健康、路由、TUN、管理 API、持久化和 WebUI 后端合同；
@@ -68,13 +78,13 @@ EasyProxy 的第一方集成与部署代码位于根仓库；三个 `upstreams/*
 修改跨模块合同前，先确认真正 owner。跨模块变更必须在所有受影响层分别验证，
 但不要为了方便复制实现或让调用方接管下游 owner 的职责。
 
-### 3.2 旧仓库边界
+#### 3.2 旧仓库边界
 
 旧 `ProxyService` 和其他历史仓库只用于行为查询、迁移审计和缺失逻辑对照，不是
 前向开发写入目标。所有新实现和修复必须落在 EasyProxy 当前仓库，除非任务明确
 授权维护另一个独立仓库。
 
-### 3.3 `upstreams/*` 规则
+#### 3.3 `upstreams/*` 规则
 
 修改 `upstreams/misub`、`upstreams/aggregator` 或 `upstreams/ech-workers` 时，
 源码提交必须发生在对应维护 Fork；根仓库只更新 gitlink。完成报告和 PR 摘要
@@ -87,9 +97,9 @@ EasyProxy 的第一方集成与部署代码位于根仓库；三个 `upstreams/*
 本地补丁应保持窄小、可识别，并避免无必要地重排大量上游代码。同步上游前先
 盘点本地补丁，避免静默覆盖已交付行为。
 
-## 4. 有效代码行定义
+### 4. 有效代码行定义
 
-### 4.1 计数口径
+#### 4.1 计数口径
 
 有效代码行（effective code lines）按以下口径计算：
 
@@ -101,7 +111,7 @@ EasyProxy 的第一方集成与部署代码位于根仓库；三个 `upstreams/*
 - 仓库已有语言感知 checker 时，以 checker 输出为准；
 - 没有 checker 时可以人工复核或使用临时工具测量，但物理行数只能作为粗略上界。
 
-### 4.2 默认纳入范围
+#### 4.2 默认纳入范围
 
 以下手写内容默认纳入：
 
@@ -114,7 +124,7 @@ EasyProxy 的第一方集成与部署代码位于根仓库；三个 `upstreams/*
 Markdown 等纯文档不执行源代码行数门禁，但应按主题拆分、保持可导航，并避免
 在一个文档中混入多个互不相关的合同。
 
-### 4.3 允许排除的内容
+#### 4.3 允许排除的内容
 
 只有以下内容可以由仓库策略显式排除：
 
@@ -128,7 +138,7 @@ Markdown 等纯文档不执行源代码行数门禁，但应按主题拆分、�
 业务代码不能通过复制到 `generated`、`vendor`、JSON、模板、字符串或其他
 扩展名获得豁免。任何排除都必须有可审查的路径规则和理由。
 
-## 5. 文件大小分级
+### 5. 文件大小分级
 
 | 有效代码行 | 状态 | 要求 |
 | --- | --- | --- |
@@ -142,9 +152,9 @@ Markdown 等纯文档不执行源代码行数门禁，但应按主题拆分、�
 `150` 是设计目标，不是要求每个文件达到相同长度。拆出大量仅转发调用、没有
 独立 owner 的薄文件，同样违反本规范。
 
-## 6. 新增代码与历史旧债
+### 6. 新增代码与历史旧债
 
-### 6.1 什么属于新增代码
+#### 6.1 什么属于新增代码
 
 以下任一情况均受本规范约束：
 
@@ -156,7 +166,7 @@ Markdown 等纯文档不执行源代码行数门禁，但应按主题拆分、�
 
 移动后的完整文件仍需测量。不能把旧大文件原样移动后声明为非新增代码。
 
-### 6.2 历史旧债
+#### 6.2 历史旧债
 
 规范生效前已经存在的超标文件属于 grandfathered legacy debt：
 
@@ -165,7 +175,7 @@ Markdown 等纯文档不执行源代码行数门禁，但应按主题拆分、�
 - 小缺陷修复不需要顺手改写整个旧模块；
 - 旧债豁免只保护既有内容，不保护继续向同一文件堆叠新职责。
 
-### 6.3 在既有大文件中开发
+#### 6.3 在既有大文件中开发
 
 优先决策顺序：
 
@@ -178,7 +188,7 @@ Markdown 等纯文档不执行源代码行数门禁，但应按主题拆分、�
 应尽量使旧大文件有效行数不增长；确需增长时，在完成报告中记录原因和不立即
 提取的风险判断。
 
-### 6.4 主动拆分任务
+#### 6.4 主动拆分任务
 
 当任务明确选择大文件进行结构重构时：
 
@@ -188,7 +198,7 @@ Markdown 等纯文档不执行源代码行数门禁，但应按主题拆分、�
 - 正常接受上限仍为 500 行，目标仍为约 150 行；
 - 未触及的旧债必须如实保留，不得宣称全仓治理完成。
 
-## 7. 501-700 行软上限例外
+### 7. 501-700 行软上限例外
 
 软上限例外至少应记录：
 
@@ -208,9 +218,9 @@ Markdown 等纯文档不执行源代码行数门禁，但应按主题拆分、�
 - 框架习惯集中实现；
 - 通过压缩格式可以降低物理行数。
 
-## 8. EasyProxy 架构不变量
+### 8. EasyProxy 架构不变量
 
-### 8.1 统一来源合同
+#### 8.1 统一来源合同
 
 `service/base` 的运行时来源优先级必须保持：
 
@@ -227,7 +237,7 @@ Markdown 等纯文档不执行源代码行数门禁，但应按主题拆分、�
 支持的 connector 在本地 `service/base` 物化和执行。MiSub 负责描述 connector，
 不应代替客户端执行最终代理出口。
 
-### 8.2 配置权威与本地状态
+#### 8.2 配置权威与本地状态
 
 `topology.yaml` 是非敏感部署拓扑权威，只能保存 Secret 的环境变量引用；
 `deploy/service/base/config.yaml` 是本地运行时和 WebUI 持久化权威。拓扑更新与普通
@@ -247,7 +257,7 @@ renderer 和自动同步 GitHub 配置的入口已经删除，不得重新引入
 import code 创建 bootstrap；启用远端后台同步时，应明确远端是否拥有后续更新权。
 不得让多个权威来源无声明地相互覆盖。
 
-### 8.3 Reload、CAS 与状态发布
+#### 8.3 Reload、CAS 与状态发布
 
 涉及配置、节点、Profile、规则或运行时来源的修改必须保持事务边界：
 
@@ -259,7 +269,7 @@ import code 创建 bootstrap；启用远端后台同步时，应明确远端是�
 - reload 失败应保留或恢复最后一个可用实例，不能先销毁稳定实例再验证候选；
 - 无变化刷新应避免无意义 reload 和健康状态抖动。
 
-### 8.4 Local Server、Smart Routing 与 TUN
+#### 8.4 Local Server、Smart Routing 与 TUN
 
 - Local Server 只支持 `mode: pool`、`listener.protocol: mixed`、一个 canonical
   凭据和可信 LAN 边界；
@@ -270,9 +280,9 @@ import code 创建 bootstrap；启用远端后台同步时，应明确远端是�
   权限和宿主网络影响；
 - 不得用开发机已有系统代理、TUN 或宿主透明路由掩盖 EasyProxy 自身失败。
 
-## 9. 模块设计与注释
+### 9. 模块设计与注释
 
-### 9.1 按职责拆分
+#### 9.1 按职责拆分
 
 优先使用以下边界寻找拆分点：
 
@@ -288,7 +298,7 @@ import code 创建 bootstrap；启用远端后台同步时，应明确远端是�
 不要把互不相关的逻辑继续集中到 `common`、`utils`、`helpers`、`misc` 或巨型
 `index` 文件。目录和文件名应表达 owner，而不是隐藏 owner。
 
-### 9.2 注释要求
+#### 9.2 注释要求
 
 新增或拆分后的文件只添加能降低理解成本的注释，重点解释：
 
@@ -302,11 +312,11 @@ import code 创建 bootstrap；启用远端后台同步时，应明确远端是�
 不要逐行复述代码，不要用注释填充降低有效行数，也不要保留已经失真的历史
 解释。行为变化时，代码、测试和合同文档必须在同一轮更新。
 
-## 10. 逐文件质量审查
+### 10. 逐文件质量审查
 
 每个新增文件和每个被实质修改的文件都要按职责完成一次有范围的审查。
 
-### 10.1 安全与秘密
+#### 10.1 安全与秘密
 
 检查：
 
@@ -321,7 +331,7 @@ import code 创建 bootstrap；启用远端后台同步时，应明确远端是�
 所有真实秘密必须位于 ignored 配置、环境变量、平台 secret store、import code
 或显式私有输入中。不得把真实秘密提交到示例、测试、README 或生成资产。
 
-### 10.2 资源、并发与生命周期
+#### 10.2 资源、并发与生命周期
 
 检查：
 
@@ -332,7 +342,7 @@ import code 创建 bootstrap；启用远端后台同步时，应明确远端是�
 - connector 失败、候选 box 失败和 rollback 是否泄漏端口、进程或临时文件；
 - 异步 drain 是否有 owner，容器停止时是否能够确定性退出。
 
-### 10.3 性能
+#### 10.3 性能
 
 检查：
 
@@ -346,9 +356,9 @@ import code 创建 bootstrap；启用远端后台同步时，应明确远端是�
 确认的问题应在同一 owner 边界内修复并补回归证据。没有证据的问题不得用大
 范围“顺手优化”替代当前任务。
 
-## 11. 开发与运行时安全边界
+### 11. 开发与运行时安全边界
 
-### 11.1 本地迭代
+#### 11.1 本地迭代
 
 正常开发采用：编辑 owning module → 聚焦测试 → 模块完整验证 → 隔离 Docker
 运行验证。GitHub Actions 不作为快速本地循环的主要测试工具。
@@ -356,7 +366,7 @@ import code 创建 bootstrap；启用远端后台同步时，应明确远端是�
 临时镜像上下文、Compose、env、日志和导出 tar 应放在仓库外的临时工作区，或
 仓库已忽略的明确临时目录中。不得把短期验证产物散落到源码目录。
 
-### 11.2 Live 容器
+#### 11.2 Live 容器
 
 现有生产容器、挂载数据、端口、网络和配置在未经明确授权时是不可扰动边界。
 验证 live-adjacent 改动时：
@@ -368,7 +378,7 @@ import code 创建 bootstrap；启用远端后台同步时，应明确远端是�
 - 不得把“容器 running”当作 API、代理链路或语义成功；
 - 必须证明流量确实经过 EasyProxy，而不是开发机其他代理或 TUN。
 
-### 11.3 部署边界
+#### 11.3 部署边界
 
 - GitHub Actions 用于验证、Cloudflare 部署、aggregator 发布、GHCR/R2/config/
   release 发布；
@@ -378,9 +388,9 @@ import code 创建 bootstrap；启用远端后台同步时，应明确远端是�
 - 正式 release-grade 验证应从 GHCR 拉取目标镜像，在接近空白宿主的环境验证，
   而不是依赖开发机已有本地镜像或源码。
 
-## 12. 验证门禁
+### 12. 验证门禁
 
-### 12.1 每个代码任务的基础门禁
+#### 12.1 每个代码任务的基础门禁
 
 至少执行：
 
@@ -397,7 +407,7 @@ baseline/ratchet 门禁，并在 `.github/workflows/reusable-validate.yml` 中�
 阻止新增硬超限、旧债增长和已经下降但未移除的过期例外；软超限仍需在评审中说明。
 当前 legacy baseline 为空，后续不得用新增例外替代职责拆分。
 
-### 12.2 根脚本与发布合同
+#### 12.2 根脚本与发布合同
 
 ```powershell
 python -m pytest -q tests
@@ -406,7 +416,7 @@ python scripts/validate-release-contract.py
 git diff --check
 ```
 
-### 12.3 `service/base`
+#### 12.3 `service/base`
 
 ```powershell
 Set-Location service/base
@@ -420,7 +430,7 @@ go build -tags "with_utls with_quic with_grpc with_wireguard with_gvisor" `
 Go 变更至少需要一次编译导向验证。涉及并发、reload、TUN、数据库、探针、路由
 或持久化时，应增加针对边界条件和取消/失败路径的聚焦测试。
 
-### 12.4 `service/base/frontend`
+#### 12.4 `service/base/frontend`
 
 ```powershell
 Set-Location service/base/frontend
@@ -434,7 +444,7 @@ WebUI 变化必须验证当前源码生成的嵌入式资产，并检查 `git di
 替换是否与源码变化匹配。用户可见布局、登录、设备/Profile、路由或监控语义变化
 还必须在最终镜像中进行真实桌面/移动浏览器检查。
 
-### 12.5 `upstreams/misub`
+#### 12.5 `upstreams/misub`
 
 ```powershell
 Set-Location upstreams/misub
@@ -446,16 +456,16 @@ npm run build
 修改 Cloudflare Pages、D1、KV、SQLite 或 manifest 合同时，还需验证对应生产路径
 和兼容路径；不能用其中一个存储后端的成功代表所有后端成功。
 
-### 12.6 Docker、Local Server 与网关
+#### 12.6 Docker、Local Server 与网关
 
 涉及运行时、嵌入式前端、认证或部署拓扑时，使用正式 Dockerfile 构建新镜像。
-Local Server 变化按 [发布检查表](release-checklist.md) 运行隔离验证脚本；透明网关
+Local Server 变化按 [发布检查表](release.md#release-checklist) 运行隔离验证脚本；透明网关
 和 TUN 变化运行 `scripts/validate-transparent-gateway.ps1` 及对应场景验证。
 
 验证资源必须是 disposable、label-scoped，并且不得启动、停止、替换或连接未授权
 的 legacy/live 容器。
 
-### 12.7 文档任务
+#### 12.7 文档任务
 
 纯文档或治理规则变更不需要伪造二进制发布。至少验证：
 
@@ -464,7 +474,7 @@ Local Server 变化按 [发布检查表](release-checklist.md) 运行隔离验�
 - UTF-8 无 BOM、无意外秘密；
 - `git diff --check` 和 scoped status/diff 正常。
 
-## 13. 发布完成定义
+### 13. 发布完成定义
 
 源代码和单元测试通过不等于产品发布完成。涉及产品行为或部署的任务，根据范围
 至少需要证明：
@@ -481,7 +491,7 @@ Local Server 变化按 [发布检查表](release-checklist.md) 运行隔离验�
 不能只用 HTTP 200 代表异步任务完成，也不能只用 `running` 代表代理链路正常。
 必须检查语义结果、错误状态、日志和目标数据面。
 
-## 14. 反规避规则
+### 14. 反规避规则
 
 以下行为均视为违反本规范：
 
@@ -497,7 +507,7 @@ Local Server 变化按 [发布检查表](release-checklist.md) 运行隔离验�
 - 未标记地把 EasyProxy 本地补丁混入 upstream sync；
 - 为完成单模块任务顺手修改无 owner 关系的其他模块。
 
-## 15. 完成报告要求
+### 15. 完成报告要求
 
 完成开发时，应明确报告：
 
@@ -516,7 +526,7 @@ Local Server 变化按 [发布检查表](release-checklist.md) 运行隔离验�
 超标文件、继续向旧大文件堆新职责、跳过必要发布验证或越过 owner 边界”则属于
 未完成。
 
-## 16. 本地落地原则
+### 16. 本地落地原则
 
 - 本规范首先作为人工与评审基线执行；
 - 新增 checker 时先建立可审查 baseline 和明确排除项；
@@ -525,3 +535,80 @@ Local Server 变化按 [发布检查表](release-checklist.md) 运行隔离验�
 - 合同变化时更新最接近 owner 的文档，并从其他文档链接到权威位置；
 - 后续若增加仓库根 `AGENTS.md`，必须包含本规范的自包含摘要和链接，且可以增加
   更严格规则，但不得降低本规范要求。
+
+<a id="upstream-sync"></a>
+
+## Upstream Sync
+
+### Purpose
+
+The root repository pins three public maintained forks as submodules:
+
+| Root path | Maintained fork | Official upstream |
+| --- | --- | --- |
+| `upstreams/misub` | `aiaimimi0920/MiSub` | `imzyb/MiSub` |
+| `upstreams/aggregator` | `aiaimimi0920/aggregator` | `wzdnzd/aggregator` |
+| `upstreams/ech-workers` | `aiaimimi0920/ech-workers` | `hhsw2015/ech-workers` |
+
+Each fork contains `UPSTREAM.md` with its audited baseline, EasyProxy delta,
+and module validation contract.
+
+### Rule
+
+Upstream-derived source is never copied into the root repository. Source
+changes merge into the maintained fork first. The root pull request changes the
+submodule pointer only after the fork commit and cross-module behavior verify.
+
+### Maintainer Workflow
+
+1. Clone the maintained fork and add the official repository as `upstream`.
+2. Fetch upstream and create `sync/<date>-<upstream-short-sha>` from fork main.
+3. Merge or cherry-pick the intended upstream commits; never force-push main.
+4. Resolve conflicts without dropping the EasyProxy delta or regression tests.
+5. Update `UPSTREAM.md` when the audited baseline or divergence changes.
+6. Run the module-native test/build contract and open a fork pull request.
+7. After that pull request merges, update exactly one root submodule pointer.
+8. Use the upstream-sync root pull request template and run root validation.
+9. Merge the root pointer update only after recursive fresh-clone validation.
+
+Typical root pointer update:
+
+```powershell
+git submodule sync --recursive
+git -C upstreams/misub fetch origin main
+git -C upstreams/misub checkout <verified-fork-commit>
+git add upstreams/misub
+```
+
+Replace the path for Aggregator or ech-workers. Do not use
+`git submodule update --remote` in release automation because it removes the
+reviewed commit pin.
+
+### Pull Request Evidence
+
+The root pull request must record:
+
+- official upstream URL and old/new upstream commits
+- maintained fork pull request and resulting full commit
+- intentional EasyProxy deltas retained or changed
+- module test/build results
+- root regression and recursive clone results
+- rollback pointer (the previous root gitlink commit)
+- data/deployment impact, including an explicit `none` when applicable
+
+### Guardrails
+
+- Do not edit a detached submodule and leave an unpushed commit referenced by
+  the root repository.
+- Do not point `.gitmodules` at private or contributor-specific forks.
+- Do not combine upstream sync with data migration or secret rotation.
+- Do not scatter `aggregator` or `ech-workers` code into `service/base`.
+- Keep deployment config sanitized and public-safe inside `deploy/`.
+- Keep private credentials, `.env`, databases, and generated artifacts out of
+  maintained forks.
+
+### Self-Owned Areas
+
+`workers/ech-workers-cloudflare` is self-owned in this repository. It does not
+follow the fork/submodule workflow above, but deployment notes and
+private credentials must still stay separated.

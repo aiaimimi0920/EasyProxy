@@ -62,8 +62,8 @@ verify it from the release repository rather than expecting a detached signature
 
 1. Publish GHCR images:
    - `Publish GHCR Images`
-2. Publish `service/base` private config:
-   - `Publish Service Base Config`
+2. If needed, prepare an explicit private runtime-config snapshot:
+   - follow `docs/deployment.md#service-base-config-distribution` (not a release prerequisite)
 3. Deploy Cloudflare apps:
    - `Deploy Cloudflare Apps`
 4. Refresh aggregator artifacts:
@@ -78,8 +78,8 @@ The `service/base` image can bootstrap from:
 
 See:
 
-- `docs/service-base-config-distribution.md`
-- `docs/release-checklist.md`
+- `docs/deployment.md#service-base-config-distribution`
+- `docs/release.md#release-checklist`
 
 ## Validation Baseline
 
@@ -93,7 +93,6 @@ For a full release, confirm the latest successful runs of:
 - `Deploy Aggregator`
 - `Deploy Cloudflare Apps`
 - `Publish GHCR Images`
-- `Publish Service Base Config`
 """
 
     output_path = Path(args.output)

@@ -5,7 +5,7 @@ These assets deploy EasyProxy inside the approved Debian VM at
 the gateway does not modify its kernel.
 
 最近一次部署身份、验收边界和回退材料见
-[2026-11-12 默认网关部署回执](../../../docs/default-gateway-deployment-2026-11-12.md)。
+[2026-11-12 默认网关部署回执](../../../docs/deployment-records.md#default-gateway-deployment-2026-11-12)。
 操作前仍须核对现场状态，不将历史回执当作实时健康证明。
 已有 VM 不要直接重跑下面的完整 bootstrap：它会安装软件并覆盖系统级
 `/etc/nftables.conf`。先盘点现场，只恢复缺少的专属配置，不清共享规则。

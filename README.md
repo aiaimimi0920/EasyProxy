@@ -38,7 +38,7 @@ git submodule update --init --recursive
 ```
 
 The complete GitHub, Cloudflare, recovery, publication, and local installation
-path for a new fork is [`docs/fork-operator-guide.md`](docs/fork-operator-guide.md).
+path for a new fork is [`docs/deployment.md#fork-operator-guide`](docs/deployment.md#fork-operator-guide).
 
 ## Configuration Authority
 
@@ -61,7 +61,7 @@ Set-Location ..\..
 ```
 
 The schema is [`topology.schema.json`](topology.schema.json). The full ownership
-contract is in [`docs/topology.md`](docs/topology.md).
+contract is in [`docs/architecture.md#topology`](docs/architecture.md#topology).
 
 ### Local runtime config
 
@@ -102,9 +102,9 @@ $env:R2_SECRET_ACCESS_KEY = '<r2-secret>'
 ```
 
 Do not commit those values. See
-[`docs/secrets-and-permissions.md`](docs/secrets-and-permissions.md).
+[`docs/security.md#secrets-and-permissions`](docs/security.md#secrets-and-permissions).
 Ordinary ECH deployment preserves `ECH_TOKEN`; use the protected
-[`Rotate ECH Token`](docs/ech-lifecycle.md) workflow for a dual-token rotation.
+[`Rotate ECH Token`](docs/cloud-operations.md#ech-lifecycle) workflow for a dual-token rotation.
 
 ## Local EasyProxy Deployment
 
@@ -158,7 +158,7 @@ pwsh .\deploy-host.ps1 `
 Published tags also contain native archives for Linux amd64/arm64 and Windows
 amd64, matching `easyproxyctl` packages, `SHA256SUMS`, and
 `release-manifest.json`. Installation and rollback commands are documented in
-[`docs/native-install-update.md`](docs/native-install-update.md). Windows arm64
+[`docs/deployment.md#native-install-update`](docs/deployment.md#native-install-update). Windows arm64
 is explicitly unsupported; Windows native mode does not provide transparent
 gateway ingress.
 
@@ -204,12 +204,12 @@ entry delegates to `.github/workflows/reusable-validate.yml`; it is read-only
 and receives no production secrets.
 
 Fork operators should follow the ordered workflow inputs and provider
-prerequisites in [`docs/fork-operator-guide.md`](docs/fork-operator-guide.md)
+prerequisites in [`docs/deployment.md#fork-operator-guide`](docs/deployment.md#fork-operator-guide)
 rather than reusing maintainer resource names or URLs.
 
 Aggregator uses candidate, immutable release, stable-manifest, and
 last-known-good layers. Fork configuration and failure recovery are documented
-in [`docs/aggregator-publication.md`](docs/aggregator-publication.md).
+in [`docs/cloud-operations.md#aggregator-publication`](docs/cloud-operations.md#aggregator-publication).
 
 ## `easyproxyctl`
 
