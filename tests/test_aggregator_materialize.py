@@ -1,6 +1,7 @@
 import base64
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,11 +13,13 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 class AggregatorMaterializeTests(unittest.TestCase):
     def run_script(self, template_path: Path, output_path: Path, env=None):
         merged_env = os.environ.copy()
+        for name in ("EASYPROXY_AGGREGATOR_SHARED_TOKEN", "EASYPROXY_AGGREGATOR_ISSUE91_SUB_URL_B64"):
+            merged_env.pop(name, None)
         if env:
             merged_env.update(env)
         return subprocess.run(
             [
-                "python",
+                sys.executable,
                 str(REPO_ROOT / "scripts" / "materialize-aggregator-config.py"),
                 "--template",
                 str(template_path),
@@ -78,7 +81,7 @@ class AggregatorMaterializeTests(unittest.TestCase):
             self.assertIn(issue91_url, rendered)
             self.assertNotIn("PLACEHOLDER", rendered)
 
-    def test_materialize_fails_when_required_secret_missing(self):
+    def test_materialize_disables_domain_when_secret_missing(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             template = Path(temp_dir) / "config.template.json"
             output = Path(temp_dir) / "config.runtime.json"
@@ -94,3 +97,15 @@ class AggregatorMaterializeTests(unittest.TestCase):
             self.assertNotIn("PLACEHOLDER", rendered)
             self.assertIn('"enable": false', rendered)
             self.assertIn("[disabled-missing-secret]", rendered)
+
+    def test_materialize_fails_when_placeholder_outside_domains_lacks_secret(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            template = Path(temp_dir) / "config.template.json"
+            output = Path(temp_dir) / "config.runtime.json"
+            template.write_text('{"token":"__TOKEN_PLACEHOLDER__"}', encoding="utf-8")
+
+            result = self.run_script(template, output)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("unresolved placeholder markers outside domain seed entries", result.stderr)
+            self.assertFalse(output.exists())

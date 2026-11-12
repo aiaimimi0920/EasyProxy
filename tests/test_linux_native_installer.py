@@ -76,7 +76,7 @@ def run_installer(
 def shell_path(path: Path) -> str:
     try:
         converted = subprocess.run(
-            ["cygpath", "-u", str(path)],
+            ["sh", "-c", 'if command -v cygpath >/dev/null 2>&1; then cygpath -u "$1"; else printf "%s" "$1"; fi', "path-conversion", str(path)],
             capture_output=True,
             text=True,
             check=False,

@@ -17,7 +17,7 @@ class EchWorkersSmokeScriptTests(unittest.TestCase):
             fake_docker = Path(temp_dir) / "docker.cmd"
             fake_docker.write_text(
                 "@echo off\r\n"
-                "echo Usage of /usr/local/bin/ech-workers: 1^>^&2\r\n"
+                "echo Usage of /usr/local/bin/ech-workers: 1>&2\r\n"
                 "exit /b 0\r\n",
                 encoding="ascii",
             )

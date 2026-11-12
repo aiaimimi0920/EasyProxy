@@ -173,6 +173,13 @@ production secrets.
 
 <a id="fork-operator-guide"></a>
 
+> 边界：`scripts/deploy-misub.ps1` 的 Pages 分支和
+> `scripts/deploy-ech-workers-cloudflare.ps1` 是仍保留的低层手动部署入口，
+> 不是下述受保护升级编排，也不获取 SBA writer。前者直接构建并执行 Pages deploy，
+> 后者先写 ECH_TOKEN 再 deploy，不能提供备份、精确现有资源身份校验、
+> bootstrap/update 区分及 UNKNOWN 停写保证。维护现有实例应选择其所属的
+> 根工作流/CLI或 SBA 生命周期，不要对同一实例混用这些写入路径。
+
 ## Fork operator guide
 
 This is the public, source-code-free path for creating and operating an
@@ -635,6 +642,12 @@ configs.
 Code updates preserve runtime data by default. When an update creates a backup,
 it must verify that backup before deployment. A missing snapshot never grants
 permission to replace the current config or create a second state resource.
+
+当前 `write-service-base-r2-bootstrap.ps1` 写出的 bootstrap 默认
+`syncEnabled: true`、`syncIntervalSeconds: 7200`，即允许后续后台同步；
+该脚本不会继承 import code 中的同步开关。若只需要一次导入，必须在使用前
+将生成的私有 JSON 明确改成 `syncEnabled: false`。不含该字段的旧 bootstrap
+也被当前消费者按 `true` 处理。此处描述现有兼容语义，不代表默认已禁止远端更新。
 
 ### Import-code key and recovery tools
 

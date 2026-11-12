@@ -17,7 +17,6 @@ import yaml
 USER_AGENT = "Mozilla/5.0; Clash.Meta; Mihomo; Shadowrocket;"
 ISSUE91_DOMAIN_NAME = "seed-sub-issue91-shared"
 FILEPATH_PROTOCOL = "file:///"
-R2_BUCKET_NAME = "aggregator"
 R2_CACHE_OBJECT_KEY = "internal/issue91.shared.yaml"
 
 
@@ -86,10 +85,6 @@ def fetch_text_curl_cffi(url: str, timeout: int) -> str:
 def fetch_text(url: str, timeout: int) -> str:
     errors: list[str] = []
 
-    def summarize(text: str) -> str:
-        head = (text or "").replace("\r", " ").replace("\n", "\\n")
-        return head[:200]
-
     for label, fetcher in (
         ("urllib", fetch_text_urllib),
         ("requests", fetch_text_requests),
@@ -111,10 +106,7 @@ def fetch_text(url: str, timeout: int) -> str:
             )
             return text
         except Exception as exc:
-            preview = ""
-            if "text" in locals():
-                preview = summarize(text)
-            errors.append(f"{label}: {exc} preview={preview}")
+            errors.append(f"{label}: {type(exc).__name__}")
     raise RuntimeError("issue91 prefetch failed via all strategies: " + " | ".join(errors))
 
 
@@ -125,7 +117,7 @@ def decode_optional_base64_env(env_name: str) -> str:
     try:
         return base64.b64decode(value).decode("utf-8").strip()
     except Exception as exc:
-        raise RuntimeError(f"failed to decode {env_name}: {exc}") from exc
+        raise RuntimeError(f"failed to decode {env_name}: {type(exc).__name__}") from None
 
 
 def build_r2_client():
@@ -147,33 +139,33 @@ def build_r2_client():
     )
 
 
-def download_cached_snapshot() -> tuple[str, str]:
+def download_cached_snapshot(bucket: str) -> tuple[str, str]:
     client = build_r2_client()
     if client is None:
         return "", ""
     try:
-        response = client.get_object(Bucket=R2_BUCKET_NAME, Key=R2_CACHE_OBJECT_KEY)
+        response = client.get_object(Bucket=bucket, Key=R2_CACHE_OBJECT_KEY)
         body = response["Body"].read().decode("utf-8", errors="replace").strip()
         proxy_count = ensure_proxy_count(body)
-        return body, f"r2://{R2_BUCKET_NAME}/{R2_CACHE_OBJECT_KEY}#{proxy_count}"
+        return body, "private-r2-cache"
     except Exception:
         return "", ""
 
 
-def upload_cached_snapshot(text: str) -> None:
+def upload_cached_snapshot(text: str, bucket: str) -> None:
     client = build_r2_client()
     if client is None:
         return
     try:
         client.put_object(
-            Bucket=R2_BUCKET_NAME,
+            Bucket=bucket,
             Key=R2_CACHE_OBJECT_KEY,
             Body=text.encode("utf-8"),
             ContentType="text/yaml; charset=utf-8",
             CacheControl="max-age=300",
         )
     except Exception as exc:
-        print(json.dumps({"cache_upload_warning": str(exc)}), flush=True)
+        print(json.dumps({"cache_upload_warning": type(exc).__name__}), flush=True)
 
 
 def ensure_proxy_count(text: str) -> int:
@@ -189,6 +181,17 @@ def ensure_proxy_count(text: str) -> int:
     return count
 
 
+def cache_bucket(runtime: dict, explicit: str = "") -> str:
+    if explicit.strip():
+        return explicit.strip()
+    items = (runtime.get("storage") or {}).get("items") or {}
+    buckets = {str(item.get("bucket") or "").strip() for item in items.values() if isinstance(item, dict)}
+    buckets.discard("")
+    if len(buckets) != 1:
+        raise RuntimeError("set --cache-bucket or configure exactly one runtime storage bucket")
+    return next(iter(buckets))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Prefetch the live Issue #91 subscription into a local file seed.")
     parser.add_argument("--runtime-config", required=True, help="Path to the materialized aggregator runtime config JSON.")
@@ -199,6 +202,7 @@ def main() -> int:
         default="EASYPROXY_AGGREGATOR_ISSUE91_UPSTREAM_URL_B64",
         help="Base64-encoded environment variable containing a fallback issue91 URL.",
     )
+    parser.add_argument("--cache-bucket", default="", help="Optional cache bucket override; defaults to the runtime storage bucket.")
     args = parser.parse_args()
 
     runtime_path = pathlib.Path(args.runtime_config)
@@ -208,12 +212,15 @@ def main() -> int:
     domains = runtime.get("domains") or []
     target = None
     for entry in domains:
-        if isinstance(entry, dict) and str(entry.get("name") or "").strip() == ISSUE91_DOMAIN_NAME:
+        if isinstance(entry, dict) and str(entry.get("name") or "").strip().removesuffix(" [disabled-missing-secret]") == ISSUE91_DOMAIN_NAME:
             target = entry
             break
 
-    if not target:
-        raise RuntimeError(f"missing {ISSUE91_DOMAIN_NAME} in runtime config")
+    if target is None or target.get("enable") is False:
+        print(json.dumps({"domain": ISSUE91_DOMAIN_NAME, "status": "skipped", "reason": "optional seed absent or disabled"}))
+        return 0
+
+    bucket = cache_bucket(runtime, args.cache_bucket)
 
     subs = target.get("sub") or []
     if not isinstance(subs, list) or not subs or not isinstance(subs[0], str) or not subs[0].strip():
@@ -224,27 +231,22 @@ def main() -> int:
 
     fetch_errors: list[str] = []
     text = ""
-    source_url = subscription_url
 
     for candidate_url in [subscription_url, fallback_url]:
         candidate_url = str(candidate_url or "").strip()
         if not candidate_url:
             continue
-        if text and candidate_url == source_url:
-            continue
         try:
             text = fetch_text(candidate_url, args.timeout)
-            source_url = candidate_url
             break
         except Exception as exc:
-            fetch_errors.append(f"{candidate_url}: {exc}")
+            fetch_errors.append(type(exc).__name__)
 
     source_mode = "live"
     if not text:
-        cached_text, cached_source = download_cached_snapshot()
+        cached_text, _ = download_cached_snapshot(bucket)
         if cached_text:
             text = cached_text
-            source_url = cached_source
             source_mode = "cache"
         else:
             raise RuntimeError("issue91 prefetch failed: " + " | ".join(fetch_errors))
@@ -254,7 +256,7 @@ def main() -> int:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(text, encoding="utf-8")
     if source_mode == "live":
-        upload_cached_snapshot(text)
+        upload_cached_snapshot(text, bucket)
 
     target["sub"] = [f"{FILEPATH_PROTOCOL}{output_path.resolve().as_posix()}"]
     runtime_path.write_text(json.dumps(runtime, ensure_ascii=False, indent=4), encoding="utf-8")
@@ -264,7 +266,7 @@ def main() -> int:
             {
                 "domain": ISSUE91_DOMAIN_NAME,
                 "source_mode": source_mode,
-                "source_url": source_url,
+                "source": "private-r2-cache" if source_mode == "cache" else "configured-subscription",
                 "prefetched_file": str(output_path.resolve()),
                 "proxy_count": proxy_count,
             },

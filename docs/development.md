@@ -427,8 +427,9 @@ git diff --check
 ```
 
 当前 `reusable-validate.yml` 根验证 job 使用 Windows；`test_linux_native_installer.py`
-依赖 POSIX shell/tar。Windows 的 shell 路径转换不匹配时可报 `Cannot connect to C:`，
-此时应单独在 Linux 验证该项，并明确记录 Windows 子集结果，不能将其算作通过。
+依赖 POSIX shell/tar；Windows 使用同一 shell 内的 `cygpath` 进行路径转换，
+避免 Python PATH 中找不到 `cygpath` 时把 `C:` 误当远程归档地址。该测试只在临时目录
+使用伪系统命令验证迁移/回滚逻辑，不替代真实 Linux 服务安装验收。
 
 CLI 有独立 Go module，涉及拓扑或云端 CLI 时还需在 `tools/easyproxyctl` 执行
 `go test -count=1 ./...`、`go vet ./...`，并用 `go run ./cmd/easyproxyctl topology validate
