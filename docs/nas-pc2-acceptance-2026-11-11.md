@@ -71,7 +71,7 @@ sudo python3 /home/mjc/easyproxy-nas-access-20261111-v2/switch.py rollback --for
 
 关键文件：`final-source-provenance.json`、`final-source.patch`、`final-device-flows.json`、`final-pc2-acceptance.json`。实际部署不是纯 `7f6c585`；对应修复与测试随本验收记录一同纳入版本控制，临时构建产物与备份不纳入仓库。
 
-## 后续：按用户明确同意卸载 PC2 StarVPN
+## PC2 StarVPN 卸载结果
 
 同日用户另行批准卸载 StarVPN。通过 apt purge 仅移除 `starvpn 6.1.0`，未执行依赖自动清理。已核实程序目录 `/usr/local/lib/stars`、命令软链接、`stars-service.service`、StarVPN 虚拟网卡及其地址路由均消失，无相关运行进程。Tailscale、Docker 和 NAS EasyProxy 未停用，FlClash 恢复资料未删除。
 
@@ -81,7 +81,7 @@ sudo python3 /home/mjc/easyproxy-nas-access-20261111-v2/switch.py rollback --for
 
 两条既有规则（IPv4/IPv6 各一条，priority 5209、fwmark 0x100cf、lookup 65743）指向空表。未能从配置及归档日志确认其归属，因此没有将其当作 StarVPN 残留擅自删除；不影响本次 EasyProxy 验收。未重启整机。
 
-## 后续：修复 PC2 与 Cloudflare One Client WARP 共存
+## PC2 与 Cloudflare One Client WARP 共存修复结果
 
 以下配置覆盖前文“PC2 的所有 DNS 查询均被 NAS Fake-IP 接管”的初始部署状态。
 

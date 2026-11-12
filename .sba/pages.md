@@ -11,7 +11,7 @@ Cloudflare Pages Direct Upload API 发布 MiSub。它只返回以下阶段证据
 - `pages-version-verified`
 
 它不提交套件版本、不释放 writer，不返回 `suite-published`、`service-ready` 或 SpringBok
-成功回执。此前的加密备份/D1 迁移是另一个阶段，尚待五动作编排强制串接；不能单独调用
+成功回执。此前的加密备份/D1 迁移是另一个阶段，必须由生命周期编排执行；不能单独调用
 本阶段就宣称已完成保数据升级。没有导入、覆盖或迁移现有生产 Pages 项目。
 
 首部署还必须先调用 `d1_init.initialize_d1`，不能假设平台新建的空 D1 已有表，也不能以
@@ -97,14 +97,8 @@ Cloudflare 项目 PATCH 和部署 POST 之间没有本接入可用的配置 CAS�
 
 ## 验证与事实边界
 
-官方 API/SDK/Workers SDK 源码已联网核对，副本位于
-`linshi/easyproxy-sba-pages-20261026/`。本轮仅使用本机合成 provider 验证 HTTP 写入协议、
-token 隔离、归属漂移、丢失响应、错误/重定向、并发重入、状态传播与失败关闭；未向真实
-Cloudflare 账号发送写入。真实源码、npm 安装、Vite/Functions 编译和本地 workerd 另有
-独立证据，不能将这些结果表述为已在云端上线。
-
 测试需设置 `EASYPROXY_TEST_PAGES_BUILD` 指向实际完成的隔离构建目录，否则真实产物的
 Python 测试明确 skip。运行 `.sba/tests/pages.workerd.test.mjs` 还需指定
 `EASYPROXY_TEST_MINIFLARE` 和 `EASYPROXY_TEST_ARTIFACT_ROOT`；workerd 使用同一实际 bundle、
 实际前端和本地 D1，显式拒绝外部网络，验证版本 GET/HEAD/405、前端、原登录/签名 Cookie、
-原 D1 数据与跨源写拒绝。所有测试产物放到 linshi。
+原 D1 数据与跨源写拒绝。测试产物应放在源码外的独立目录。

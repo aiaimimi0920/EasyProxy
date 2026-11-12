@@ -4,10 +4,9 @@ These assets deploy EasyProxy inside the approved Debian VM at
 `192.168.15.201`. Synology DSM at `192.168.15.200` is a separate container host;
 the gateway does not modify its kernel.
 
-当前实际部署、准确镜像、运维命令及验收边界见
-[2026-10-27 NAS 网关部署记录](../../../docs/nas-gateway-deployment-2026-10-27.md)。
-2026-10-28 的当前修复镜像、准确 Compose 和最终回验见
-[上游认证失败修复记录](../../../docs/upstream-auth-repair-2026-10-28.md)。
+最近一次部署身份、验收边界和回退材料见
+[2026-11-12 默认网关部署回执](../../../docs/default-gateway-deployment-2026-11-12.md)。
+操作前仍须核对现场状态，不将历史回执当作实时健康证明。
 已有 VM 不要直接重跑下面的完整 bootstrap：它会安装软件并覆盖系统级
 `/etc/nftables.conf`。先盘点现场，只恢复缺少的专属配置，不清共享规则。
 

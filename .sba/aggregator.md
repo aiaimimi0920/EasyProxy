@@ -1,10 +1,4 @@
-# Aggregator 发布阶段与剩余接入
-
-## EP-SBA-07A（负责人：主 AI）
-
-本切片增加本地生成适配、真实 EasyProxy 审计调用及 R2 候选/稳定发布；不是完整 Actions
-实例管理，也不是已上线的五动作。仍无 manifest/deployment/成功空壳入口。用户已授权最终
-真实上线与旧部署迁移；删除旧资源仍须准确清点、备份并取得明确“同意”，不扩大删除范围。
+# Aggregator 生成、审计与发布
 
 ## 已实现路径
 
@@ -32,34 +26,14 @@
 **多对象 canonical 更新不是原子事务。** 发生中断时可能已有部分 stable bytes 改变而
 manifest 仍旧，必须报告 UNKNOWN 并保留 writer，后续不得重放或把负读取当恢复授权。
 
-1.0.14 仅对周期刷新增加一个前晋级失败终止分支：候选发布失败，或审计失败但其进程组
+周期刷新支持受限的前晋级失败终止分支：候选发布失败，或审计失败但其进程组
 已确认终止、准确审计容器已确认不存在时，当前进程可先 create-only 保存 `refresh-aborted`
 失败证据，再以原 Permit/ETag 条件写结束本次刷新。只允许 candidate/audit 阶段，保留所有
 候选和历史证据，不改变 active、stable 或 MiSub，不将失败报告为成功。审计终止/清理未知、
 已尝试 promotion、归属漂移或终止记录/CAS 未知仍保留阻断；不新增跨任务抢锁或自动重放。
 只读消费者应以 manifest 指向的 immutable release 及其摘要为一致性依据。
 
-## 验证边界与下一步
-
-实际执行了批准 gitlink 的原 `PushToLocal`：网络连接被禁止，全部八个 item 均本地写入
-并读回。发布测试使用真实 boto3/SigV4 连接本机合成 S3，覆盖条件头、内容元数据、错误
-ETag/body、响应丢失及恶意 SDK 重发 handler；不是对真实 R2 的发布验收。
-
-已完成固定 Linux 工具/28 个 Python wheel、真实 venv、准确 gitlink 的两个原生工具摘要与
-实际离线转换，以及原上游 `http_get` 的准确版本化 TLS 最小补丁。关闭 group regularize，
-拒绝进入浮动 MMDB 下载路径；不修改独立 upstream。源码抓取、探针目标与节点协议的 TLS
-是三层边界，不能把源码 HTTPS 已验证等同于每个采集节点都启用了 TLS；完整说明见
-[toolchain.md](toolchain.md)。整个联网采集与真实 R2 publication 尚未执行。
-
-真实固定 ID 的最小审计镜像已构建，本机测试订阅成功经过真实 EasyProxy 节点、租约与
-探测，并确认容器清理后独立查验其不存在。该镜像只负责订阅消费，不包含完整 UI、CFST
-或 cloudflared/ECH connector 能力，也不是已发布产品镜像。
-
-下一块是实例 GitHub environment/secrets/vars 与批准 SHA 的定时入口，然后串联五动作、
-独立 verify、preview 数据副本/源不变
-证明和准确清单销毁。当前没有改旧生产定时任务，旧任务还未使用新共同栅栏。
-
-## EP-SBA-07B：MiSub 受限管理同步
+## MiSub 受限管理同步
 
 `misub_sync.py` 复用同一候选和真实审计校验，读取无迁移/Cron 副作用的 backup export 与
 settings，在双快照及 Permit 所有权检查后只发一次受限保存。响应不明不重试，保留 writer。
@@ -74,12 +48,3 @@ aggregator-global profile。直接调用原 D1 adapter，避免原保存 handler
 settings 证据是 sanitized export，不宣称读取了原始 settings 全表；实际 workerd 测试另行
 对比原表和完整用户行。多次 D1 按 ID 操作不是原子 CAS，外部管理员在比较后直接修改仍可能
 竞争；途中失败 UNKNOWN，不自动恢复或解锁。历史非数字管理 ID 不取得本次删除权限。
-
-2026-10-26：准确 b14 根和三个 gitlink 的隔离构建生成 99 个资产与 Functions bundle，
-bundle SHA-256 `80f84646f94acf8b8a2f618bb0b8361c740ba84b9321a8675043733cc349a9a6`。
-此最终 bundle 的真实 workerd 与流式请求测试共 11 项通过、无 skip，包含第二次同步、
-auth/Origin/source/scope 负例、原始数据保持且 outbound 为空。证据 `real-build-18.safe.json`
-与 `workerd-19` 位于 linshi 对应 easyproxy-sba-pages/aggregator-20261026
-目录。额外固定容量缓冲消除按输入 chunk 对象累积的内存放大，13 万个单字节输入回归通过。
-完整 Python `all-17.xml` 为 203 passed、无 skip；这批 Python 使用 build-15，最终 body 修正
-另由 build-18 的上述 Node/workerd 验证覆盖。没有云写入。

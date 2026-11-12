@@ -1,8 +1,7 @@
-# 受保护的 MiSub 升级阶段
+# 受保护的 MiSub 数据迁移
 
-## 状态与责任
+## 阶段责任
 
-EP-SBA-04 当前实现的是可执行的备份/迁移阶段，不是五个 SBA 动作已经全部完成。
 `migration.py:migrate_misub` 由整套升级的同一进程调用，必须传入已经持有的 update 许可。
 该阶段不自行 begin、不提交 active、不释放许可，也不输出 SpringBok 成功结果。
 
@@ -61,7 +60,7 @@ easyproxyctl cloud migrate
 Go CLI 的 Wrangler prefix 当前用 strings.Fields 拆分；SBA 阶段对含空白的脚本路径
 明确拒绝，不能偷偷调用 shell 或浮动 npx 下载。Wrangler 这里只用于读取身份、快照和
 导出，不负责迁移写入。Linux Go 1.27.3 和应用构建来源现已固定；精确 Wrangler 仍来自
-批准 MiSub 锁文件的隔离安装。正式入口仍待串接，通用 runtime 不代替应用工具链。
+批准 MiSub 锁文件的隔离安装。通用 runtime 不代替应用工具链。
 
 ## 数据与兼容性
 
@@ -82,20 +81,6 @@ SQLite 保留的 sqlite_ 对象（但保留有业务状态的 sqlite_sequence）
 凭据的程序；多次只读比较也不是数据库事务快照，不能保证检测先改后还原的外部写入。
 因此仍不导入旧生产实例，不把这个阶段称为旧生产竞态已解决。
 
-## 验证与尚未完成
-
-Go 回归实际使用 SQLite 创建已有业务与 Unicode 自定义数据，生成/解密原格式 age 归档，
-执行审核迁移并恢复到新库比较。还覆盖过期备份、合法归档被另一合法归档替换、备份失败、
-响应丢失、数据保持失败、禁止重发/自动恢复。SBA 阶段用真实 boto3/SigV4 对接本机合成
-S3，证明先持久备份再调用迁移、条件写、未知结果保留 writer，以及缺少整套完成检查时
-不能提交。它们不是外网 R2/D1/Pages 生产验收。
-
-证据在 `linshi/easyproxy-sba-20261026/`。Pages/Worker 实际发布协议阶段现已实现；接下来
-仍须串接正式入口、Aggregator 实例工作流与批准 SHA 调度、独立无秘密 verify、预升级
-副本/副作用隔离及批准清单销毁。
-旧同步脚本的写重试、推广脚本的内部重试/自动回滚在完成审查适配前，不得接到 SBA 路径。
-五动作完整可执行之前，仍不增加 manifest.json/deployment.json 或可被 catalog 接受的空壳入口。
-
 ## 首次部署：空 D1 初始化
 
 `d1_init.initialize_d1` 是独立于 update 的首部署阶段，只接受持有的 deploy/preview 许可、
@@ -106,6 +91,3 @@ schema；只排除 SQLite 内部命名空间和准确 `_cf_KV`，不忽略任意
 `database-initialization`。共 11 条 SQL 逐条单次发送；任何未知结果停止、不重试。最后读回
 完整 schema、准确两条 migration history、四张空业务表和远端身份。不会借用 `/api/data`
 或 KV-to-D1 migrator 的隐含副作用来初始化，也不提交套件版本或释放 writer。
-
-测试实际执行本机 SQLite SQL，并覆盖非空库/身份漂移/篡改迁移/UNKNOWN 后禁止重入；
-尚未在真实 Cloudflare D1 上执行该初始化阶段。

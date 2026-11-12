@@ -66,20 +66,3 @@ O_EXCL/fsync attempt 文件让子进程/父进程不能在 UNKNOWN 后自动第�
 当前 writer；该审计仍报告失败，部署/升级行为不变。平台突然断电、
 不可拦截的 executor kill、主动逃离进程组的程序不在绝对清理保证内；仍须只读 reconcile。
 审计禁用不相关的地域路由及 GeoIP 自动下载，避免浮动网络输入。私密输出目录为 0700。
-
-## 已保留的真实证据
-
-路径：`linshi/easyproxy-sba-linux-20261026/`。
-
-- `*-04.safe.json`、`go-04.jsonl`、`workerd-04.xml`：真实 Linux ECH、Pages/Functions、CLI
-  构建；Go 80 tests/0 skip 和 vet；workerd 21 项 Node 统计通过（含 2 个父测试）、0 skip。
-- `python-runtime-06.safe.json`：在准确官方 Python image 中运行产品 venv bootstrap，
-  28 个 wheel 安装、实际 import 和 `pip check` 通过，不依赖 Windows pip bootstrap。
-- `aggregator-runtime-10.safe.json`：两个固定工具在真实 Linux 执行，离线真实转换通过。
-- `audit-image-08/image-provenance.json`：真实生产 tags binary 和准确本地 image ID。
-- `audit-smoke-10.safe.json`：真实订阅消费、1 个稳定节点、租约探测、清理正向确认及独立
-  查验容器不存在；本机 HTTP CONNECT fixture，不是外网代理质量或线上 ECH 验收。
-
-失败夹具及失败 XML 保留，未通过放松 hash/TLS/identity 或重放云写入来转绿。最新全量
-测试与安全检查的准确统计记录在 `integration-notes.md` 的最后续进段，不混称历史证据覆盖
-之后新增的代码。完整联网采集、真实 R2 发布、正式 Actions 环境/调度和五动作仍待完成。

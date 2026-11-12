@@ -218,6 +218,39 @@ published by Docker/Compose; changing YAML alone cannot expose a container port.
 - `GET /api/debug` and `GET /api/nodes` — each node now also reports
   `long_lived` and `uptime_seconds`.
 
+## Runtime update and reload contract
+
+The following matrix describes compatible legacy routing edits while the runtime is available; Local Server Profile/CAS behavior is documented in [local-server.md](local-server.md). A pending reload or topology incompatibility can require a reload instead of hot application.
+
+The management API applies edits with the cheapest sufficient mechanism
+(`RoutingController.ApplyHot` in `routing_controller.go`):
+
+| Edit | Effect |
+|---|---|
+| rules / rule_providers / final_policy / default_strategy | **Hot-applied** to the running engine + dispatcher. No restart, no dropped connections. `need_reload=false`. |
+| long-lived `min_uptime` / `min_success_rate` | **Hot-applied** to the live monitor manager and existing entries. `need_reload=false`; zero restores the default threshold. |
+| enabled / listen / session TTL | **Needs reload**. boxmgr coordinates the candidate box, dispatcher topology, and monitor listener transactionally; `need_reload=true` and the UI surfaces it. |
+| `skip_cert_verify` | The monitor probe manager updates immediately after a successful save, but the settings API still returns `need_reload=true` so sing-box outbound TLS behavior is rebuilt from the candidate. |
+| log level / GeoIP enablement, database, or auto-update settings | **Needs reload** through `/api/settings`; these fields are persisted first and applied transactionally with the next box candidate. |
+| management probe target / source-sync and subscription topology | Probe settings may update immediately after persistence; source/subscription topology is applied by the follow-up reload, and the settings API reports `need_reload=true` for the full runtime transaction. |
+| connector create/update/delete/enable and preferred-IP refresh | Candidate-save first, then automatic source refresh and reload. An edit that arrives during the reload window receives HTTP `409` with `need_reload=true`. |
+| node CRUD and enable/disable | Serialized behind the same manager mutation barrier; the operation waits for an active reload and then writes the current config rather than a retired snapshot. |
+
+While a reload transaction is between `PrepareReload` and its final config
+commit, settings, routing, and connector HTTP edits are rejected with
+`409 Conflict` and `need_reload=true`. Lower-level node/connector mutation
+callers are still serialized by the manager barrier. A persisted edit that
+loses the reload race is picked up by the follow-up reload rather than being
+overwritten by the captured target.
+
+Both routing and management listener runtime state are kept on the same server
+object across reloads. A new management address is bound synchronously, its
+target config/auth snapshot is applied before activation, and the old listener
+is drained asynchronously; a bind failure leaves the old address serving and
+aborts the candidate transaction. Handler dependencies are read as local
+snapshots before calling reload-capable managers, so a listener rebind cannot
+tear an interface value or hold a dependency lock across a reload.
+
 ## Limitations / notes
 
 - GEOIP rules apply only to literal-IP destinations (no per-request DNS

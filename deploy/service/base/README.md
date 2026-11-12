@@ -691,7 +691,7 @@ production Worker hostname is hardcoded as a credential or topology fallback.
 Recommended custom-domain migration order:
 
 1. Deploy `workers/ech-workers-cloudflare` with the custom-domain route
-   `proxyservice-ech-workers.aiaimimi.com`.
+   configured in your topology.
 2. Validate that both the custom domain and `workers.dev` still complete the
    authenticated WebSocket handshake.
 3. Run `update_ech_preferred_ips.ps1` with `-PreferCustomDomain -ApplyToMiSub`
@@ -702,13 +702,9 @@ Recommended custom-domain migration order:
 5. Only after end-to-end validation should `workers.dev` stop being referenced
    as the primary machine-consumer URL.
 
-## Migration Notes
+## Runtime Configuration Layout
 
-- The current `deploy/service/base/config.yaml` is based on the latest legacy runtime profile
-  `node-current-machine-host-standard`.
-- Legacy flat keys such as `sub_refresh_interval` were translated to the
-  current nested `subscription_refresh.*` structure expected by
-  `service/base`.
+- Subscription refresh settings use the nested `subscription_refresh.*` structure.
 - Source-sync settings now live under `source_sync.*`.
 - Manifest connector execution settings now live under
   `source_sync.connector_runtime.*`.

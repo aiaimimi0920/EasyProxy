@@ -2,7 +2,6 @@
 
 `ech.publish_ech` 是部署、升级、预升级动作共同复用的实际发布阶段，**不是完整生命周期
 入口**。它不创建第四个常驻服务，不改变旧生产 Worker，不提交套件版本或释放 writer。
-当前仍不提供可被 SpringBok catalog 接受的 manifest/deployment 声明。
 
 ## 输入与来源
 
@@ -66,9 +65,9 @@ boto3/SigV4 发送条件阶段标记；共同 writer 没有被阶段代码释放
 `EASYPROXY_TEST_ESBUILD` 时，Python 真实构建测试明确 skip，不能作为全部通过。
 
 这些检查不等于 ECH 外网 TCP 业务、MiSub 消费、Aggregator 实际刷新或整套可用性验证，
-因此不产生 `service-ready` 或 `suite-published`。五动作编排和独立业务验收仍必须完成。
+因此不产生 `service-ready` 或 `suite-published`。单阶段成功不能替代整套动作及独立业务验收。
 
-## 本轮联网核实的官方资料
+## 接口参考
 
 - [Workers multipart metadata](https://github.com/cloudflare/cloudflare-docs/blob/production/src/content/docs/workers/configuration/multipart-upload-metadata.mdx)：
   main module、R2/secret binding 与 tags。
@@ -79,6 +78,3 @@ boto3/SigV4 发送条件阶段标记；共同 writer 没有被阶段代码释放
   [account subdomain API](https://github.com/cloudflare/cloudflare-go/blob/main/workers/subdomain.go)：
   仅更改本 Worker 的公开开关，不创建账号级子域。
 - [esbuild 0.28.2 官方 npm 元数据](https://registry.npmjs.org/esbuild/0.28.2)：固定 Windows x64 二进制摘要。
-
-下载快照保存在 `linshi/easyproxy-sba-20261026/official-*`。这是接口与固定工具的资料核实，
-不是对真实账号做发布验收。
