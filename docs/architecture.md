@@ -2,9 +2,7 @@
 
 ## Goal
 
-This repository is the public monorepo for the EasyProxy stack. It replaces the
-older multi-repository source workspace with a single contributor-facing
-repository.
+This repository is the public monorepo for the EasyProxy stack.
 
 ## Top-Level Areas
 
@@ -94,9 +92,7 @@ recursive submodules.
 Private secrets, private deployment notes, and local runtime state do not live
 in this repository.
 
-Those materials may stay under the shared `AIRead` knowledge base and may be
-linked locally into the repo root for operator convenience, but they must
-remain ignored by Git. The monorepo does not require that archive layout:
-tracked automation consumes non-secret topology, the persistent service runtime
+Store private operator material outside the repository in protected storage.
+Tracked automation consumes non-secret topology, persistent service runtime
 config, environment/platform secrets, import codes, or explicit non-secret
-parameters instead of probing legacy archive paths.
+parameters. It must not discover credentials by scanning private archives.

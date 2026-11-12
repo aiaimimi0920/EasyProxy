@@ -70,23 +70,7 @@ only when running the protected rotation workflow described in
 
 ## 4. Deploy the local runtime
 
-Build from this checkout:
-
-```powershell
-.\scripts\deploy-subproject.ps1 -Project easyproxy -TopologyPath .\topology.yaml
-```
-
-Or pull a published image:
-
-```powershell
-.\scripts\deploy-subproject.ps1 `
-  -Project easyproxy-ghcr `
-  -TopologyPath .\topology.yaml `
-  -GhcrOwner <owner> `
-  -ReleaseTag <tag>
-```
-
-For a standalone launcher:
+Use the repository-root launcher first. It also works when downloaded alone:
 
 ```powershell
 pwsh .\deploy-host.ps1 -Project easyproxy-ghcr -GhcrOwner <owner> -ReleaseTag <tag>
@@ -94,7 +78,19 @@ pwsh .\deploy-host.ps1 -Project easyproxy-ghcr -GhcrOwner <owner> -ReleaseTag <t
 
 `deploy-host.ps1` recursively clones all public submodules and keeps
 `topology.yaml` plus `easyproxy-runtime.yaml` outside the replaceable source
-cache.
+cache. See [the host entrypoint contract](root-host-deploy-standard.md).
+
+For developers who already have a complete checkout, the lower-level adapter
+can build locally or deploy a specified published image:
+
+```powershell
+.\scripts\deploy-subproject.ps1 -Project easyproxy -TopologyPath .\topology.yaml
+.\scripts\deploy-subproject.ps1 `
+  -Project easyproxy-ghcr `
+  -TopologyPath .\topology.yaml `
+  -GhcrOwner <owner> `
+  -ReleaseTag <tag>
+```
 
 ## 5. Deploy cloud components
 

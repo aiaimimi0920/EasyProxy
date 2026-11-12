@@ -43,17 +43,10 @@ names must still satisfy the public resource-name contract.
 - A topology/API identity mismatch stops the update.
 - Manifests contain no resolved secret values and carry a checksum.
 
-## Legacy Entry Point Decisions
+## Lifecycle Ownership
 
-| Former entry point | Decision |
-| --- | --- |
-| Root `config.yaml` / `config.example.yaml` | Removed as an application contract; an ignored local legacy file may remain only for manual migration reference. |
-| `scripts/init-config.ps1` | Replaced by `init-topology.ps1` and `init-runtime-config.ps1`. |
-| `scripts/render-derived-configs.*` | Deleted; ordinary deploys no longer regenerate runtime state. |
-| `scripts/sync-github-deployment-settings.*` | Deleted; topology and platform APIs are the lifecycle contract. |
-| `scripts/deploy-subproject.ps1`, `deploy-host.ps1` | Migrated to topology/runtime inputs and kept as thin operator adapters. |
-| `publish-service-base-config.yml` | Deleted; an explicit local snapshot command remains, but is not an update authority. |
-
+Ordinary deployment must not introduce a second runtime-config writer.
+An explicit runtime snapshot is a distribution tool, not an update authority.
 `easyproxyctl` owns topology validation, resource naming, reconciliation rules,
 and deployment-manifest integrity. Provider scripts and workflows call that
 contract; they must not implement a second naming or create-on-update policy.

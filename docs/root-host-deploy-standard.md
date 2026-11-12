@@ -29,26 +29,20 @@ The contract for that file is:
 
 Future deploy changes must preserve this contract.
 
-## Import Code Distribution
+## Optional Runtime Snapshot Distribution
 
-When this repository publishes runtime configuration through Cloudflare R2,
-the canonical operator path must preserve all of these rules:
+Import codes are an explicit advanced operator path for distributing a private
+runtime snapshot, not a prerequisite or mandatory artifact of a normal release.
+Native releases contain only example configuration; ordinary updates preserve
+the active runtime configuration.
 
-- the release workflow publishes an encrypted import-code artifact for the
-  trusted operator path
-- `deploy-host.ps1` accepts either `-ImportCode` or `-BootstrapFile`
-- the root entrypoint consumes that import-code/bootstrap path directly
-  instead of forcing operators back to manual config editing
-- the encrypted artifact protects a bundle that contains R2 location data,
-  manifest/object keys, read credentials, and sync metadata
-- the owner private key input may be either:
-  - a raw base64url Curve25519 private key
-  - or a stable passphrase string that deterministically derives the same key
+When an operator chooses this path, `deploy-host.ps1` accepts `-ImportCode` or
+`-BootstrapFile` directly. The encrypted bundle may contain R2 locations,
+manifest/object keys, read credentials, and sync metadata; keep it and its
+private key out of Git and public release assets.
 
-The corresponding public key can be derived locally with:
-
-- `python scripts/easyproxy-import-code.py derive-public-key --private-key-file <owner-private-key.txt>`
-
+Follow [Runtime Config Distribution](service-base-config-distribution.md) for
+snapshot publication, encryption, key derivation, and bootstrap details.
 ## Canonical Docker Naming
 
 This repo must keep the short slug `easy-proxy` as the operator-facing

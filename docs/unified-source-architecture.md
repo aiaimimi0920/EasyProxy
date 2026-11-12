@@ -19,7 +19,7 @@ The canonical source model uses the following fields:
 - `input`
 - `options`
 
-Phase 1 also allows auxiliary probe metadata for operator feedback:
+The manifest contract also allows auxiliary probe metadata for operator feedback:
 
 - `probe_status`
 - `detected_kind`
@@ -27,7 +27,7 @@ Phase 1 also allows auxiliary probe metadata for operator feedback:
 - `probe_message`
 - `probe_input`
 
-Phase 1 defines three kinds:
+The manifest contract defines three kinds:
 
 - `subscription`
   - `input` is an `http://` or `https://` subscription URL
@@ -49,7 +49,7 @@ Phase 1 defines three kinds:
 - accepts subscription-oriented upstream sources
 - produces standard subscription artifacts
 - acts as the fallback artifact producer
-- does not become a generic source registry in Phase 1
+- is not a generic source registry
 
 ### `upstreams/misub`
 

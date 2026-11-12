@@ -27,7 +27,6 @@ EasyProxy 的第一方集成与部署代码位于根仓库；三个 `upstreams/*
 
 - [架构说明](architecture.md)
 - [统一来源架构](unified-source-architecture.md)
-- [开发工作流](development-workflow.md)
 - [发布合同](release-contract.md)
 - [发布检查表](release-checklist.md)
 - [根宿主部署标准](root-host-deploy-standard.md)
