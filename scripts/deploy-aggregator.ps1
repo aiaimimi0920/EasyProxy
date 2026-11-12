@@ -5,7 +5,6 @@ param(
     [ValidateSet("bootstrap", "update")]
     [string]$DeploymentMode = "update",
     [bool]$ForceDeploy = $false,
-    [switch]$SkipSecretUpdate,
     [switch]$SkipWorkflowTrigger
 )
 
@@ -20,11 +19,6 @@ Invoke-EasyProxyExternalCommand -FilePath "gh" -Arguments @("auth", "status") -F
 $topology = Read-EasyProxyTopology -TopologyPath $TopologyPath
 if (-not [bool]$topology.components.aggregator) {
     throw 'Topology does not enable components.aggregator.'
-}
-
-if (-not $SkipSecretUpdate) {
-    Write-Host "Aggregator now uses this repository's native workflow and GitHub Secrets." -ForegroundColor Yellow
-    Write-Host "Skipping legacy secret push step because external repository dispatch is retired." -ForegroundColor Yellow
 }
 
 if (-not $SkipWorkflowTrigger) {

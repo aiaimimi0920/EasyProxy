@@ -16,12 +16,8 @@ def ensure(condition: bool, message: str) -> None:
 
 def auth_headers() -> dict[str, str]:
     token = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip()
-    if token:
-        return {"Authorization": f"Bearer {token}"}
-    email = os.environ.get("CLOUDFLARE_EMAIL", "").strip()
-    api_key = os.environ.get("CLOUDFLARE_API_KEY", "").strip()
-    ensure(email != "" and api_key != "", "Cloudflare API credentials are required")
-    return {"X-Auth-Email": email, "X-Auth-Key": api_key}
+    ensure(token != "", "CLOUDFLARE_API_TOKEN is required")
+    return {"Authorization": f"Bearer {token}"}
 
 
 def verify_identity(session, account_id: str, worker_name: str, mode: str) -> bool:

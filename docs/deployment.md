@@ -635,3 +635,19 @@ configs.
 Code updates preserve runtime data by default. When an update creates a backup,
 it must verify that backup before deployment. A missing snapshot never grants
 permission to replace the current config or create a second state resource.
+
+### Import-code key and recovery tools
+
+Use the shared Python CLI rather than the retired PowerShell key-generation and
+decryption wrappers. Install `requirements-ci.txt` (including PyNaCl), run from
+the repository root, and keep all outputs in an access-controlled private directory.
+Python relative paths resolve against the current working directory; absolute
+paths avoid dependence on where the shell was opened.
+
+```powershell
+python scripts/easyproxy-import-code.py generate-keypair --public-key-output '<private-dir>/owner-public.txt' --private-key-output '<private-dir>/owner-private.txt'
+python scripts/easyproxy-import-code.py decrypt --encrypted-file '<private-dir>/encrypted.json' --private-key-file '<private-dir>/owner-private.txt' --import-code-only --output '<private-dir>/import-code.txt'
+```
+
+Always supply output paths: omitting them can print private keys or decrypted
+credentials to the terminal. Do not commit these outputs.

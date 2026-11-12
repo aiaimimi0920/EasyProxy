@@ -35,6 +35,20 @@ class FakeSession:
 
 
 class VerifyCloudflareWorkerIdentityTests(unittest.TestCase):
+    @patch.dict(os.environ, {}, clear=True)
+    def test_missing_token_is_rejected(self):
+        with self.assertRaisesRegex(RuntimeError, "CLOUDFLARE_API_TOKEN is required"):
+            worker_identity.auth_headers()
+
+    @patch.dict(os.environ, {"CLOUDFLARE_EMAIL": "test@example.invalid", "CLOUDFLARE_API_KEY": "legacy-test-key"}, clear=True)
+    def test_legacy_global_key_does_not_replace_token(self):
+        with self.assertRaisesRegex(RuntimeError, "CLOUDFLARE_API_TOKEN is required"):
+            worker_identity.auth_headers()
+
+    @patch.dict(os.environ, {"CLOUDFLARE_API_TOKEN": " token "}, clear=True)
+    def test_token_uses_bearer_authorization(self):
+        self.assertEqual(worker_identity.auth_headers(), {"Authorization": "Bearer token"})
+
     @patch.dict(os.environ, {"CLOUDFLARE_API_TOKEN": "token"}, clear=True)
     def test_update_requires_existing_exact_worker(self):
         with self.assertRaisesRegex(RuntimeError, "refuses to create"):

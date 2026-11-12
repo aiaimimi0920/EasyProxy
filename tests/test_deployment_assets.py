@@ -1,9 +1,46 @@
+"""Static deployment contracts; these checks do not start containers or alter hosts."""
+
 from pathlib import Path
+
+import pytest
+import yaml
 
 
 ROOT = Path(__file__).parents[1]
+NAS = ROOT / "deploy/nas"
 ASSET_ROOT = ROOT / "deploy" / "gateway" / "debian"
 
+
+# NAS bridge deployment
+
+def test_nas_compose_pins_image_and_persists_config_and_state():
+    text = (NAS / "docker-compose.yaml").read_text(encoding="utf-8")
+    assert "EASY_PROXY_IMAGE:?Set EASY_PROXY_IMAGE" in text
+    assert "/var/lib/easyproxy/config/config.yaml" in text
+    assert "/etc/easyproxy/config.yaml:ro" not in text
+    assert "/var/lib/easyproxy" in text
+    assert '10001' in text
+    assert "network_mode: host" not in text
+
+
+def test_nas_preflight_rejects_latest_and_checks_arch_permissions_ports():
+    text = (NAS / "preflight.sh").read_text(encoding="utf-8")
+    assert "*:latest" in text
+    assert "x86_64|amd64|aarch64|arm64" in text
+    assert "stat -c '%u'" in text
+    assert "NAS config is not writable" in text
+    assert "22323 29888" in text
+
+
+def test_nas_documentation_has_honest_support_matrix():
+    text = (NAS / "README.md").read_text(encoding="utf-8")
+    assert "Native Synology/QNAP packages are not published or claimed" in text
+    assert "Bridge, Local Server/API" in text
+    assert "Host, transparent gateway" in text
+    assert "Windows arm64" in text
+
+
+# Debian VM transparent gateway and shared service assets
 
 def read_asset(name: str) -> str:
     path = ASSET_ROOT / name
@@ -123,3 +160,18 @@ def test_preseed_keeps_credentials_runtime_only_and_pins_gateway_network():
     assert "openssh-server" in text
     assert "partman-auto/disk string /dev/sda" in text
     assert "grub-installer/bootdev string /dev/sda" in text
+
+
+# Log limits shared by all official Compose layouts
+
+@pytest.mark.parametrize("layout", ["gateway/debian", "nas", "service/base"])
+def test_official_compose_layouts_bound_container_logs(layout):
+    document = yaml.safe_load((ROOT / "deploy" / layout / "docker-compose.yaml").read_text(encoding="utf-8"))
+    service = next(iter(document["services"].values()))
+    assert service["logging"] == {
+        "driver": "json-file",
+        "options": {
+            "max-size": "${EASY_DOCKER_LOG_MAX_SIZE:-20m}",
+            "max-file": "${EASY_DOCKER_LOG_MAX_FILE:-5}",
+        },
+    }
