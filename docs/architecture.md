@@ -86,7 +86,7 @@ recursive submodules.
   - GitHub Actions + R2 publication assets
 - `deploy/upstreams/ech-workers`
   - deployment notes for the local ECH helper
-- `deploy/workers/ech-workers-cloudflare`
+- `workers/ech-workers-cloudflare`
   - deployment notes for the Cloudflare Worker
 
 ## Private Operator Boundary

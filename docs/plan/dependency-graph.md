@@ -18,7 +18,7 @@
    - operationally references `upstreams/misub`, `upstreams/aggregator`, and
      `upstreams/ech-workers`
 
-4. `deploy/workers/ech-workers-cloudflare`
+4. `workers/ech-workers-cloudflare`
    - depends on `workers/ech-workers-cloudflare`
 
 ## Migration Ordering

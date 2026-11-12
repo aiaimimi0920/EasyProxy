@@ -18,7 +18,7 @@
 | MiSub deploy notes | legacy `deploy/MiSub` | `deploy/upstreams/misub` | none |
 | aggregator deploy assets | legacy `deploy/aggregator` | `deploy/upstreams/aggregator` | none |
 | ech-workers deploy notes | legacy `deploy/ech-workers` | `deploy/upstreams/ech-workers` | none |
-| Worker deploy notes | legacy `deploy/ech-workers-cloudflare` | `deploy/workers/ech-workers-cloudflare` | none |
+| Worker deploy notes | legacy `deploy/ech-workers-cloudflare` | `workers/ech-workers-cloudflare` | none |
 
 ## Private Material Boundary
 
