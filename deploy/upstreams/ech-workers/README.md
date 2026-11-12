@@ -19,7 +19,7 @@ Operational rule:
   - local `EasyProxy` connector config
   - or `MiSub` manifest connector sources
 - optional standalone image build and publish:
-  - `scripts/build-ech-workers-image.ps1`
+  - `scripts/build-image.ps1 -Target ech-workers`
   - `deploy/upstreams/ech-workers/scripts/publish-ghcr-ech-workers.ps1`
   - Dockerfile:
     - `deploy/upstreams/ech-workers/Dockerfile`

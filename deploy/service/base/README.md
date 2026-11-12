@@ -387,7 +387,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 `
 Lower-level deployment-only helper:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\init-runtime-config.ps1 `
+powershell -ExecutionPolicy Bypass -File .\scripts\initialize-config.ps1 -Target runtime `
   -OutputPath .\deploy\service\base\config.yaml
 
 powershell -ExecutionPolicy Bypass -File .\deploy\service\base\scripts\deploy-ghcr-runtime.ps1 `

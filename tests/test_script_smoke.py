@@ -53,21 +53,47 @@ class ScriptSmokeTests(unittest.TestCase):
                 self.assertRegex(reference, r"^[A-Z][A-Z0-9_]*$")
 
     def test_initializers_refuse_implicit_overwrite(self):
+        initializer = REPO_ROOT / "scripts/initialize-config.ps1"
+        templates = {
+            "topology": TOPOLOGY_EXAMPLE,
+            "runtime": REPO_ROOT / "deploy/service/base/config.template.yaml",
+        }
         with tempfile.TemporaryDirectory() as temp_dir:
-            topology_path = Path(temp_dir) / "nested" / "topology.yaml"
-            runtime_path = Path(temp_dir) / "runtime.yaml"
-            topology_init = REPO_ROOT / "scripts/init-topology.ps1"
-            runtime_init = REPO_ROOT / "scripts/init-runtime-config.ps1"
+            for target, template in templates.items():
+                with self.subTest(target=target):
+                    output = Path(temp_dir) / target / "config.yaml"
+                    args = ["-File", str(initializer), "-Target", target, "-OutputPath", str(output)]
+                    first = self.run_powershell(args)
+                    self.assertEqual(first.returncode, 0, msg=first.stderr or first.stdout)
+                    self.assertEqual(output.read_bytes(), template.read_bytes())
+                    output.write_text("sentinel: preserve\n", encoding="utf-8")
+                    second = self.run_powershell(args)
+                    self.assertNotEqual(second.returncode, 0)
+                    self.assertIn("already exists", f"{second.stdout}\n{second.stderr}")
+                    self.assertEqual(output.read_text(encoding="utf-8"), "sentinel: preserve\n")
+                    forced = self.run_powershell(args + ["-Force"])
+                    self.assertEqual(forced.returncode, 0, msg=forced.stderr or forced.stdout)
+                    self.assertEqual(output.read_bytes(), template.read_bytes())
+                    if target == "runtime":
+                        self.assertIn("management", yaml.safe_load(output.read_text(encoding="utf-8")))
 
-            first = self.run_powershell(["-File", str(topology_init), "-OutputPath", str(topology_path)])
-            second = self.run_powershell(["-File", str(topology_init), "-OutputPath", str(topology_path)])
-            runtime = self.run_powershell(["-File", str(runtime_init), "-OutputPath", str(runtime_path)])
-
-            self.assertEqual(first.returncode, 0, msg=first.stderr or first.stdout)
-            self.assertNotEqual(second.returncode, 0)
-            self.assertIn("already exists", f"{second.stdout}\n{second.stderr}")
-            self.assertEqual(runtime.returncode, 0, msg=runtime.stderr or runtime.stdout)
-            self.assertIn("management", yaml.safe_load(runtime_path.read_text(encoding="utf-8")))
+    def test_initializer_default_outputs_remain_separate(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            for relative in ("scripts/initialize-config.ps1", "scripts/lib/easyproxy-common.ps1",
+                             "topology.example.yaml", "deploy/service/base/config.template.yaml"):
+                destination = root / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes((REPO_ROOT / relative).read_bytes())
+            for target, relative, template in (
+                ("topology", "topology.yaml", "topology.example.yaml"),
+                ("runtime", "deploy/service/base/config.yaml", "deploy/service/base/config.template.yaml"),
+            ):
+                with self.subTest(target=target):
+                    result = self.run_powershell(["-File", str(root / "scripts/initialize-config.ps1"),
+                                                  "-Target", target])
+                    self.assertEqual(result.returncode, 0, msg=result.stderr or result.stdout)
+                    self.assertEqual((root / relative).read_bytes(), (root / template).read_bytes())
 
     def test_deploy_subproject_dispatches_publish_easyproxy(self):
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -38,8 +38,8 @@ Prerequisites:
 
 Initialize both independent contracts:
 
-    powershell -ExecutionPolicy Bypass -File .\scripts\init-topology.ps1
-    powershell -ExecutionPolicy Bypass -File .\scripts\init-runtime-config.ps1
+    powershell -ExecutionPolicy Bypass -File .\scripts\initialize-config.ps1 -Target topology
+    powershell -ExecutionPolicy Bypass -File .\scripts\initialize-config.ps1 -Target runtime
 
 Resolve each environment variable name referenced by topology in the process or
 protected platform secret store. Runtime-only credentials remain in the ignored

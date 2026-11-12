@@ -53,7 +53,7 @@ release channels. Secret fields contain environment variable **names**, never
 secret values.
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\init-topology.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\initialize-config.ps1 -Target topology
 Set-Location tools/easyproxyctl
 go run .\cmd\easyproxyctl topology validate --file ..\..\topology.yaml
 go run .\cmd\easyproxyctl topology names --file ..\..\topology.yaml
@@ -70,7 +70,7 @@ listeners, management access, source sync, subscriptions, connectors, routing,
 gateway/TUN, refresh, and probing behavior. Initialize it once:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\init-runtime-config.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\initialize-config.ps1 -Target runtime
 ```
 
 Ordinary deploys and topology updates never overwrite an existing runtime
@@ -174,7 +174,7 @@ The PowerShell dispatcher supports:
 - `easyproxy`, `easyproxy-ghcr`;
 - `misub-pages`, `misub-docker`;
 - `aggregator`, `ech-workers-cloudflare`;
-- `build-easyproxy-image`, `build-ech-workers-image`;
+- `build-easyproxy-image`, `build-ech-workers-image`（统一调用 `scripts/build-image.ps1 -Target easyproxy|ech-workers`）；
 - `publish-easyproxy-image`, `publish-ech-workers-image`,
   `publish-core-images`;
 - `publish-service-base-config` for an explicit local runtime snapshot.

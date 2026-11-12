@@ -36,8 +36,8 @@ Cloud bootstrap, update, recovery, and release acceptance are covered in
 ### 2. Initialize the two configuration layers
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\init-topology.ps1
-powershell -ExecutionPolicy Bypass -File .\scripts\init-runtime-config.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\initialize-config.ps1 -Target topology
+powershell -ExecutionPolicy Bypass -File .\scripts\initialize-config.ps1 -Target runtime
 ```
 
 Edit `topology.yaml` for deployment/resource choices. Its `secrets` fields are

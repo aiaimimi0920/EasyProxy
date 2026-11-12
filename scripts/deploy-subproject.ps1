@@ -121,12 +121,12 @@ switch ($Project) {
         Invoke-RepositoryScript -Name 'deploy-ech-workers-cloudflare.ps1' -Arguments $arguments
     }
     { $_ -in @('build-easyproxy-image', 'build-ech-workers-image') } {
-        $name = if ($Project -eq 'build-easyproxy-image') { 'build-easyproxy-image.ps1' } else { 'build-ech-workers-image.ps1' }
-        $arguments = @()
+        $target = if ($Project -eq 'build-easyproxy-image') { 'easyproxy' } else { 'ech-workers' }
+        $arguments = @('-Target', $target)
         if (-not [string]::IsNullOrWhiteSpace($Image)) { $arguments += @('-Image', $Image) }
         if ($NoCache) { $arguments += '-NoCache' }
         if ($Push) { $arguments += '-Push' }
-        Invoke-RepositoryScript -Name $name -Arguments $arguments
+        Invoke-RepositoryScript -Name 'build-image.ps1' -Arguments $arguments
     }
     'publish-service-base-config' {
         $arguments = @('-TopologyPath', $resolvedTopologyPath, '-RuntimeConfigPath', $RuntimeConfigPath)

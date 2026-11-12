@@ -178,7 +178,7 @@ ordinary deploys and updates.
 For the repository-helper default path, initialize and deploy from the repository root:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\init-runtime-config.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\initialize-config.ps1 -Target runtime
 powershell -ExecutionPolicy Bypass -File .\scripts\deploy-subproject.ps1 -Project easyproxy
 ```
 
