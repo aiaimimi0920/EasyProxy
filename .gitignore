@@ -33,3 +33,12 @@ workers/ech-workers-cloudflare/.dev.vars
 # OS/editor noise
 .DS_Store
 Thumbs.db
+
+# Local analysis, browser-session artifacts and test caches
+**/.pytest_cache/
+**/.memsearch/
+**/.playwright-cli/
+**/.playwright-mcp/
+**/graphify-out/
+**/*.test.exe
+service/base/.tmp/

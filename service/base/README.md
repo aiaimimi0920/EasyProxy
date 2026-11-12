@@ -199,7 +199,7 @@ WebUI/API 的持久化写入目标。
 - `frontend/`: 前端源码
 - `internal/`: 后端核心模块
 - `internal/monitor/assets/`: 前端构建产物（会被 Go embed）
-- `.github/workflows/build-and-release.yml`: 自动构建与发布流程
+- `../../.github/workflows/publish-github-release.yml`: 仓库统一构建与发布流程
 
 ---
 
