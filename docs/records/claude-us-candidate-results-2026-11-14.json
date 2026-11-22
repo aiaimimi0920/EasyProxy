@@ -1,0 +1,391 @@
+[
+  {
+    "candidate_count": 6
+  },
+  {
+    "candidate": "08bd1dbd1ef7",
+    "exit": 0,
+    "stderr_bytes": 0,
+    "rows": [
+      {
+        "family": 6,
+        "http": 200,
+        "ip_hash": "f0d59960aac3a342203e659dfc368c29f7745685c2aa2687c9a25fc7543f4e1e",
+        "ms": 534,
+        "round": 1,
+        "target": "https://www.cloudflare.com/cdn-cgi/trace",
+        "utc": "2026-11-14T20:44:44.551860465Z"
+      },
+      {
+        "family": 4,
+        "http": 200,
+        "ip_hash": "47e3d3000610c42c6f53d9548377678ea4429b51b67245398f6c61968d83244c",
+        "ms": 548,
+        "round": 1,
+        "target": "https://api.ipify.org",
+        "utc": "2026-11-14T20:44:45.086952495Z"
+      },
+      {
+        "family": 6,
+        "http": 200,
+        "ip_hash": "f0d59960aac3a342203e659dfc368c29f7745685c2aa2687c9a25fc7543f4e1e",
+        "ms": 560,
+        "round": 2,
+        "target": "https://www.cloudflare.com/cdn-cgi/trace",
+        "utc": "2026-11-14T20:45:14.554618933Z"
+      },
+      {
+        "family": 4,
+        "http": 200,
+        "ip_hash": "47e3d3000610c42c6f53d9548377678ea4429b51b67245398f6c61968d83244c",
+        "ms": 552,
+        "round": 2,
+        "target": "https://api.ipify.org",
+        "utc": "2026-11-14T20:45:15.11565039Z"
+      },
+      {
+        "family": 6,
+        "http": 200,
+        "ip_hash": "f0d59960aac3a342203e659dfc368c29f7745685c2aa2687c9a25fc7543f4e1e",
+        "ms": 492,
+        "round": 3,
+        "target": "https://www.cloudflare.com/cdn-cgi/trace",
+        "utc": "2026-11-14T20:45:44.575755176Z"
+      },
+      {
+        "family": 4,
+        "http": 200,
+        "ip_hash": "47e3d3000610c42c6f53d9548377678ea4429b51b67245398f6c61968d83244c",
+        "ms": 554,
+        "round": 3,
+        "target": "https://api.ipify.org",
+        "utc": "2026-11-14T20:45:45.068674161Z"
+      },
+      {
+        "elapsed_ms": 61071
+      }
+    ]
+  },
+  {
+    "candidate": "d456f503f93d",
+    "exit": 0,
+    "stderr_bytes": 0,
+    "rows": [
+      {
+        "family": 6,
+        "http": 200,
+        "ip_hash": "3e61525c55e1e9537f05afe610b90fec160b7af53b4d19fa81ae3fdc5e6ec828",
+        "ms": 538,
+        "round": 1,
+        "target": "https://www.cloudflare.com/cdn-cgi/trace",
+        "utc": "2026-11-14T20:45:46.15662396Z"
+      },
+      {
+        "family": 4,
+        "http": 200,
+        "ip_hash": "2d8e1515ce5df01d54ccab1d1e8dfeae724f3543a4046bb782854e099a5f9f7f",
+        "ms": 565,
+        "round": 1,
+        "target": "https://api.ipify.org",
+        "utc": "2026-11-14T20:45:46.695247627Z"
+      },
+      {
+        "family": 6,
+        "http": 200,
+        "ip_hash": "3e61525c55e1e9537f05afe610b90fec160b7af53b4d19fa81ae3fdc5e6ec828",
+        "ms": 488,
+        "round": 2,
+        "target": "https://www.cloudflare.com/cdn-cgi/trace",
+        "utc": "2026-11-14T20:46:16.180858472Z"
+      },
+      {
+        "family": 4,
+        "http": 200,
+        "ip_hash": "2d8e1515ce5df01d54ccab1d1e8dfeae724f3543a4046bb782854e099a5f9f7f",
+        "ms": 634,
+        "round": 2,
+        "target": "https://api.ipify.org",
+        "utc": "2026-11-14T20:46:16.670088206Z"
+      },
+      {
+        "family": 6,
+        "http": 200,
+        "ip_hash": "3e61525c55e1e9537f05afe610b90fec160b7af53b4d19fa81ae3fdc5e6ec828",
+        "ms": 583,
+        "round": 3,
+        "target": "https://www.cloudflare.com/cdn-cgi/trace",
+        "utc": "2026-11-14T20:46:46.179593549Z"
+      },
+      {
+        "family": 4,
+        "http": 200,
+        "ip_hash": "2d8e1515ce5df01d54ccab1d1e8dfeae724f3543a4046bb782854e099a5f9f7f",
+        "ms": 627,
+        "round": 3,
+        "target": "https://api.ipify.org",
+        "utc": "2026-11-14T20:46:46.763898198Z"
+      },
+      {
+        "elapsed_ms": 61235
+      }
+    ]
+  },
+  {
+    "candidate": "bf526ec858ad",
+    "exit": 0,
+    "stderr_bytes": 0,
+    "rows": [
+      {
+        "family": 6,
+        "http": 200,
+        "ip_hash": "490729e06698b2ab65f182ad88a6bbda4e5d39ca38477c200ab80a238af2214d",
+        "ms": 516,
+        "round": 1,
+        "target": "https://www.cloudflare.com/cdn-cgi/trace",
+        "utc": "2026-11-14T20:46:47.924926828Z"
+      },
+      {
+        "family": 4,
+        "http": 200,
+        "ip_hash": "69f2269475548dfea2fd15984990cfc1fd34fe68ff1160f80ab14b5b247de672",
+        "ms": 555,
+        "round": 1,
+        "target": "https://api.ipify.org",
+        "utc": "2026-11-14T20:46:48.441462462Z"
+      },
+      {
+        "family": 6,
+        "http": 200,
+        "ip_hash": "490729e06698b2ab65f182ad88a6bbda4e5d39ca38477c200ab80a238af2214d",
+        "ms": 489,
+        "round": 2,
+        "target": "https://www.cloudflare.com/cdn-cgi/trace",
+        "utc": "2026-11-14T20:47:17.934842224Z"
+      },
+      {
+        "family": 4,
+        "http": 200,
+        "ip_hash": "69f2269475548dfea2fd15984990cfc1fd34fe68ff1160f80ab14b5b247de672",
+        "ms": 559,
+        "round": 2,
+        "target": "https://api.ipify.org",
+        "utc": "2026-11-14T20:47:18.424501825Z"
+      },
+      {
+        "family": 6,
+        "http": 200,
+        "ip_hash": "490729e06698b2ab65f182ad88a6bbda4e5d39ca38477c200ab80a238af2214d",
+        "ms": 492,
+        "round": 3,
+        "target": "https://www.cloudflare.com/cdn-cgi/trace",
+        "utc": "2026-11-14T20:47:47.926664033Z"
+      },
+      {
+        "family": 4,
+        "http": 200,
+        "ip_hash": "69f2269475548dfea2fd15984990cfc1fd34fe68ff1160f80ab14b5b247de672",
+        "ms": 548,
+        "round": 3,
+        "target": "https://api.ipify.org",
+        "utc": "2026-11-14T20:47:48.419931694Z"
+      },
+      {
+        "elapsed_ms": 61044
+      }
+    ]
+  },
+  {
+    "candidate": "4ef93ea70d22",
+    "exit": 0,
+    "stderr_bytes": 0,
+    "rows": [
+      {
+        "family": 6,
+        "http": 200,
+        "ip_hash": "6256d55438bf26a532a03cb89faed23b76eb998bb5b8ca342c6445e9cec05681",
+        "ms": 705,
+        "round": 1,
+        "target": "https://www.cloudflare.com/cdn-cgi/trace",
+        "utc": "2026-11-14T20:47:49.470362052Z"
+      },
+      {
+        "family": 4,
+        "http": 200,
+        "ip_hash": "59350a6dfeb098c7722239dd690dc03753243a84d20e7c21649447ba1a3e7dd8",
+        "ms": 766,
+        "round": 1,
+        "target": "https://api.ipify.org",
+        "utc": "2026-11-14T20:47:50.176523762Z"
+      },
+      {
+        "family": 6,
+        "http": 200,
+        "ip_hash": "6256d55438bf26a532a03cb89faed23b76eb998bb5b8ca342c6445e9cec05681",
+        "ms": 571,
+        "round": 2,
+        "target": "https://www.cloudflare.com/cdn-cgi/trace",
+        "utc": "2026-11-14T20:48:19.470553004Z"
+      },
+      {
+        "family": 4,
+        "http": 200,
+        "ip_hash": "59350a6dfeb098c7722239dd690dc03753243a84d20e7c21649447ba1a3e7dd8",
+        "ms": 685,
+        "round": 2,
+        "target": "https://api.ipify.org",
+        "utc": "2026-11-14T20:48:20.042367092Z"
+      },
+      {
+        "family": 6,
+        "http": 200,
+        "ip_hash": "6256d55438bf26a532a03cb89faed23b76eb998bb5b8ca342c6445e9cec05681",
+        "ms": 629,
+        "round": 3,
+        "target": "https://www.cloudflare.com/cdn-cgi/trace",
+        "utc": "2026-11-14T20:48:49.4990597Z"
+      },
+      {
+        "family": 4,
+        "http": 200,
+        "ip_hash": "59350a6dfeb098c7722239dd690dc03753243a84d20e7c21649447ba1a3e7dd8",
+        "ms": 639,
+        "round": 3,
+        "target": "https://api.ipify.org",
+        "utc": "2026-11-14T20:48:50.129059443Z"
+      },
+      {
+        "elapsed_ms": 61298
+      }
+    ]
+  },
+  {
+    "candidate": "106409344867",
+    "exit": 0,
+    "stderr_bytes": 0,
+    "rows": [
+      {
+        "family": 6,
+        "http": 200,
+        "ip_hash": "8c3819878f390f5250f72897539a3aad633e568898126fcdc639612e54351477",
+        "ms": 617,
+        "round": 1,
+        "target": "https://www.cloudflare.com/cdn-cgi/trace",
+        "utc": "2026-11-14T20:48:51.273209615Z"
+      },
+      {
+        "family": 4,
+        "http": 200,
+        "ip_hash": "049b7cf405c9e08c83bbfa0b998f6c8b18125a1c7bf361e3d22c6d7db9753532",
+        "ms": 600,
+        "round": 1,
+        "target": "https://api.ipify.org",
+        "utc": "2026-11-14T20:48:51.891251175Z"
+      },
+      {
+        "family": 6,
+        "http": 200,
+        "ip_hash": "8c3819878f390f5250f72897539a3aad633e568898126fcdc639612e54351477",
+        "ms": 529,
+        "round": 2,
+        "target": "https://www.cloudflare.com/cdn-cgi/trace",
+        "utc": "2026-11-14T20:49:21.301260346Z"
+      },
+      {
+        "family": 4,
+        "http": 200,
+        "ip_hash": "049b7cf405c9e08c83bbfa0b998f6c8b18125a1c7bf361e3d22c6d7db9753532",
+        "ms": 598,
+        "round": 2,
+        "target": "https://api.ipify.org",
+        "utc": "2026-11-14T20:49:21.830862764Z"
+      },
+      {
+        "family": 6,
+        "http": 200,
+        "ip_hash": "8c3819878f390f5250f72897539a3aad633e568898126fcdc639612e54351477",
+        "ms": 527,
+        "round": 3,
+        "target": "https://www.cloudflare.com/cdn-cgi/trace",
+        "utc": "2026-11-14T20:49:51.287848945Z"
+      },
+      {
+        "family": 4,
+        "http": 200,
+        "ip_hash": "049b7cf405c9e08c83bbfa0b998f6c8b18125a1c7bf361e3d22c6d7db9753532",
+        "ms": 677,
+        "round": 3,
+        "target": "https://api.ipify.org",
+        "utc": "2026-11-14T20:49:51.815695596Z"
+      },
+      {
+        "elapsed_ms": 61220
+      }
+    ]
+  },
+  {
+    "candidate": "de40a8909571",
+    "exit": 0,
+    "stderr_bytes": 0,
+    "rows": [
+      {
+        "family": 6,
+        "http": 200,
+        "ip_hash": "db021d6cce9aa768d59bb2557e9ee166f73f4d15df9ff55f6d41e7904a2c3880",
+        "ms": 542,
+        "round": 1,
+        "target": "https://www.cloudflare.com/cdn-cgi/trace",
+        "utc": "2026-11-14T20:49:53.006044358Z"
+      },
+      {
+        "family": 4,
+        "http": 200,
+        "ip_hash": "764da3b3029e5965dd34d741763697d93f0c8a1bc10643f5c3d41d9c14773944",
+        "ms": 649,
+        "round": 1,
+        "target": "https://api.ipify.org",
+        "utc": "2026-11-14T20:49:53.549008425Z"
+      },
+      {
+        "family": 6,
+        "http": 200,
+        "ip_hash": "db021d6cce9aa768d59bb2557e9ee166f73f4d15df9ff55f6d41e7904a2c3880",
+        "ms": 507,
+        "round": 2,
+        "target": "https://www.cloudflare.com/cdn-cgi/trace",
+        "utc": "2026-11-14T20:50:23.006347426Z"
+      },
+      {
+        "error": "request_failed",
+        "ms": 303,
+        "round": 2,
+        "target": "https://api.ipify.org",
+        "utc": "2026-11-14T20:50:23.514259378Z"
+      },
+      {
+        "family": 6,
+        "http": 200,
+        "ip_hash": "db021d6cce9aa768d59bb2557e9ee166f73f4d15df9ff55f6d41e7904a2c3880",
+        "ms": 576,
+        "round": 3,
+        "target": "https://www.cloudflare.com/cdn-cgi/trace",
+        "utc": "2026-11-14T20:50:53.02027747Z"
+      },
+      {
+        "family": 4,
+        "http": 200,
+        "ip_hash": "764da3b3029e5965dd34d741763697d93f0c8a1bc10643f5c3d41d9c14773944",
+        "ms": 569,
+        "round": 3,
+        "target": "https://api.ipify.org",
+        "utc": "2026-11-14T20:50:53.597238003Z"
+      },
+      {
+        "elapsed_ms": 61160
+      }
+    ]
+  },
+  {
+    "cleanup": true,
+    "config_unchanged": true
+  }
+]

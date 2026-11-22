@@ -144,6 +144,7 @@ func (m *Manager) probeGeneration(
 		entry.mu.RUnlock()
 	}
 	m.mu.RUnlock()
+	sortGenerationProbeTasks(tasks)
 	summary.Total = len(tasks)
 	if len(tasks) == 0 {
 		return summary, nil

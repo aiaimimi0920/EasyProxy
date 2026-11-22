@@ -73,6 +73,7 @@ func (c *Config) SaveSettings() error {
 	}
 
 	// Sync all editable fields from runtime config
+	saveCfg.ClaudeRoute = c.ClaudeRoute
 	saveCfg.Mode = c.Mode
 	saveCfg.LogLevel = c.LogLevel
 	saveCfg.ExternalIP = c.ExternalIP

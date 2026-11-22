@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"easy_proxies/internal/config"
 	"easy_proxies/internal/monitor"
 
 	"github.com/sagernet/sing/common"
@@ -140,7 +141,13 @@ func (p *poolOutbound) availableMembersLocked(
 		if directive != nil && directive.RequiredTag != "" && member.tag != directive.RequiredTag {
 			continue
 		}
+		if directive != nil && directive.RequiredNodeFingerprint != "" && !strings.EqualFold(config.NodeFingerprint(p.options.Metadata[member.tag].URI), strings.TrimSpace(directive.RequiredNodeFingerprint)) {
+			continue
+		}
 		if _, skip := excluded[member.tag]; skip {
+			continue
+		}
+		if !p.memberAllowedByDefaultRegionPolicy(member, directive) {
 			continue
 		}
 		// Authentication rejection must survive source/secondary fail-open and
@@ -334,6 +341,13 @@ func (p *poolOutbound) compareMembersByHealth(
 	rightScore := adjustedAvailabilityScore(rightSnap.AvailabilityScore, rightSourcePenalty+rightSecondaryPenalty)
 	if leftScore != rightScore {
 		return leftScore > rightScore
+	}
+
+	now := time.Now()
+	leftCooling := left.shared != nil && left.shared.inFailureCooldown(now)
+	rightCooling := right.shared != nil && right.shared.inFailureCooldown(now)
+	if leftCooling != rightCooling {
+		return !leftCooling
 	}
 
 	leftActive := int32(0)

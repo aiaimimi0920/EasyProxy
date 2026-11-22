@@ -34,7 +34,7 @@ def test_historical_release_only_advertised_exact_writer_idle_update_recovery():
 
 def test_current_release_retires_version_bound_one_time_repairs():
     manifest = json.loads((Path(__file__).parents[1] / "manifest.json").read_bytes())
-    assert manifest["version"] == "1.0.24"
+    assert manifest["version"] == "1.0.25"
     assert "repair" not in manifest["actions"] and "repairs" not in manifest
 
 

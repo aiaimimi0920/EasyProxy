@@ -38,6 +38,7 @@ func (c *Config) Clone() *Config {
 		return nil
 	}
 	cloned := Config{
+		ClaudeRoute:         c.ClaudeRoute,
 		Mode:                c.Mode,
 		Listener:            c.Listener,
 		MultiPort:           c.MultiPort,

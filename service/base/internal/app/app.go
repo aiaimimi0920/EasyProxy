@@ -97,7 +97,11 @@ func RunWithContext(ctx context.Context, cfg *config.Config) error {
 
 	// ── 5. Create and start BoxManager ──
 	boxMgr := boxmgr.New(cfg, monitorCfg, boxmgr.WithStore(dataStore), boxmgr.WithProfiles(profileMgr))
-	boxMgr.SetEphemeralNodes(filterEphemeralNodes(cfg.Nodes))
+	if bootstrapped := subMgr.BootstrappedEphemeralNodes(); len(bootstrapped) > 0 {
+		boxMgr.SetEphemeralNodes(bootstrapped)
+	} else {
+		boxMgr.SetEphemeralNodes(filterEphemeralNodes(cfg.Nodes))
+	}
 	if err := boxMgr.PrepareMonitor(ctx); err != nil {
 		return fmt.Errorf("prepare monitor server: %w", err)
 	}
@@ -348,7 +352,7 @@ func hasEnabledBootstrapConnectors(connectors []config.ConnectorSourceConfig) bo
 func filterEphemeralNodes(nodes []config.NodeConfig) []config.NodeConfig {
 	var ephemeral []config.NodeConfig
 	for _, node := range nodes {
-		if node.Source == config.NodeSourceSubscription || node.Source == config.NodeSourceManifest || node.Source == config.NodeSourceFallback {
+		if !store.IsPersistentNodeSource(string(node.Source)) {
 			ephemeral = append(ephemeral, node)
 		}
 	}

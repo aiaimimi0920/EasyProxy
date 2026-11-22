@@ -121,6 +121,7 @@ func (f NodeFilter) bucketKey() string {
 // SelectionDirective carries per-request / per-session selection intent from
 // the dispatcher into the pool outbound through the dial context.
 type SelectionDirective struct {
+	ExplicitRegionSelection   bool // Set only by request country/region parameters, never profile defaults.
 	SelectionTiers            []config.SelectionTier
 	tierNamespace             string
 	tierAttempts              *[3]int
@@ -130,6 +131,7 @@ type SelectionDirective struct {
 	SessionKey                string // session stickiness key (StrategySession)
 	SessionTTL                time.Duration
 	PinnedTag                 string // manually requested member tag
+	RequiredNodeFingerprint   string
 	RequiredTag               string // strict member binding: never fail over to another tag
 	PreferredProtocolFamilies []string
 	RequireAvailablePreferred bool // reject unproven fallback protocols when preference is mandatory
@@ -193,5 +195,6 @@ func memberDialContext(ctx context.Context) context.Context {
 	}
 	next := *d
 	next.RequiredTag = ""
+	next.RequiredNodeFingerprint = ""
 	return WithDirective(ctx, &next)
 }

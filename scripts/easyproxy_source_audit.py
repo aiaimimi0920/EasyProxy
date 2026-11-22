@@ -246,22 +246,24 @@ def main() -> int:
             lifecycle.verify()
             failure_stage = "management-ready"
         base_url = f"http://127.0.0.1:{management_port}"
+        readiness_timeout = min(180, max(1, scenario_timeout))
         wait_management_ready(
             base_url,
-            180,
+            readiness_timeout,
             management_password,
             container_name=container_name,
         )
         failure_stage = "scenario-ready"
         wait_scenario_state(
             base_url,
-            scenario_timeout,
+            readiness_timeout,
             require_manifest_healthy=args.require_manifest_healthy,
             require_fallback_active=args.require_fallback_active,
             require_connector_instances=args.require_connector_instance_count,
             management_password=management_password,
         )
-        probe_deadline = time.time() + scenario_timeout
+        probe_budget = max(1, scenario_timeout - 180) if scenario_timeout > 360 else scenario_timeout
+        probe_deadline = time.time() + probe_budget
         last_nodes: dict[str, Any] = {}
         last_source_sync: dict[str, Any] | None = None
         last_pool_probe: dict[str, Any] = {"ok": False, "attempts": []}
@@ -283,6 +285,7 @@ def main() -> int:
                 candidate_nodes,
                 policy,
                 network_container=container_name,
+                deadline=probe_deadline,
             )
             stable_source_refs = {
                 str(item.get("source_ref") or "").strip()
@@ -296,7 +299,7 @@ def main() -> int:
             ]
 
             failure_stage = "pool-probe"
-            last_pool_probe = probe_http_proxy("http://127.0.0.1:22323", policy, network_container=container_name)
+            last_pool_probe = probe_http_proxy("http://127.0.0.1:22323", policy, network_container=container_name, deadline=probe_deadline)
             try:
                 best_proxy_response = requests.get(
                     f"{base_url}/api/best-proxy?top=3",
@@ -310,10 +313,12 @@ def main() -> int:
 
             best_proxy_probe = {"ok": False, "attempts": []}
             for candidate in list((last_best_proxy_payload.get("nodes") or []))[:3]:
+                if time.time() >= probe_deadline:
+                    break
                 proxy_url = normalize_proxy_url_for_host(candidate.get("proxy_url"))
                 if not proxy_url:
                     continue
-                result = probe_http_proxy(proxy_url, policy, network_container=container_name)
+                result = probe_http_proxy(proxy_url, policy, network_container=container_name, deadline=probe_deadline)
                 best_proxy_probe["attempts"].append({
                     "tag": str(candidate.get("tag") or ""),
                     "name": str(candidate.get("name") or ""),
@@ -334,6 +339,8 @@ def main() -> int:
             if stable_results:
                 lease_attempts = max(1, min(len(stable_results), 12))
                 for _ in range(lease_attempts):
+                    if time.time() >= probe_deadline:
+                        break
                     try:
                         lease = checkout_proxy_lease(base_url, management_password)
                     except Exception as exc:
@@ -344,13 +351,15 @@ def main() -> int:
                             "probe": {"ok": False, "attempts": [], "error": str(exc)},
                         })
                         if is_retryable_proxy_lease_error(str(exc)):
+                            if time.time() + 5 >= probe_deadline:
+                                break
                             time.sleep(5)
                             continue
                         break
                     lease_id = str(lease.get("id") or "").strip()
                     proxy_url = normalize_proxy_url_for_host(str(lease.get("proxyUrl") or "").strip())
                     selected_tag = str((lease.get("metadata") or {}).get("selectedNodeTag") or "")
-                    result = probe_http_proxy(proxy_url, policy, network_container=container_name)
+                    result = probe_http_proxy(proxy_url, policy, network_container=container_name, deadline=probe_deadline)
                     compat_probe["attempts"].append({
                         "lease_id": lease_id,
                         "selected_tag": selected_tag,
@@ -510,7 +519,7 @@ def main() -> int:
             expected_negative = False
         logs_path = artifact_dir / "docker.log"
         try:
-            logs = run(["docker", "logs", container_name], capture=True, check=False)
+            logs = run(["docker", "logs", container_name], capture=True, check=False, timeout=15)
             logs_path.write_text((logs.stdout or "") + (logs.stderr or ""), encoding="utf-8")
             if logs.returncode != 0:
                 expected_negative = False

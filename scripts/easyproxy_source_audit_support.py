@@ -36,12 +36,20 @@ def ensure_docker() -> None:
 def die(message: str) -> None:
     raise RuntimeError(message)
 
-def run(args: list[str], *, cwd: Path | None = None, capture: bool = True, check: bool = True) -> subprocess.CompletedProcess[str]:
+def run(
+    args: list[str],
+    *,
+    cwd: Path | None = None,
+    capture: bool = True,
+    check: bool = True,
+    timeout: float | None = None,
+) -> subprocess.CompletedProcess[str]:
     completed = subprocess.run(
         args,
         cwd=str(cwd) if cwd else None,
         text=True,
         capture_output=capture,
+        timeout=timeout,
         check=False,
     )
     if check and completed.returncode != 0:

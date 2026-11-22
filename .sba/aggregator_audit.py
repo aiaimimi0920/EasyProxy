@@ -5,10 +5,12 @@ from dataclasses import dataclass
 import hashlib
 from pathlib import Path
 import re
+import signal
 import sys
+import threading
 
 from aggregator_build import _environment
-from audit_runner import container_owner, run_audit
+from audit_runner import AuditStoppedError, container_owner, run_audit
 from audit_image import AuditImage, image_identity, verify_image
 from aggregator_publish import Candidate, PublicArtifacts, RAW, _validate
 from artifact_store import require
@@ -70,14 +72,25 @@ def audit_candidate(owner: Coordinator, permit: Permit, candidate: Candidate, pu
     verify_image(image, env)
     summary = output / "audit.private.json"
     url = public.origin + f"/candidate/{permit.operation_id}/subs/clash.yaml"
-    public.verify(f"candidate/{permit.operation_id}/subs/clash.yaml", candidate.artifacts["subs/clash.yaml"])
+    try:
+        public.verify(f"candidate/{permit.operation_id}/subs/clash.yaml", candidate.artifacts["subs/clash.yaml"])
+    except Exception:
+        raise AuditStoppedError("EASYPROXY_SBA_ARTIFACT_PUBLIC_UNKNOWN") from None
+    audit_timeout, scenario_timeout = 1200, 720
+    if threading.current_thread() is threading.main_thread() and hasattr(signal, "getitimer"):
+        alarm_left = signal.getitimer(signal.ITIMER_REAL)[0]
+        if alarm_left > 0:
+            if alarm_left < 300:
+                raise AuditStoppedError("EASYPROXY_SBA_ARTIFACT_AUDIT_UNKNOWN")
+            audit_timeout = min(1200, int(alarm_left - 240))
+            scenario_timeout = min(720, max(60, audit_timeout - 180))
     owner.claim_stage(permit, "aggregator-audit")
     lifecycle = container_owner(root, output, "sba-" + permit.operation_id, image.image_id, image.source_sha)
     run_audit([sys.executable, str(root / "scripts/easyproxy_source_audit.py"), "--audit-id", "sba-" + permit.operation_id,
           "--subscription", url, "--output-path", str(summary), "--artifact-dir", str(output / "runtime"),
           "--docker-network-name", "", "--image", image.image_id, "--expected-image-id", image.image_id,
-          "--expected-source-sha", image.source_sha, "--scenario-timeout-seconds", "720"],
-         output, env, lifecycle=lifecycle)
+          "--expected-source-sha", image.source_sha, "--scenario-timeout-seconds", str(scenario_timeout)],
+         output, env, lifecycle=lifecycle, timeout=audit_timeout)
     require(summary.is_file() and not summary.is_symlink() and summary.stat().st_size <= 16 * 1024 * 1024, "AUDIT")
     value = decode_object(summary.read_bytes(), require)
     require(value.get("container_cleanup_confirmed") is True, "AUDIT_CLEANUP")

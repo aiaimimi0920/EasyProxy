@@ -2,6 +2,7 @@ package dispatch
 
 import (
 	"net"
+	"net/http"
 	"testing"
 
 	"easy_proxies/internal/outbound/pool"
@@ -25,6 +26,34 @@ func TestStrictPinUsernamePreservesDeviceAndForcesProxy(t *testing.T) {
 	res, policy := s.resolveLegacyRequest(auth, directiveOverlay{Split: boolp(true)}, "example.com", "peer")
 	if policy != routerule.PolicyProxy || res.directive.RequiredTag != "node-7" {
 		t.Fatalf("strict route leaked to direct: %#v %s", res, policy)
+	}
+}
+
+func TestOnlyRequestRegionParametersBypassDefaultRegionExclusions(t *testing.T) {
+	for _, tc := range []struct {
+		tokens string
+		want   bool
+	}{
+		{"cc=CN", true}, {"cc=MO", true}, {"hk", true},
+		{"stable", false}, {"nosplit", false}, {"sid=test", false},
+		{"pin=node", false}, {"pin-strict=node", false},
+	} {
+		overlay, ok := parseTokens(tc.tokens)
+		if !ok {
+			t.Fatalf("unrecognized %s", tc.tokens)
+		}
+		base := pool.SelectionDirective{Filter: pool.NodeFilter{Countries: []string{"HK"}}}
+		for _, d := range []pool.SelectionDirective{
+			overlay.resolve(pool.StrategyStable, "peer").directive,
+			overlay.applyTo(base, "peer").directive,
+		} {
+			if d.ExplicitRegionSelection != tc.want {
+				t.Fatalf("%s explicit region = %v", tc.tokens, d.ExplicitRegionSelection)
+			}
+		}
+	}
+	if !parseHeaders(http.Header{"X-Proxy-Country": {"MO"}}).applyTo(pool.SelectionDirective{}, "peer").directive.ExplicitRegionSelection {
+		t.Fatal("country header lost explicit selection")
 	}
 }
 

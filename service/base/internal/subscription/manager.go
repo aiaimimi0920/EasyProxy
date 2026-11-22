@@ -116,14 +116,15 @@ type Manager struct {
 	connectorRuntime    ConnectorRuntime
 	preferredIPSelector preferredIPRuntimeSelector
 
-	status           monitor.SubscriptionStatus
-	sourceSyncStatus monitor.SourceSyncStatus
-	ctx              context.Context
-	cancel           context.CancelFunc
-	refreshMu        sync.Mutex // prevents concurrent refreshes
-	manualRefresh    chan struct{}
-	configChanged    chan struct{} // signals config updates to the refresh loop
-	refreshDone      chan struct{} // closed after each refresh cycle, then replaced
+	status                monitor.SubscriptionStatus
+	sourceSyncStatus      monitor.SourceSyncStatus
+	bootstrappedEphemeral []config.NodeConfig
+	ctx                   context.Context
+	cancel                context.CancelFunc
+	refreshMu             sync.Mutex // prevents concurrent refreshes
+	manualRefresh         chan struct{}
+	configChanged         chan struct{} // signals config updates to the refresh loop
+	refreshDone           chan struct{} // closed after each refresh cycle, then replaced
 }
 
 type activeSourceSnapshot struct {
@@ -255,6 +256,7 @@ func (m *Manager) BootstrapRuntimeNodes() error {
 	baseCfg.Unlock()
 
 	m.mu.Lock()
+	m.bootstrappedEphemeral = append([]config.NodeConfig(nil), ephemeralNodes...)
 	m.status.NodeCount = len(newCfg.Nodes)
 	m.status.LastRefresh = time.Now()
 	m.mu.Unlock()
@@ -264,6 +266,23 @@ func (m *Manager) BootstrapRuntimeNodes() error {
 	}
 
 	return nil
+}
+
+// BootstrappedEphemeralNodes returns a copy of the runtime-generated nodes
+// materialized during BootstrapRuntimeNodes, before MultiPort listener
+// defaults were injected.
+func (m *Manager) BootstrappedEphemeralNodes() []config.NodeConfig {
+	if m == nil {
+		return nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if len(m.bootstrappedEphemeral) == 0 {
+		return nil
+	}
+	cloned := make([]config.NodeConfig, len(m.bootstrappedEphemeral))
+	copy(cloned, m.bootstrappedEphemeral)
+	return cloned
 }
 
 // Start begins the background goroutine that manages periodic subscription refresh.

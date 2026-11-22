@@ -11,6 +11,8 @@
 - [2026-11-08 云端可用池验收](#cloud-usable-pool-2026-11-08)
 - [2026-11-11 NAS 与 PC2 验收](#nas-pc2-acceptance-2026-11-11)
 - [2026-11-12 默认网关部署](#default-gateway-deployment-2026-11-12)
+- [2026-11-13 NAS 默认地区排除部署](#nas-region-exclusions-2026-11-13)
+- [2026-11-14 Claude 候选出口抽样](#claude-egress-validation-2026-11-14)
 
 <a id="cloud-usable-pool-2026-11-08"></a>
 
@@ -352,3 +354,26 @@ PC2 `192.168.15.104` 的 `ip route get 223.5.5.5` 确认下一跳为 `.201`。�
 本地脚本与脱敏回执：`C:/Users/Public/nas_home/AI/GameEditor/linshi/easyproxy-default-routing-20261111/`。
 主要回执为 `preflight.json`、`stage.json`、`cutover-result.json`、`final-status.safe.json` 和 `explicit-probes.safe.json`。
 配置与带秘密的旧容器 inspect 只保存在 NAS 的权限受限备份目录，不复制进产品仓库。
+
+<a id="nas-region-exclusions-2026-11-13"></a>
+
+## NAS 默认代理地区排除部署回执
+
+日期：2026-11-13，北京时间。实际目标为 Debian VM `192.168.15.201`（非 DSM `.200`）。
+
+- 基线：`db09ee2e752cd566097b9eb91b370f4a71ea26e4` 加默认地区排除改动。
+- 镜像：`easyproxy/nas:region-exclusions-20261113-95138dfaac18`（`sha256:78e220c66348cf3e75c9cdc9876f8b6d2b103749444cfbf2fee8c8f41ea6910c`）。
+- 实际运行 ELF SHA-256：`95138dfaac1805ef1d31d495044b778756f83ddfe6461d3e8c5e43c754cc6d54`。
+- Compose：`/opt/easyproxy-gateway/compose/docker-compose.region-exclusions-20261113.json`（project `easyproxy-gateway-region-exclusions-20261113`）。
+- 停机备份：`/opt/easyproxy-gateway/backups/region-exclusions-20261113/stopped-state.tar.gz`（SHA-256 `6a4b1c19ea7af6ad4ee2d405135834d4e7764284fb6c98d45254f3d70e92a6f9`，SQLite `PRAGMA integrity_check` 为 `ok`）。
+- 验证：`gateway.enabled/applied/tun_ready=true`，Google 与 Cloudflare `generate_204` 均返回 204；观察窗口内通用池选路无 CN/HK/MO 违规记录，隔离实例显式 `cc=HK+nosplit` 与 `pin-strict` 返回 204、默认请求返回 502。
+
+<a id="claude-egress-validation-2026-11-14"></a>
+
+## Claude 候选出口抽样记录
+
+日期：2026-11-14 至 2026-11-15（UTC）。仅在 NAS 内存与隔离单出站进程中对候选节点执行 Cloudflare trace 与 `api.ipify.org` 抽样，未写入节点 URI、未改动生产配置：
+
+- `8cd587e7fead`：3 轮内 `api.ipify.org` 观察到 IPv4 A→B→A 变化，判定不满足固定单 IPv4 出口。
+- 其余 6 个美国标记候选短抽样结果归档于 [records/claude-us-candidate-results-2026-11-14.json](records/claude-us-candidate-results-2026-11-14.json)；`bf526ec858ad` 的 11 轮扩展抽样归档于 [records/claude-us-long-test-2026-11-14.json](records/claude-us-long-test-2026-11-14.json)。
+- 2026-11-15 复测 `bf526ec858ad`（URI SHA-256 `a2910ce4df86a71b72eab6586e6e31e77a332a62ba132a25227f451af03cdd86`）在第 1 至第 2 轮间观察到同族 IPv4/IPv6 地址切换，归档于 [records/claude-isolated-retest-2026-11-15.jsonl](records/claude-isolated-retest-2026-11-15.jsonl)，判定该动态节点不作为固定出口绑定。

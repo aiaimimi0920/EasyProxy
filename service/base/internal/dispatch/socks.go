@@ -97,6 +97,7 @@ func (s *Server) socksHandshake(conn net.Conn) (parsedProxyUsername, bool) {
 	}
 
 	_, _, authRequired := s.authCredentials()
+	authRequired = authRequired || len(s.cfg.ProtectedClients) != 0
 	offersUserPass := containsByte(methods, authUserPass)
 	offersNoAuth := containsByte(methods, authNoAuth)
 

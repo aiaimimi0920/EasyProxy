@@ -1,8 +1,10 @@
 package pool
 
 import (
+	"errors"
 	"fmt"
 	"net"
+	"time"
 
 	"easy_proxies/internal/monitor"
 
@@ -29,6 +31,58 @@ func (p *poolOutbound) recordFailure(member *memberState, network string, cause 
 		p.logger.Warn("proxy ", member.tag, " failure (no shared state): ", cause)
 		return
 	}
+
+	if !errors.Is(cause, monitor.ErrUpstreamAuthenticationRequired) {
+		now := time.Now()
+		registry := currentSharedStateRegistry()
+		if registry != nil {
+			correlated, forgiveTags := registry.destHealth.observeFailure(now, network, destination, member.tag)
+			if correlated {
+				for _, tag := range forgiveTags {
+					if v, ok := registry.states.Load(tag); ok {
+						v.(*sharedMemberState).forgiveSingleDestinationFailure(network, destination)
+					}
+				}
+				member.shared.forgiveSingleDestinationFailure(network, destination)
+				member.shared.recordObservationOnly(cause, destination)
+				p.logger.Info(
+					"destination ",
+					destination,
+					" failed across multiple proxies; skipping node penalty for ",
+					member.tag,
+					": ",
+					cause,
+				)
+				return
+			}
+		}
+
+		if p.canVerifyMemberProbe(member) {
+			if heldCount, held := member.shared.holdSingleDestinationFailureIfEligible(
+				now,
+				network,
+				cause,
+				p.options.FailureThreshold,
+				destination,
+			); held {
+				p.logger.Warn(
+					"proxy ",
+					member.tag,
+					" single-destination failure ",
+					heldCount,
+					"/",
+					p.options.FailureThreshold,
+					" on ",
+					destination,
+					" (verifying node health before blacklist): ",
+					cause,
+				)
+				p.verifySingleDestMemberHealth(registry, member, network, cause, destination)
+				return
+			}
+		}
+	}
+
 	failures, blacklisted, _ := member.shared.recordTransportFailure(network, cause, p.options.FailureThreshold, p.options.BlacklistDuration, destination)
 	if blacklisted {
 		p.logger.Warn("proxy ", member.tag, " blacklisted for ", p.options.BlacklistDuration, ": ", cause)
@@ -38,6 +92,9 @@ func (p *poolOutbound) recordFailure(member *memberState, network string, cause 
 }
 
 func (p *poolOutbound) recordSuccess(member *memberState, network, destination string) {
+	if registry := currentSharedStateRegistry(); registry != nil {
+		registry.destHealth.clear(network, destination)
+	}
 	if member.shared != nil {
 		member.shared.recordTransportSuccess(network, destination)
 	}

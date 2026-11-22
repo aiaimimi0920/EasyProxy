@@ -15,9 +15,12 @@ type sharedMemberState struct {
 	mu               sync.Mutex
 	entryMu          sync.Mutex
 	failures         int
+	lastFailAt       time.Time
+	failedDests      map[string]struct{}
 	blacklisted      bool
 	blacklistedUntil time.Time
 	udp              transportFailureState
+	probeVerifying   atomic.Bool
 	entry            atomic.Pointer[monitor.EntryHandle]
 	active           atomic.Int32
 	totalUpload      atomic.Int64
@@ -25,7 +28,8 @@ type sharedMemberState struct {
 }
 
 type sharedStateRegistry struct {
-	states sync.Map // map[tag]*sharedMemberState
+	states     sync.Map // map[tag]*sharedMemberState
+	destHealth destinationHealthTracker
 }
 
 var sharedStateStore atomic.Pointer[sharedStateRegistry]
@@ -207,14 +211,24 @@ func (s *sharedMemberState) recordFailure(cause error, threshold int, duration t
 	defer s.entryMu.Unlock()
 
 	s.mu.Lock()
+	now := time.Now()
 	s.failures++
+	s.lastFailAt = now
+	if dest := normalizeDestinationAddress(destination); dest != "" {
+		if s.failedDests == nil {
+			s.failedDests = make(map[string]struct{}, 2)
+		}
+		s.failedDests[dest] = struct{}{}
+	}
 	count := s.failures
 	triggered := false
 	var until time.Time
 	if s.failures >= threshold {
 		triggered = true
-		until = time.Now().Add(duration)
+		until = now.Add(duration)
 		s.failures = 0
+		s.lastFailAt = time.Time{}
+		s.failedDests = nil
 		s.blacklisted = true
 		s.blacklistedUntil = until
 	}
@@ -235,6 +249,8 @@ func (s *sharedMemberState) recordSuccess(destination string) {
 
 	s.mu.Lock()
 	s.failures = 0
+	s.lastFailAt = time.Time{}
+	s.failedDests = nil
 	s.mu.Unlock()
 
 	if entry := s.entry.Load(); entry != nil {
@@ -270,6 +286,8 @@ func (s *sharedMemberState) forceRelease() {
 
 	s.mu.Lock()
 	s.failures = 0
+	s.lastFailAt = time.Time{}
+	s.failedDests = nil
 	s.blacklisted = false
 	s.blacklistedUntil = time.Time{}
 	s.udp = transportFailureState{}

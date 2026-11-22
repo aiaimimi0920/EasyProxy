@@ -73,6 +73,25 @@ func (m *Manager) reloadLockedWithEphemeralNodes(
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if publishEphemeral && !oldIdle && oldBox != nil && effectiveReloadConfigEqual(oldCfg, targetCfg) {
+		m.mu.Lock()
+		m.cfg = targetCfg
+		m.lastAppliedCfg = snapshotConfig(targetCfg)
+		m.ephemeralNodes = cloneNodes(ephemeralNodes)
+		monitorServer := m.monitorServer
+		listeners := append([]ConfigUpdateListener(nil), m.configListeners...)
+		m.mu.Unlock()
+
+		if monitorServer != nil {
+			monitorServer.SetConfig(targetCfg)
+		}
+		for _, listener := range listeners {
+			listener.OnConfigUpdate(targetCfg)
+		}
+		m.commitCurrentProfileAdmission()
+		m.logger.Infof("reload target matches active runtime configuration (%d nodes); skipped sing-box rebuild", len(targetCfg.Nodes))
+		return nil
+	}
 	from := ReloadState{Config: snapshotConfig(oldCfg), Idle: oldIdle}
 	to := ReloadState{Config: snapshotConfig(targetCfg), Idle: false}
 	for _, listener := range reloadListeners {
@@ -183,13 +202,18 @@ func (m *Manager) reloadLockedWithEphemeralNodes(
 		m.monitorMgr.SweepStaleNodes()
 	}
 
-	if targetCfg.SubscriptionRefresh.MinAvailableNodes > 0 {
+	if targetCfg.SubscriptionRefresh.MinAvailableNodes > 0 && m.monitorMgr != nil {
 		timeout := targetCfg.SubscriptionRefresh.HealthCheckTimeout
 		if timeout <= 0 {
 			timeout = defaultHealthCheckTimeout
 		}
 		probeCtx, cancel := context.WithTimeout(ctx, timeout)
-		summary, probeErr := m.monitorMgr.ProbeGeneration(probeCtx, candidateGeneration, timeout)
+		summary, probeErr := m.monitorMgr.ProbeGenerationAtLeast(
+			probeCtx,
+			candidateGeneration,
+			targetCfg.SubscriptionRefresh.MinAvailableNodes,
+			timeout,
+		)
 		cancel()
 		if probeErr != nil || summary.Available < targetCfg.SubscriptionRefresh.MinAvailableNodes {
 			healthErr := probeErr

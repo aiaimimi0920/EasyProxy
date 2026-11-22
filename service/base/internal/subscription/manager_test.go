@@ -179,6 +179,41 @@ func TestRuntimeNodeSetsEqualIgnoresOrderAndAssignedPorts(t *testing.T) {
 	}
 }
 
+func TestBootstrapRuntimeNodesPreservesPreCredentialEphemeralSetForHybridMode(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("http://127.0.0.1:18080#hybrid-runtime\n"))
+	}))
+	defer server.Close()
+
+	cfg := refreshRetryTestConfig(server.URL, "hybrid-bootstrap")
+	cfg.Mode = "hybrid"
+	cfg.MultiPort.BasePort = 24000
+	cfg.MultiPort.Username = "pool-user"
+	cfg.MultiPort.Password = "pool-pass"
+	cfg.SetFilePath(filepath.Join(t.TempDir(), "config.yaml"))
+
+	reloader := &fakeRefreshReloader{}
+	manager := New(
+		cfg,
+		nil,
+		WithConnectorRuntime(&fakeConnectorRuntime{}),
+		withRefreshReloader(reloader),
+	)
+	if err := manager.BootstrapRuntimeNodes(); err != nil {
+		t.Fatalf("BootstrapRuntimeNodes() error = %v", err)
+	}
+	reloader.ephemeralNodes = manager.BootstrappedEphemeralNodes()
+	if len(reloader.ephemeralNodes) != 1 {
+		t.Fatalf("BootstrappedEphemeralNodes() count = %d, want 1", len(reloader.ephemeralNodes))
+	}
+
+	manager.doRefresh()
+	_, _, _, reloads := reloader.snapshot()
+	if reloads != 0 {
+		t.Fatalf("expected first refresh after hybrid bootstrap to skip reload, got reloads=%d", reloads)
+	}
+}
+
 func TestDoRefreshSkipsReloadWhenRuntimeSourceSetIsUnchanged(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("http://127.0.0.1:18080#stable-runtime\n"))

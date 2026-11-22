@@ -35,15 +35,17 @@ const (
 
 // Options controls pool outbound behaviour.
 type Options struct {
-	SharedSelection   bool
-	SelectionTiers    []config.SelectionTier
-	Mode              string
-	Members           []string
-	FailureThreshold  int
-	BlacklistDuration time.Duration
-	Metadata          map[string]MemberMeta
-	MaxRetries        int           // max retry attempts on connection failure (default 2)
-	SessionTTL        time.Duration // idle TTL for session-strategy stickiness (default 10m)
+	ClaudeRoute             config.ClaudeRoute
+	DefaultRegionExclusions bool // Exclude CN/HK/MO from automatic selection, not explicit requests.
+	SharedSelection         bool
+	SelectionTiers          []config.SelectionTier
+	Mode                    string
+	Members                 []string
+	FailureThreshold        int
+	BlacklistDuration       time.Duration
+	Metadata                map[string]MemberMeta
+	MaxRetries              int           // max retry attempts on connection failure (default 2)
+	SessionTTL              time.Duration // idle TTL for session-strategy stickiness (default 10m)
 }
 
 // MemberMeta carries optional descriptive information for monitoring UI.

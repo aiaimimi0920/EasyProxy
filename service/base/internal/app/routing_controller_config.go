@@ -26,6 +26,7 @@ func cloneRoutingState(state boxmgr.ReloadState) boxmgr.ReloadState {
 }
 
 type routingTopology struct {
+	claudeRoute config.ClaudeRoute
 	enabled     bool
 	localServer bool
 	listen      string
@@ -48,6 +49,7 @@ func routingTopologyFor(state boxmgr.ReloadState) routingTopology {
 	if !topology.enabled {
 		return topology
 	}
+	topology.claudeRoute = state.Config.ClaudeRoute
 	topology.listen = state.Config.DispatchListen()
 	if state.Config.LocalServer.Enabled {
 		topology.localServer = true

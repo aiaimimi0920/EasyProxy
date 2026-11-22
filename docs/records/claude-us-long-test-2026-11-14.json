@@ -1,0 +1,293 @@
+[
+  {
+    "candidate": "bf526ec858ad",
+    "rounds": 11,
+    "interval_s": 60,
+    "uri_sha256": "d43a2bc4e3fc345cc2e56a1f18262c59904634606a2b7c970337cc9de73c502f"
+  },
+  {
+    "round": 1,
+    "fresh_process": true,
+    "exit": 0,
+    "stderr_bytes": 0,
+    "rows": [
+      {
+        "family": "IPv6",
+        "http": 200,
+        "ip_sha256": "490729e06698b2ab65f182ad88a6bbda4e5d39ca38477c200ab80a238af2214d",
+        "ms": 1040,
+        "ok": true,
+        "target": "https://www.cloudflare.com/cdn-cgi/trace",
+        "utc": "2026-11-14T22:21:49Z"
+      },
+      {
+        "family": "IPv4",
+        "http": 200,
+        "ip_sha256": "69f2269475548dfea2fd15984990cfc1fd34fe68ff1160f80ab14b5b247de672",
+        "ms": 1244,
+        "ok": true,
+        "target": "https://api.ipify.org",
+        "utc": "2026-11-14T22:21:50Z"
+      }
+    ]
+  },
+  {
+    "round": 2,
+    "fresh_process": true,
+    "exit": 0,
+    "stderr_bytes": 0,
+    "rows": [
+      {
+        "family": "IPv6",
+        "http": 200,
+        "ip_sha256": "490729e06698b2ab65f182ad88a6bbda4e5d39ca38477c200ab80a238af2214d",
+        "ms": 1020,
+        "ok": true,
+        "target": "https://www.cloudflare.com/cdn-cgi/trace",
+        "utc": "2026-11-14T22:22:49Z"
+      },
+      {
+        "family": "IPv4",
+        "http": 200,
+        "ip_sha256": "69f2269475548dfea2fd15984990cfc1fd34fe68ff1160f80ab14b5b247de672",
+        "ms": 1177,
+        "ok": true,
+        "target": "https://api.ipify.org",
+        "utc": "2026-11-14T22:22:50Z"
+      }
+    ]
+  },
+  {
+    "round": 3,
+    "fresh_process": true,
+    "exit": 0,
+    "stderr_bytes": 0,
+    "rows": [
+      {
+        "family": "IPv6",
+        "http": 200,
+        "ip_sha256": "490729e06698b2ab65f182ad88a6bbda4e5d39ca38477c200ab80a238af2214d",
+        "ms": 1088,
+        "ok": true,
+        "target": "https://www.cloudflare.com/cdn-cgi/trace",
+        "utc": "2026-11-14T22:23:49Z"
+      },
+      {
+        "ms": 933,
+        "ok": false,
+        "target": "https://api.ipify.org",
+        "utc": "2026-11-14T22:23:50Z"
+      }
+    ]
+  },
+  {
+    "round": 4,
+    "fresh_process": true,
+    "exit": 0,
+    "stderr_bytes": 0,
+    "rows": [
+      {
+        "family": "IPv6",
+        "http": 200,
+        "ip_sha256": "490729e06698b2ab65f182ad88a6bbda4e5d39ca38477c200ab80a238af2214d",
+        "ms": 1076,
+        "ok": true,
+        "target": "https://www.cloudflare.com/cdn-cgi/trace",
+        "utc": "2026-11-14T22:24:49Z"
+      },
+      {
+        "family": "IPv4",
+        "http": 200,
+        "ip_sha256": "69f2269475548dfea2fd15984990cfc1fd34fe68ff1160f80ab14b5b247de672",
+        "ms": 1684,
+        "ok": true,
+        "target": "https://api.ipify.org",
+        "utc": "2026-11-14T22:24:50Z"
+      }
+    ]
+  },
+  {
+    "round": 5,
+    "fresh_process": true,
+    "exit": 0,
+    "stderr_bytes": 0,
+    "rows": [
+      {
+        "family": "IPv6",
+        "http": 200,
+        "ip_sha256": "490729e06698b2ab65f182ad88a6bbda4e5d39ca38477c200ab80a238af2214d",
+        "ms": 892,
+        "ok": true,
+        "target": "https://www.cloudflare.com/cdn-cgi/trace",
+        "utc": "2026-11-14T22:25:49Z"
+      },
+      {
+        "family": "IPv4",
+        "http": 200,
+        "ip_sha256": "69f2269475548dfea2fd15984990cfc1fd34fe68ff1160f80ab14b5b247de672",
+        "ms": 1188,
+        "ok": true,
+        "target": "https://api.ipify.org",
+        "utc": "2026-11-14T22:25:49Z"
+      }
+    ]
+  },
+  {
+    "round": 6,
+    "fresh_process": true,
+    "exit": 0,
+    "stderr_bytes": 0,
+    "rows": [
+      {
+        "family": "IPv6",
+        "http": 200,
+        "ip_sha256": "490729e06698b2ab65f182ad88a6bbda4e5d39ca38477c200ab80a238af2214d",
+        "ms": 1147,
+        "ok": true,
+        "target": "https://www.cloudflare.com/cdn-cgi/trace",
+        "utc": "2026-11-14T22:26:49Z"
+      },
+      {
+        "family": "IPv4",
+        "http": 200,
+        "ip_sha256": "69f2269475548dfea2fd15984990cfc1fd34fe68ff1160f80ab14b5b247de672",
+        "ms": 1162,
+        "ok": true,
+        "target": "https://api.ipify.org",
+        "utc": "2026-11-14T22:26:50Z"
+      }
+    ]
+  },
+  {
+    "round": 7,
+    "fresh_process": true,
+    "exit": 0,
+    "stderr_bytes": 0,
+    "rows": [
+      {
+        "family": "IPv6",
+        "http": 200,
+        "ip_sha256": "490729e06698b2ab65f182ad88a6bbda4e5d39ca38477c200ab80a238af2214d",
+        "ms": 933,
+        "ok": true,
+        "target": "https://www.cloudflare.com/cdn-cgi/trace",
+        "utc": "2026-11-14T22:27:49Z"
+      },
+      {
+        "family": "IPv4",
+        "http": 200,
+        "ip_sha256": "69f2269475548dfea2fd15984990cfc1fd34fe68ff1160f80ab14b5b247de672",
+        "ms": 1047,
+        "ok": true,
+        "target": "https://api.ipify.org",
+        "utc": "2026-11-14T22:27:50Z"
+      }
+    ]
+  },
+  {
+    "round": 8,
+    "fresh_process": true,
+    "exit": 0,
+    "stderr_bytes": 0,
+    "rows": [
+      {
+        "family": "IPv6",
+        "http": 200,
+        "ip_sha256": "490729e06698b2ab65f182ad88a6bbda4e5d39ca38477c200ab80a238af2214d",
+        "ms": 1195,
+        "ok": true,
+        "target": "https://www.cloudflare.com/cdn-cgi/trace",
+        "utc": "2026-11-14T22:28:49Z"
+      },
+      {
+        "family": "IPv4",
+        "http": 200,
+        "ip_sha256": "69f2269475548dfea2fd15984990cfc1fd34fe68ff1160f80ab14b5b247de672",
+        "ms": 1073,
+        "ok": true,
+        "target": "https://api.ipify.org",
+        "utc": "2026-11-14T22:28:50Z"
+      }
+    ]
+  },
+  {
+    "round": 9,
+    "fresh_process": true,
+    "exit": 0,
+    "stderr_bytes": 0,
+    "rows": [
+      {
+        "family": "IPv6",
+        "http": 200,
+        "ip_sha256": "490729e06698b2ab65f182ad88a6bbda4e5d39ca38477c200ab80a238af2214d",
+        "ms": 1164,
+        "ok": true,
+        "target": "https://www.cloudflare.com/cdn-cgi/trace",
+        "utc": "2026-11-14T22:29:49Z"
+      },
+      {
+        "family": "IPv4",
+        "http": 200,
+        "ip_sha256": "69f2269475548dfea2fd15984990cfc1fd34fe68ff1160f80ab14b5b247de672",
+        "ms": 1333,
+        "ok": true,
+        "target": "https://api.ipify.org",
+        "utc": "2026-11-14T22:29:50Z"
+      }
+    ]
+  },
+  {
+    "round": 10,
+    "fresh_process": true,
+    "exit": 0,
+    "stderr_bytes": 0,
+    "rows": [
+      {
+        "family": "IPv6",
+        "http": 200,
+        "ip_sha256": "490729e06698b2ab65f182ad88a6bbda4e5d39ca38477c200ab80a238af2214d",
+        "ms": 1007,
+        "ok": true,
+        "target": "https://www.cloudflare.com/cdn-cgi/trace",
+        "utc": "2026-11-14T22:30:49Z"
+      },
+      {
+        "family": "IPv4",
+        "http": 200,
+        "ip_sha256": "69f2269475548dfea2fd15984990cfc1fd34fe68ff1160f80ab14b5b247de672",
+        "ms": 1218,
+        "ok": true,
+        "target": "https://api.ipify.org",
+        "utc": "2026-11-14T22:30:50Z"
+      }
+    ]
+  },
+  {
+    "round": 11,
+    "fresh_process": true,
+    "exit": 0,
+    "stderr_bytes": 0,
+    "rows": [
+      {
+        "family": "IPv6",
+        "http": 200,
+        "ip_sha256": "490729e06698b2ab65f182ad88a6bbda4e5d39ca38477c200ab80a238af2214d",
+        "ms": 1191,
+        "ok": true,
+        "target": "https://www.cloudflare.com/cdn-cgi/trace",
+        "utc": "2026-11-14T22:31:49Z"
+      },
+      {
+        "ms": 914,
+        "ok": false,
+        "target": "https://api.ipify.org",
+        "utc": "2026-11-14T22:31:50Z"
+      }
+    ]
+  },
+  {
+    "cleanup": true,
+    "config_unchanged": true,
+    "elapsed_s": 602.117
+  }
+]

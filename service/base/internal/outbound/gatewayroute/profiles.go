@@ -7,6 +7,7 @@ import (
 	"easy_proxies/internal/outbound/profileselect"
 	"easy_proxies/internal/profile"
 	"easy_proxies/internal/routerule"
+	"fmt"
 	"github.com/sagernet/sing-box/adapter"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
@@ -16,6 +17,13 @@ import (
 )
 
 func (r *routeOutbound) selection(ctx context.Context, network string, destination M.Socksaddr) (routerule.Policy, *pool.SelectionDirective, error) {
+	if r.options.ClaudeRoute.Matches(proxyDestination(ctx, destination).AddrString()) {
+		tag := strings.TrimSpace(r.options.ClaudeRoute.NodeTag)
+		if !r.options.ClaudeRoute.ValidBinding() {
+			return "", nil, fmt.Errorf("Claude route requires a node tag and valid node fingerprint")
+		}
+		return routerule.PolicyProxy, &pool.SelectionDirective{RequiredTag: tag, RequiredNodeFingerprint: r.options.ClaudeRoute.NormalizedFingerprint()}, nil
+	}
 	directive := pool.SelectionDirective{ProfileID: tcpProfileID, Strategy: pool.NormalizeStrategy(string(r.options.DefaultStrategy)), SelectionTiers: append([]config.SelectionTier(nil), r.options.SelectionTiers...)}
 	policy := r.policy(ctx, network, destination)
 	if r.profiles == nil && r.sharedSelection != nil {

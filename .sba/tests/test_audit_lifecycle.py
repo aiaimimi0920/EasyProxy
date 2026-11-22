@@ -221,3 +221,86 @@ def test_cleanup_unknown_does_not_claim_audit_stopped(tmp_path):
         audit_runner.run_audit([sys.executable, "-c", "raise SystemExit(1)"], tmp_path, dict(os.environ),
                                lifecycle=lifecycle, timeout=1)
     assert not isinstance(error.value, audit_runner.AuditStoppedError)
+
+
+def test_audit_container_rm_uses_extended_timeout(tmp_path, monkeypatch):
+    value = owner(tmp_path)
+    recorded = []
+
+    def fake_run(cmd, **kwargs):
+        recorded.append((cmd, kwargs.get("timeout")))
+        return SimpleNamespace(returncode=0, stdout="")
+
+    monkeypatch.setattr("scripts.easyproxy_audit_lifecycle.subprocess.run", fake_run)
+    value._run(["container", "ls", "--all"])
+    value._run(["rm", "--force", ID])
+    assert recorded == [
+        (["docker", "container", "ls", "--all"], 30),
+        (["docker", "rm", "--force", ID], 60),
+    ]
+
+
+def test_defer_sigalrm_suppresses_itimer_and_restores_remaining_budget(monkeypatch):
+    calls = []
+    clock = iter([100.0, 102.5])
+    monkeypatch.setattr(audit_runner.signal, "ITIMER_REAL", 0, raising=False)
+    monkeypatch.setattr(audit_runner.signal, "getitimer", lambda which: (10.0, 0.0), raising=False)
+    monkeypatch.setattr(
+        audit_runner.signal,
+        "setitimer",
+        lambda which, seconds, interval=0.0: calls.append((which, round(seconds, 2), interval)),
+        raising=False,
+    )
+    monkeypatch.setattr(audit_runner.time, "monotonic", lambda: next(clock))
+
+    with audit_runner._defer_sigalrm():
+        assert calls == [(0, 0, 0.0)]
+
+    assert calls == [(0, 0, 0.0), (0, 7.5, 0.0)]
+
+
+def test_aggregator_audit_couples_timeouts_and_wraps_preclaim_failures(tmp_path, monkeypatch):
+    import aggregator_audit as agg_audit
+    from audit_image import AuditImage
+
+    root = tmp_path / "repo"
+    root.mkdir()
+    monkeypatch.setattr(agg_audit, "inspect_checkout", lambda *_: [{"path": "upstreams/aggregator", "sourceSha": "e" * 40}])
+    monkeypatch.setattr(agg_audit, "inspect_gitlink_checkout", lambda *_: None)
+    monkeypatch.setattr(agg_audit, "_environment", lambda *_: {"PATH": ""})
+    monkeypatch.setattr(agg_audit, "verify_image", lambda *_: None)
+    monkeypatch.setattr(agg_audit, "container_owner", lambda *_: Mock(spec=AuditContainer))
+
+    owner_coord, objects, public = setup()
+    permit = owner_coord.begin("deploy", OLD)
+    candidate = publish.publish_candidate(owner_coord, permit, objects, public, dict(BODIES))
+    source_sha = json.loads(permit.state_bytes)["writer"]["candidate"]["sourceSha"]
+    image = AuditImage(IMAGE, owner_coord.identity["repository"], source_sha, "9" * 64)
+
+    # 1. Pre-claim public.verify failure raises AuditStoppedError so refresh can abort cleanly.
+    public.failed_key = f"candidate/{permit.operation_id}/subs/clash.yaml"
+    with pytest.raises(audit_runner.AuditStoppedError, match="PUBLIC_UNKNOWN"):
+        agg_audit.audit_candidate(owner_coord, permit, candidate, public, root, tmp_path / "out1", image=image)
+    public.failed_key = None
+
+    # 2. Insufficient remaining ITIMER_REAL (< 300s) fails fast with AuditStoppedError before claiming stage.
+    monkeypatch.setattr(agg_audit.signal, "ITIMER_REAL", 0, raising=False)
+    monkeypatch.setattr(agg_audit.signal, "getitimer", lambda *_: (250.0, 0.0), raising=False)
+    with pytest.raises(audit_runner.AuditStoppedError, match="AUDIT_UNKNOWN"):
+        agg_audit.audit_candidate(owner_coord, permit, candidate, public, root, tmp_path / "out2", image=image)
+
+    # 3. Remaining ITIMER_REAL (800s) bounds audit_timeout=560 and scenario_timeout=380.
+    monkeypatch.setattr(agg_audit.signal, "getitimer", lambda *_: (800.0, 0.0), raising=False)
+    observed = {}
+
+    def fake_run_audit(cmd, output, env, *, lifecycle, timeout):
+        observed["cmd"] = cmd
+        observed["timeout"] = timeout
+        raise audit_runner.AuditStoppedError("EASYPROXY_SBA_ARTIFACT_AUDIT_UNKNOWN")
+
+    monkeypatch.setattr(agg_audit, "run_audit", fake_run_audit)
+    with pytest.raises(audit_runner.AuditStoppedError):
+        agg_audit.audit_candidate(owner_coord, permit, candidate, public, root, tmp_path / "out3", image=image)
+    assert observed["timeout"] == 560
+    idx = observed["cmd"].index("--scenario-timeout-seconds")
+    assert observed["cmd"][idx + 1] == "380"

@@ -15,7 +15,8 @@ const maxSubscriptionBodyBytes = 10 * 1024 * 1024
 
 // Config describes the high level settings for the proxy pool server.
 type Config struct {
-	mu sync.RWMutex `yaml:"-"` // protects all fields for concurrent access
+	ClaudeRoute ClaudeRoute  `yaml:"claude_route"`
+	mu          sync.RWMutex `yaml:"-"` // protects all fields for concurrent access
 
 	Mode                string                    `yaml:"mode"`
 	Listener            ListenerConfig            `yaml:"listener"`

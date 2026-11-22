@@ -79,7 +79,8 @@ func (o directiveOverlay) resolve(defaultStrategy pool.Strategy, sessionFallback
 		strat = *o.Strategy
 	}
 	dir := pool.SelectionDirective{
-		Strategy: strat,
+		ExplicitRegionSelection: len(o.Countries) > 0 || len(o.Regions) > 0,
+		Strategy:                strat,
 		Filter: pool.NodeFilter{
 			Countries: o.Countries,
 			Regions:   o.Regions,
@@ -112,9 +113,11 @@ func (o directiveOverlay) applyTo(base pool.SelectionDirective, sessionFallback 
 		out.Strategy = *o.Strategy
 	}
 	if len(o.Countries) > 0 {
+		out.ExplicitRegionSelection = true
 		out.Filter.Countries = append([]string(nil), o.Countries...)
 	}
 	if len(o.Regions) > 0 {
+		out.ExplicitRegionSelection = true
 		out.Filter.Regions = append([]string(nil), o.Regions...)
 	}
 	if o.LongLived != nil {

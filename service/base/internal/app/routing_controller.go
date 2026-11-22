@@ -182,6 +182,7 @@ func (rc *RoutingController) startLocked(cfg *config.Config) error {
 			password = cfg.Listener.Password
 		}
 		srv := dispatch.NewServer(dispatch.Config{
+			ClaudeRoute:     cfg.ClaudeRoute,
 			Listen:          listen,
 			Username:        username,
 			Password:        password,
@@ -215,6 +216,7 @@ func (rc *RoutingController) startLocked(cfg *config.Config) error {
 
 	listen := cfg.DispatchListen()
 	srv := dispatch.NewServer(dispatch.Config{
+		ClaudeRoute:     cfg.ClaudeRoute,
 		Listen:          listen,
 		Username:        cfg.Listener.Username,
 		Password:        cfg.Listener.Password,

@@ -31,6 +31,8 @@ type ProfileResolver interface {
 }
 
 type parsedProxyUsername struct {
+	protectedNode string
+
 	BaseUsername     string
 	ExplicitDeviceID string
 	Overlay          directiveOverlay
@@ -98,8 +100,14 @@ func (s *Server) authCredentials() (username, password string, required bool) {
 }
 
 func (s *Server) authenticateProxy(username, password string) (parsedProxyUsername, error) {
+	if auth, handled, err := s.authenticateProtectedClient(username, password); handled {
+		return auth, err
+	}
 	expectedUser, expectedPass, required := s.authCredentials()
 	if !required {
+		if len(s.cfg.ProtectedClients) != 0 {
+			return parsedProxyUsername{}, errProxyAuthInvalid
+		}
 		return legacyProxyUsername(username), nil
 	}
 
@@ -122,6 +130,7 @@ func (s *Server) authenticateHTTPRequest(req *http.Request) (parsedProxyUsername
 		return parsedProxyUsername{}, errProxyAuthInvalid
 	}
 	_, _, required := s.authCredentials()
+	required = required || len(s.cfg.ProtectedClients) != 0
 	user, pass, ok := proxyBasicAuth(req)
 	if !ok {
 		if required {
@@ -184,6 +193,9 @@ func policyForProfile(split bool, compiled *profile.CompiledProfile, host string
 }
 
 func (s *Server) resolveLegacyRequest(auth parsedProxyUsername, requestOverlay directiveOverlay, host string, sessionFallback string) (resolved, routerule.Policy) {
+	if auth.protectedNode != "" {
+		return protectedResolution(auth.protectedNode), routerule.PolicyProxy
+	}
 	overlay := s.bound.merge(auth.Overlay).merge(requestOverlay)
 	res := overlay.resolve(s.DefaultStrategy(), sessionFallback)
 	res.directive.SelectionTiers = s.SelectionTiers()
@@ -194,6 +206,9 @@ func (s *Server) resolveLegacyRequest(auth parsedProxyUsername, requestOverlay d
 }
 
 func (s *Server) resolveProfileRequest(auth parsedProxyUsername, requestOverlay directiveOverlay, host string, remoteAddr net.Addr) (resolved, routerule.Policy, profile.Resolution, error) {
+	if auth.protectedNode != "" {
+		return protectedResolution(auth.protectedNode), routerule.PolicyProxy, profile.Resolution{}, nil
+	}
 	if s == nil || s.cfg.Profiles == nil {
 		res, policy := s.resolveLegacyRequest(auth, requestOverlay, host, sessionPeerKey(peerAddr(remoteAddr)))
 		return res, policy, profile.Resolution{}, nil

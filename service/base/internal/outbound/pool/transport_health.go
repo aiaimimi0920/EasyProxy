@@ -8,6 +8,8 @@ import (
 
 type transportFailureState struct {
 	failures         int
+	lastFailAt       time.Time
+	failedDests      map[string]struct{}
 	blacklisted      bool
 	blacklistedUntil time.Time
 }
@@ -25,12 +27,20 @@ func (s *sharedMemberState) recordTransportFailure(
 	s.entryMu.Lock()
 	defer s.entryMu.Unlock()
 	s.mu.Lock()
+	now := time.Now()
 	s.udp.failures++
+	s.udp.lastFailAt = now
+	if dest := normalizeDestinationAddress(destination); dest != "" {
+		if s.udp.failedDests == nil {
+			s.udp.failedDests = make(map[string]struct{}, 2)
+		}
+		s.udp.failedDests[dest] = struct{}{}
+	}
 	count := s.udp.failures
 	triggered := count >= threshold
 	var until time.Time
 	if triggered {
-		until = time.Now().Add(duration)
+		until = now.Add(duration)
 		s.udp = transportFailureState{blacklisted: true, blacklistedUntil: until}
 	}
 	s.mu.Unlock()
@@ -49,6 +59,8 @@ func (s *sharedMemberState) recordTransportSuccess(network, destination string) 
 	defer s.entryMu.Unlock()
 	s.mu.Lock()
 	s.udp.failures = 0
+	s.udp.lastFailAt = time.Time{}
+	s.udp.failedDests = nil
 	s.mu.Unlock()
 	if entry := s.entry.Load(); entry != nil {
 		entry.RecordSuccess(destination)
@@ -78,6 +90,8 @@ func (s *sharedMemberState) forceReleaseTransport(network string) {
 	defer s.entryMu.Unlock()
 	s.mu.Lock()
 	s.failures = 0
+	s.lastFailAt = time.Time{}
+	s.failedDests = nil
 	s.blacklisted = false
 	s.blacklistedUntil = time.Time{}
 	s.mu.Unlock()

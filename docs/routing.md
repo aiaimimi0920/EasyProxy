@@ -9,6 +9,8 @@
 - [智能分流](#smart-routing)
 - [默认网关分流](#default-gateway-routing)
 - [透明网关](#transparent-gateway)
+- [Claude 域名专享线路](#claude-domain-route)
+- [受保护代理身份](#protected-proxy-clients)
 - [GeoIP 数据来源](#geoip-data-sources)
 
 <a id="smart-routing"></a>
@@ -139,6 +141,24 @@ values restore the defaults above without rebuilding sing-box.
 
 Expiry is lazy (a sweep runs at most once per TTL on access), so there is no
 per-pool cleanup goroutine.
+
+### 默认代理的地区排除
+
+通用代理池（包括默认 HTTP/SOCKS、透明网关及额外的通用池监听入口）不自动选择
+GeoIP 元数据识别为中国 `CN`、香港 `HK`、澳门 `MO` 的节点。此约束先于国家优先级、
+延迟/稳定性层级与通用池回退执行；没有其他可用候选时，不会重新放入这些节点。
+节点仍保留在订阅、列表和健康检查中，不标记为故障或从配置删除。
+
+支持参数的入口仍接受显式地区请求，例如 `cc=CN`、`cc=HK`、`cc=MO`、`hk`
+或 `X-Proxy-Country: MO`。`pin=<tag>` / `pin-strict=<tag>` 只对指定节点豁免地区排除；
+普通 pin 失效后的自动候选仍遵守排除规则，strict pin 仍失败关闭。
+单独指定 `stable`、`session`、`sid`、`nosplit` 不豁免地区排除。Profile 内的默认地区筛选
+和优先层级也不视为本次请求的显式参数。专用节点/地区入口与内部 bootstrap 池保持原语义。
+以上豁免不跳过鉴权、健康状态、协议或其他硬性筛选。
+
+本规则不改变目标站点的 DIRECT/PROXY 分流，也不改变既有无可用节点时的直连策略。
+地区依据当前 GeoIP 节点元数据，不根据节点名称猜测；未知地区保持原行为。
+节点接入地址的地区不等于网站看到的最终出口地区，因此这不是对所有实际出口的地理保证。
 
 ### API parameters (only when `routing.enabled`)
 
@@ -483,6 +503,37 @@ creates an isolated dual-stack topology and proves IPv4/IPv6 TCP, UDP, real QUIC
 Fake-IP DNS and SOCKS5 UDP ASSOCIATE. Client-side reachability must still be
 tested from each actual LAN/overlay whose default route points at the NAS; the
 host validator does not alter client routes.
+
+<a id="claude-domain-route"></a>
+
+## Claude 域名专享线路
+
+该能力默认关闭（`claude_route.enabled: false`），按目标域名组而非本地进程或代理账号匹配。所有经过受覆盖 EasyProxy 入口访问匹配域名的客户端共享同一绑定策略：
+
+```yaml
+claude_route:
+  enabled: true
+  include_shared_dependencies: false
+  node_tag: "<exact-approved-pool-member-tag>"
+  node_fingerprint: "<sha256-of-exact-approved-node-uri>"
+```
+
+`node_tag` 必须是精确的池成员标签，`node_fingerprint` 为对应节点原始 URI 去除首尾空白后的 SHA-256（大小写不敏感十六进制，运行时统一归一化为小写）。缺失标签、非法摘要或运行时节点 URI 摘要不一致均严格失败关闭（Fail-Closed），不会回退到其他节点或 `DIRECT`。仓库示例与文档中不得写入真实节点 URI 或订阅凭据。
+
+- **覆盖路径**：原生 HTTP/SOCKS 代理池入口、dispatch HTTP/CONNECT/SOCKS5 入口、原生透明网关 TUN（TCP 与 UDP）。策略优先于普通 `DIRECT` 规则、共享选路层级及单次请求节点提示；bootstrap detour 池不受影响。
+- **默认域名组**：`api.anthropic.com`、`claude.ai`、`claude.com`、`platform.claude.com`、`sso.claude.com`、`mcp-proxy.anthropic.com`、`downloads.claude.ai`、`bridge.claudeusercontent.com`、`code.claude.com`、`assets-proxy.anthropic.com`，以及 `*.frame.claudeusercontent.com` 与 `*.claudemcpcontent.com` 子域名。
+- **可选共享依赖组**（`include_shared_dependencies: true`）：将同一节点绑定扩展至 `storage.googleapis.com`、`registry.npmjs.org`、`github.com`、`raw.githubusercontent.com`、`http-intake.logs.us5.datadoghq.com`、`browser-intake-us5-datadoghq.com`、`formulae.brew.sh`。默认关闭，避免影响其他应用访问公共包仓与代码托管站点。
+- **生效与边界**：这不是宿主机防火墙；绕过 EasyProxy 的直连流量、无域名的纯 IP 流量或加密主机名元数据不在覆盖范围内。变更 `claude_route` 字段参与代理池与 dispatcher 拓扑重建，通过标准配置重载生效。
+
+<a id="protected-proxy-clients"></a>
+
+## 受保护代理身份
+
+`dispatch.Config.ProtectedClients` 提供按精确代理用户名绑定独立密码与固定 `NodeTag` 的编程接口能力：
+
+- 拒绝携带用户名路由后缀（如 `+split`、`+pin-strict=...`）或空白节点绑定的受保护身份，请求头与用户名参数均无法覆盖绑定的 `NodeTag` 或切换为 `DIRECT`。
+- 当监听入口配置了 `ProtectedClients` 时，HTTP/CONNECT 与 SOCKS5 均强制要求用户名密码鉴权（拒绝匿名请求及 SOCKS5 `NO AUTH` 协商），普通已鉴权账号保持既有分流策略。
+- 绑定节点缺失、不可用或鉴权隔离时严格失败返回，不回退至其他代理节点。
 
 <a id="geoip-data-sources"></a>
 

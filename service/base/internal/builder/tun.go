@@ -79,6 +79,7 @@ func buildGatewayRouteOptions(cfg *config.Config, hasPool bool) (gatewayroute.Op
 		poolTag = pool.Tag
 	}
 	return gatewayroute.Options{
+		ClaudeRoute:            cfg.ClaudeRoute,
 		DeviceProfiles:         cfg.LocalServer.Enabled,
 		SelectionTiers:         append([]config.SelectionTier(nil), cfg.Routing.SelectionTiers...),
 		Rules:                  rules,

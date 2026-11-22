@@ -158,16 +158,28 @@ def fetch_nodes_and_source_sync(base_url: str, management_password: str) -> tupl
         source_sync = None
     return nodes, source_sync
 
-def probe_http_proxy(proxy_url: str, policy: dict[str, Any], *, network_container: str = "") -> dict[str, Any]:
+def probe_http_proxy(
+    proxy_url: str,
+    policy: dict[str, Any],
+    *,
+    network_container: str = "",
+    deadline: float | None = None,
+) -> dict[str, Any]:
     attempts: list[dict[str, Any]] = []
-    timeout = str(int(policy.get("request_timeout_seconds", 25)))
+    req_timeout = max(1, int(policy.get("request_timeout_seconds", 25)))
+    timeout = str(req_timeout)
     accept_status_below_500 = bool(policy.get("accept_http_status_below_500", True))
     for item in policy.get("http_probe_targets", []):
+        if deadline is not None and time.time() >= deadline:
+            return {"ok": False, "attempts": attempts, "error": "audit probe deadline exceeded"}
         url = str(item.get("url") or "").strip()
         expected = {int(code) for code in item.get("expected_status") or []}
         if not url or not expected:
             continue
         try:
+            proc_timeout = req_timeout + 5
+            if deadline is not None:
+                proc_timeout = max(1, min(proc_timeout, int(deadline - time.time()) + 1))
             if network_container.strip():
                 command = [
                     "docker",
@@ -202,6 +214,7 @@ def probe_http_proxy(proxy_url: str, policy: dict[str, Any], *, network_containe
                 command,
                 text=True,
                 capture_output=True,
+                timeout=proc_timeout,
                 check=False,
             )
             status_code = int((result.stdout or "0").strip() or "0")
@@ -303,7 +316,7 @@ def release_proxy_lease(base_url: str, lease_id: str, management_password: str) 
     response.raise_for_status()
 
 def collect_container_networks(container_name: str) -> list[str]:
-    result = run(["docker", "inspect", container_name, "--format", "{{json .NetworkSettings.Networks}}"])
+    result = run(["docker", "inspect", container_name, "--format", "{{json .NetworkSettings.Networks}}"], timeout=15)
     payload = json.loads(result.stdout.strip() or "{}")
     if not isinstance(payload, dict):
         return []
@@ -360,6 +373,7 @@ def discover_directly_usable_nodes(
     *,
     network_container: str,
     max_workers: int = 12,
+    deadline: float | None = None,
 ) -> tuple[list[str], list[dict[str, Any]]]:
     if not candidates:
         return [], []
@@ -372,14 +386,21 @@ def discover_directly_usable_nodes(
     def probe_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
         last_result: dict[str, Any] = {"ok": False, "attempts": [], "error": "probe not started"}
         for attempt_index in range(retries):
+            if deadline is not None and time.time() >= deadline:
+                return last_result
+            probe_kwargs: dict[str, Any] = {"network_container": network_container}
+            if deadline is not None:
+                probe_kwargs["deadline"] = deadline
             last_result = probe_http_proxy(
                 str(candidate.get("direct_proxy_url") or ""),
                 policy,
-                network_container=network_container,
+                **probe_kwargs,
             )
             if last_result.get("ok"):
                 return last_result
             if attempt_index < retries - 1 and retry_delay > 0:
+                if deadline is not None and time.time() + retry_delay >= deadline:
+                    break
                 time.sleep(retry_delay)
         return last_result
 

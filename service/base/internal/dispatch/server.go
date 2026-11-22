@@ -36,6 +36,10 @@ type Logger interface {
 
 // Config controls the dispatcher entry server.
 type Config struct {
+	ClaudeRoute config.ClaudeRoute
+	// ProtectedClients binds dedicated authenticated proxy identities to one node.
+	ProtectedClients map[string]ProtectedClient
+
 	SelectionTiers  []config.SelectionTier
 	Listen          string        // host:port to listen on
 	Username        string        // optional proxy auth username
@@ -568,6 +572,15 @@ func (s *Server) handleHTTPConn(conn net.Conn, br *bufio.Reader, req *http.Reque
 // hands the destination to the pool outbound with the selection directive
 // injected into the context so the pool honors stable/session/filter intent.
 func (s *Server) dial(ctx context.Context, network, host string, port uint16, res resolved, policy routerule.Policy) (net.Conn, error) {
+	if s.cfg.ClaudeRoute.Matches(host) {
+		tag := strings.TrimSpace(s.cfg.ClaudeRoute.NodeTag)
+		if !s.cfg.ClaudeRoute.ValidBinding() {
+			return nil, fmt.Errorf("Claude route requires a node tag and valid node fingerprint")
+		}
+		res = protectedResolution(tag)
+		res.directive.RequiredNodeFingerprint = s.cfg.ClaudeRoute.NormalizedFingerprint()
+		policy = routerule.PolicyProxy
+	}
 	if policy == routerule.PolicyDirect {
 		conn, err := s.directDLR.DialContext(ctx, network, net.JoinHostPort(host, strconv.Itoa(int(port))))
 		if err != nil {

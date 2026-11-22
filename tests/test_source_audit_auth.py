@@ -143,3 +143,51 @@ def test_management_readiness_fails_when_container_exits():
             )
         else:
             raise AssertionError("stopped audit container was treated as healthy")
+
+
+def test_proxy_probe_enforces_subprocess_timeout_and_deadline():
+    import subprocess
+
+    policy = {
+        "http_probe_targets": [
+            {
+                "url": "https://connectivitycheck.gstatic.com/generate_204",
+                "expected_status": [204],
+            }
+        ]
+    }
+
+    # Already-expired deadline returns immediately without spawning docker exec/curl.
+    with patch("scripts.easyproxy_source_audit_probe.subprocess.run") as run:
+        expired = probe_http_proxy(
+            "http://127.0.0.1:22323",
+            policy,
+            network_container="audit-container",
+            deadline=10.0,
+        )
+    assert expired == {
+        "ok": False,
+        "attempts": [],
+        "error": "audit probe deadline exceeded",
+    }
+    run.assert_not_called()
+
+    # Subprocess timeout is passed explicitly and converted into a failed attempt instead of hanging forever.
+    with (
+        patch("scripts.easyproxy_source_audit_probe.time.time", return_value=100.0),
+        patch(
+            "scripts.easyproxy_source_audit_probe.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd=["docker", "exec"], timeout=12.0),
+        ) as run,
+    ):
+        timed_out = probe_http_proxy(
+            "http://127.0.0.1:22323",
+            policy,
+            network_container="audit-container",
+            deadline=112.0,
+        )
+
+    assert timed_out["ok"] is False
+    assert len(timed_out["attempts"]) == 1
+    assert "timed out" in timed_out["attempts"][0]["error"].lower()
+    assert run.call_args.kwargs["timeout"] == 13

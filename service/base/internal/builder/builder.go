@@ -223,15 +223,17 @@ func Build(cfg *config.Config) (option.Options, error) {
 	hasGlobalPool := len(memberTags) > 0 && (enablePoolInbound || cfg.DispatchEnabled() || tunEnabled)
 	if hasGlobalPool {
 		poolOptions := poolout.Options{
-			SharedSelection:   true,
-			SelectionTiers:    append([]config.SelectionTier(nil), cfg.Routing.SelectionTiers...),
-			Mode:              cfg.Pool.Mode,
-			Members:           memberTags,
-			FailureThreshold:  cfg.Pool.FailureThreshold,
-			BlacklistDuration: cfg.Pool.BlacklistDuration,
-			Metadata:          metadata,
-			MaxRetries:        cfg.Pool.MaxRetries,
-			SessionTTL:        cfg.Routing.Session.TTL,
+			ClaudeRoute:             cfg.ClaudeRoute,
+			DefaultRegionExclusions: true,
+			SharedSelection:         true,
+			SelectionTiers:          append([]config.SelectionTier(nil), cfg.Routing.SelectionTiers...),
+			Mode:                    cfg.Pool.Mode,
+			Members:                 memberTags,
+			FailureThreshold:        cfg.Pool.FailureThreshold,
+			BlacklistDuration:       cfg.Pool.BlacklistDuration,
+			Metadata:                metadata,
+			MaxRetries:              cfg.Pool.MaxRetries,
+			SessionTTL:              cfg.Routing.Session.TTL,
 		}
 		outbounds = append(outbounds, option.Outbound{
 			Type:    poolout.Type,
@@ -255,14 +257,16 @@ func Build(cfg *config.Config) (option.Options, error) {
 			}
 			extraPoolTag := fmt.Sprintf("%s-%s-%d", poolout.Tag, mode, extra.Port)
 			extraPoolOptions := poolout.Options{
-				SharedSelection:   true,
-				SelectionTiers:    append([]config.SelectionTier(nil), cfg.Routing.SelectionTiers...),
-				Mode:              mode,
-				Members:           memberTags,
-				FailureThreshold:  cfg.Pool.FailureThreshold,
-				BlacklistDuration: cfg.Pool.BlacklistDuration,
-				Metadata:          metadata,
-				MaxRetries:        cfg.Pool.MaxRetries,
+				ClaudeRoute:             cfg.ClaudeRoute,
+				DefaultRegionExclusions: true,
+				SharedSelection:         true,
+				SelectionTiers:          append([]config.SelectionTier(nil), cfg.Routing.SelectionTiers...),
+				Mode:                    mode,
+				Members:                 memberTags,
+				FailureThreshold:        cfg.Pool.FailureThreshold,
+				BlacklistDuration:       cfg.Pool.BlacklistDuration,
+				Metadata:                metadata,
+				MaxRetries:              cfg.Pool.MaxRetries,
 			}
 			outbounds = append(outbounds, option.Outbound{
 				Type:    poolout.Type,
@@ -320,6 +324,7 @@ func Build(cfg *config.Config) (option.Options, error) {
 			perMeta := map[string]poolout.MemberMeta{tag: meta}
 			poolTag := fmt.Sprintf("%s-%s", poolout.Tag, tag)
 			perOptions := poolout.Options{
+				ClaudeRoute:       cfg.ClaudeRoute,
 				Mode:              "sequential",
 				Members:           []string{tag},
 				FailureThreshold:  cfg.Pool.FailureThreshold,
@@ -379,6 +384,7 @@ func Build(cfg *config.Config) (option.Options, error) {
 
 			regionPoolTag := fmt.Sprintf("pool-%s", region)
 			regionPoolOptions := poolout.Options{
+				ClaudeRoute:       cfg.ClaudeRoute,
 				Mode:              cfg.Pool.Mode,
 				Members:           members,
 				FailureThreshold:  cfg.Pool.FailureThreshold,

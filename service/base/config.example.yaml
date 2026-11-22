@@ -1,3 +1,13 @@
+# Optional Claude domain pinning (disabled until an approved node is configured).
+# Matching domains use this exact member only; failure never selects DIRECT or another node.
+# See docs/claude-domain-route.md at the repository root for coverage and limitations.
+claude_route:
+  enabled: false
+  # Also pins shared GitHub/npm/storage/telemetry hosts for ALL applications.
+  include_shared_dependencies: false
+  node_tag: ""
+  node_fingerprint: ""
+
 # ═══════════════════════════════════════════════════════════════
 # Easy Proxies 完整配置文件
 # ═══════════════════════════════════════════════════════════════

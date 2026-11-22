@@ -19,8 +19,9 @@ class AuditContainer:
         self.operation, self.journal = operation, journal
 
     def _run(self, args: list[str]):
+        timeout = 60 if args and args[0] == "rm" else 30
         return subprocess.run(["docker", *args], capture_output=True, text=True, stdin=subprocess.DEVNULL,
-                              timeout=30, check=False)
+                              timeout=timeout, check=False)
 
     def _ids(self) -> list[str]:
         result = self._run(["container", "ls", "--all", "--no-trunc", "--filter",

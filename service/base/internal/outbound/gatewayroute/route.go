@@ -37,6 +37,7 @@ var nativeUDPProtocolFamilies = []string{"hysteria2", "tuic"}
 // Options controls native TUN routing through EasyProxy's direct and pool
 // outbounds. An empty PoolTag represents a valid direct-only runtime.
 type Options struct {
+	ClaudeRoute            config.ClaudeRoute
 	DeviceProfiles         bool
 	SelectionTiers         []config.SelectionTier
 	Rules                  []string
@@ -189,11 +190,11 @@ func (r *routeOutbound) DialContext(ctx context.Context, network string, destina
 			r.proxyCount.Add(1)
 			return conn, nil
 		}
-		if !r.failOpen() {
+		if !r.mayFallback(directive) {
 			return nil, err
 		}
 	}
-	if !r.failOpen() {
+	if !r.mayFallback(directive) {
 		return nil, E.New("no healthy proxy available")
 	}
 	r.noNodeFallbackCount.Add(1)
@@ -252,11 +253,11 @@ func (r *routeOutbound) ListenPacketWithDestination(ctx context.Context, destina
 			r.proxyCount.Add(1)
 			return packetConn, destinationAddress, nil
 		}
-		if !r.failOpen() {
+		if !r.mayFallback(directive) {
 			return nil, netip.Addr{}, err
 		}
 	}
-	if !r.failOpen() {
+	if !r.mayFallback(directive) {
 		return nil, netip.Addr{}, E.New("no healthy UDP proxy available")
 	}
 	r.noNodeFallbackCount.Add(1)
@@ -323,4 +324,9 @@ func (r *routeOutbound) Snapshot() Stats {
 		IPv4:           r.ipv4Count.Load(),
 		IPv6:           r.ipv6Count.Load(),
 	}
+}
+
+// Exact pins must never inherit a shared fail-open setting.
+func (r *routeOutbound) mayFallback(directive *pool.SelectionDirective) bool {
+	return r.failOpen() && (directive == nil || directive.RequiredTag == "")
 }

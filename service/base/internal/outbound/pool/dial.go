@@ -11,7 +11,7 @@ import (
 )
 
 func (p *poolOutbound) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
-	ctx, err := p.sharedSelectionContext(ctx)
+	ctx, err := p.claudeSelectionContext(ctx, destination)
 	if err != nil {
 		return nil, err
 	}
@@ -87,7 +87,7 @@ func (p *poolOutbound) DialContext(ctx context.Context, network string, destinat
 }
 
 func (p *poolOutbound) ListenPacket(ctx context.Context, destination M.Socksaddr) (net.PacketConn, error) {
-	ctx, err := p.sharedSelectionContext(ctx)
+	ctx, err := p.claudeSelectionContext(ctx, destination)
 	if err != nil {
 		return nil, err
 	}

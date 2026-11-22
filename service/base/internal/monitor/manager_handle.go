@@ -98,6 +98,16 @@ func (h *EntryHandle) SetProbe(fn func(ctx context.Context) (time.Duration, erro
 	h.ref.setProbe(fn)
 }
 
+// HasProbe reports whether a health probe function is registered for this node.
+func (h *EntryHandle) HasProbe() bool {
+	if h == nil || h.ref == nil {
+		return false
+	}
+	h.ref.mu.RLock()
+	defer h.ref.mu.RUnlock()
+	return h.ref.probe != nil
+}
+
 // SetRelease assigns a release function.
 func (h *EntryHandle) SetRelease(fn func()) {
 	if h == nil || h.ref == nil {
