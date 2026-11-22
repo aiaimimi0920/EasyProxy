@@ -44,7 +44,11 @@ class MiSubAPI:
         self.origin = "https://" + project + ".pages.dev"
         self.session = secure_session()
         self.manifest_token = manifest_token
-        require(self.request("POST", "/api/login", {"password": admin_password}).get("success") is True, "LOGIN_UNKNOWN")
+        try:
+            require(self.request("POST", "/api/login", {"password": admin_password}).get("success") is True, "LOGIN_UNKNOWN")
+        except Exception:
+            self.session.close()
+            raise
 
     def request(self, method: str, path: str, body=None) -> dict:
         require((method, path) in {("POST", "/api/login"), ("POST", "/api/backup/export"),
@@ -56,6 +60,8 @@ class MiSubAPI:
         try:
             with self.session.request(method, self.origin + path, json=body, headers=headers,
                                       timeout=(10, 60), allow_redirects=False, stream=True) as response:
+                if path == "/api/login" and response.status_code in (401, 403):
+                    require(False, "LOGIN_DENIED")
                 require(response.status_code == 200, "REQUEST_UNKNOWN")
                 raw = bytearray()
                 for chunk in response.iter_content(65536):

@@ -55,13 +55,54 @@ def subscription_url(value: str) -> str:
     return value
 
 
-def load_registered_subscriptions(config, credentials: dict) -> list[dict]:
-    from misub_sync import MiSubAPI
-    api = MiSubAPI(config.pages_name, credentials["EASYPROXY_MISUB_ADMIN_PASSWORD"], credentials["EASYPROXY_MANIFEST_TOKEN"])
+def _d1_subscriptions(config, token: str) -> list[dict]:
+    from d1_init import D1API
+    api = D1API(config.account_id, token, config.database_id)
     try:
-        rows = api.snapshot()["subscriptions"]
+        identity = api.identity()
+        require(identity.get("uuid") == config.database_id and identity.get("name") == config.database_name, "SUBSCRIPTION_SOURCE")
+        raw_rows = api.query("SELECT data FROM subscriptions ORDER BY id")
     finally:
         api.close()
+    items, seen = [], {}
+    for entry in raw_rows:
+        data = entry.get("data")
+        require(type(data) is str and len(data.encode("utf-8")) <= MAX_BYTES, "SUBSCRIPTION_SOURCE")
+        try:
+            parsed = json.loads(data)
+        except (ValueError, UnicodeError, RecursionError):
+            raise ArtifactError("EASYPROXY_SBA_ARTIFACT_SUBSCRIPTION_SOURCE") from None
+        values = parsed if type(parsed) is list else [parsed]
+        for row in values:
+            require(type(row) is dict and isinstance(row.get("id"), str) and bool(row["id"]), "SUBSCRIPTION_SOURCE")
+            canonical = json.dumps(row, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+            if row["id"] in seen:
+                require(seen[row["id"]] == canonical, "SUBSCRIPTION_SOURCE")
+                continue
+            seen[row["id"]] = canonical
+            order = row.get("sortIndex", 0)
+            require(type(order) in (int, float) and order == order, "SUBSCRIPTION_SOURCE")
+            items.append((float(order), row))
+    items.sort(key=lambda pair: pair[0])
+    return [row for _, row in items]
+
+
+def load_registered_subscriptions(config, credentials: dict) -> list[dict]:
+    from misub_sync import MiSubAPI, MiSubError
+    try:
+        api = MiSubAPI(config.pages_name, credentials["EASYPROXY_MISUB_ADMIN_PASSWORD"], credentials["EASYPROXY_MANIFEST_TOKEN"])
+        try:
+            rows = api.snapshot()["subscriptions"]
+        finally:
+            api.close()
+    except MiSubError as error:
+        token = credentials.get("EASYPROXY_CLOUDFLARE_API_TOKEN")
+        if (error.args in (("EASYPROXY_SBA_MISUB_LOGIN_DENIED",), ("EASYPROXY_SBA_MISUB_LOGIN_UNKNOWN",))
+                and token and getattr(config, "account_id", None) and getattr(config, "database_id", None)
+                and getattr(config, "database_name", None)):
+            rows = _d1_subscriptions(config, token)
+        else:
+            raise
     result = []
     for row in rows:
         # A failed format probe must not prevent a later scheduled recovery.

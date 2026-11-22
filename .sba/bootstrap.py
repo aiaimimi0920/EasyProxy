@@ -1,4 +1,4 @@
-"""正式 PowerShell 入口的 stdlib bootstrap；源码外准备全部 gitlink 与私有 venv。"""
+"""正式入口的 stdlib bootstrap；源码外准备全部 gitlink 与私有 venv。"""
 from __future__ import annotations
 
 import argparse
@@ -9,7 +9,7 @@ import tempfile
 import time
 
 from deadline import MAX_SECONDS, action_deadline, remaining
-from diagnostics import StageError, phase, safe_error_code
+from diagnostics import StageError, phase, result_diagnostics, safe_error_code
 from python_runtime import environment as python_environment, prepare_python
 from refresh_context import manifest_release, require
 from request import parse_request
@@ -29,7 +29,8 @@ def bootstrap(request_path: Path, result_path: Path, *, environment) -> int:
     require(temporary.is_absolute() and temporary.resolve(strict=True) == temporary and temporary.is_dir()
             and temporary == result_path.parent and root != temporary and root not in temporary.parents)
     values = request.credentials(environment)  # Verify returns {} without reading any env secret.
-    deadline = time.monotonic() + MAX_SECONDS
+    started = time.monotonic()
+    deadline = started + MAX_SECONDS
     try:
         with action_deadline(deadline):
             with phase("SOURCE"):
@@ -47,13 +48,18 @@ def bootstrap(request_path: Path, result_path: Path, *, environment) -> int:
                 "--deadline", str(deadline)], env=env, cwd=output, stdin=subprocess.DEVNULL,
                 stdout=log, stderr=subprocess.STDOUT, timeout=remaining(deadline) + 120, check=False)
         if not result_path.exists():
-            write_result(result_path, request, status="unknown", checks={}, error_code="EASYPROXY_SBA_RESULT_MISSING")
+            elapsed_ms = int((time.monotonic() - started) * 1000)
+            write_result(result_path, request, status="unknown", checks={},
+                         error_code="EASYPROXY_SBA_RESULT_MISSING",
+                         diagnostics=result_diagnostics(failed_step="result-missing", duration_ms=elapsed_ms))
             return 1
         return result.returncode
     except Exception as error:
         if not result_path.exists():
+            elapsed_ms = int((time.monotonic() - started) * 1000)
             code = safe_error_code(error) if type(error) is StageError else "EASYPROXY_SBA_BOOTSTRAP_UNKNOWN"
-            write_result(result_path, request, status="unknown", checks={}, error_code=code)
+            write_result(result_path, request, status="unknown", checks={}, error_code=code,
+                         diagnostics=result_diagnostics(error, failed_step="bootstrap", duration_ms=elapsed_ms))
         return 1
 
 

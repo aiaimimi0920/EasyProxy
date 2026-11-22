@@ -7,7 +7,7 @@ import re
 
 from coordination import SHA, VERSION
 from fresh_pristine_config import configuration_matches
-from sealed_box import secret_value
+from sealed_box import secret_value, single_line_secret
 from repair_context import CONTEXT_FIELDS, PARENT_ERROR, PARENT_RELEASE, REPAIR_ID, GITHUB_CONTEXT, GITHUB_PARENT_RELEASE
 from repair_context import PAGES_CONTEXT, PAGES_PARENT_RELEASE, ASSETS_CONTEXT, ASSETS_PARENT_RELEASE
 from repair_context import GENERATION_CONTEXT, GENERATION_PARENT_RELEASE
@@ -32,6 +32,7 @@ SECRETS = {"EASYPROXY_CLOUDFLARE_API_TOKEN", "EASYPROXY_GITHUB_TOKEN", "EASYPROX
            "EASYPROXY_R2_SECRET_ACCESS_KEY", "EASYPROXY_MISUB_ADMIN_PASSWORD", "EASYPROXY_MISUB_COOKIE_SECRET",
            "EASYPROXY_MANIFEST_TOKEN", "EASYPROXY_ECH_TOKEN", "EASYPROXY_BACKUP_PASSPHRASE",
            "EASYPROXY_AGGREGATOR_SHARED_TOKEN", "EASYPROXY_AGGREGATOR_ISSUE91_SUB_URL_B64"}
+LARGE_SECRETS = frozenset({"EASYPROXY_BACKUP_PASSPHRASE", "EASYPROXY_AGGREGATOR_ISSUE91_SUB_URL_B64"})
 
 
 class RequestError(RuntimeError):
@@ -195,7 +196,7 @@ class ApplicationRequest:
         if self.action == "verify":
             return {}
         values = {name: environment.get(name) for name in SECRETS}
-        require(all(secret_value(value) for value in values.values()))
+        require(all((secret_value if name in LARGE_SECRETS else single_line_secret)(value) for name, value in values.items()))
         return values
 
 

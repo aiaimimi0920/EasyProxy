@@ -32,6 +32,7 @@ def test_http_metadata_is_finite_and_one_request_only(status, reason):
         http.api_result(session, 'PRIVATE_TOKEN', 'POST', '/pages/assets/upload', require,
             pages_asset_response=True, diagnostic=diagnostic)
     assert diagnostic.reason == reason
+    assert diagnostic.provider_status == (status if 100 <= status <= 599 else None)
     assert len(calls) == 1 and 'diagnostic' not in calls[0]
     assert calls[0]['allow_redirects'] is False and calls[0]['timeout'] == (10, 60)
     assert 'PRIVATE' not in str(caught.value)
@@ -50,6 +51,8 @@ def test_response_diagnostic_never_copies_body(body, reason):
         http.api_result(session, 'PRIVATE_TOKEN', 'POST', '/pages/assets/check-missing', require,
             pages_asset_response=True, diagnostic=diagnostic)
     assert diagnostic.reason == reason and len(session.calls) == 1
+    if body.startswith(b'{"success":false,"errors":[{"code":1000'):
+        assert diagnostic.provider_code == 1000 and diagnostic.provider_status == 200
 
 
 @pytest.mark.parametrize('error,reason', [(requests.Timeout('PRIVATE_TOKEN'), 'TIMEOUT'),
@@ -73,10 +76,13 @@ def test_network_diagnostic_has_no_retry_or_exception_text(error, reason):
 def test_diagnostic_success_clears_prior_reason_and_preserves_wire_contract():
     diagnostic = http.ResponseDiagnostic()
     diagnostic.reason = 'HTTP_403'
+    diagnostic.provider_status = 403
+    diagnostic.provider_code = 1000
     session = Session(b'{"success":true,"result":[]}')
     assert http.api_result(session, 'fixture', 'POST', '/pages/assets/check-missing', require,
         pages_asset_response=True, diagnostic=diagnostic) == []
-    assert diagnostic.reason is None and len(session.calls) == 1
+    assert diagnostic.reason is None and diagnostic.provider_status is None and diagnostic.provider_code is None
+    assert len(session.calls) == 1
 
 
 @pytest.mark.parametrize('stage,reason', [('PAGES_ASSET_UPLOAD','PRIVATE_TOKEN'),('SOURCE','HTTP_403'),

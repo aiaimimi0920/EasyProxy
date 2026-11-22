@@ -20,7 +20,7 @@ def resolve_env_value(env_name: str) -> str:
 
     if env_name.endswith("_B64"):
         try:
-            return base64.b64decode(value).decode("utf-8").strip()
+            return base64.b64decode("".join(value.split()), validate=True).decode("utf-8").strip()
         except Exception as exc:
             raise RuntimeError(f"Failed to decode base64 environment value for {env_name}: {exc}") from exc
 

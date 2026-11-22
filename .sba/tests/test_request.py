@@ -108,6 +108,13 @@ def test_nonverify_credentials_only_select_declared_names_and_require_real_singl
     request = parse(fixture())
     values = {name: "fixture-value" for name in SECRETS}
     assert request.credentials({**values, "GITHUB_TOKEN": "must-not-be-inherited"}) == values
-    for invalid in (None, "", "verification-not-applicable", "line\nbreak", "x" * 513, "\ud800"):
+    for invalid in (None, "", "verification-not-applicable", "repair-not-applicable", "line\nbreak", "x" * 513, "\ud800"):
         with pytest.raises(RequestError):
             request.credentials({**values, "EASYPROXY_ECH_TOKEN": invalid})
+    multiline_b64 = ("aHR0cHM6Ly9leGFtcGxlLmNvbS9zdWI=\n" * 200).strip()
+    large_values = {**values, "EASYPROXY_AGGREGATOR_ISSUE91_SUB_URL_B64": multiline_b64,
+                    "EASYPROXY_BACKUP_PASSPHRASE": "p" * 4096}
+    assert request.credentials(large_values) == large_values
+    for invalid_large in ("x" * 16385, "bad\x00value", "bad\x0bvalue", "repair-not-applicable"):
+        with pytest.raises(RequestError):
+            request.credentials({**values, "EASYPROXY_AGGREGATOR_ISSUE91_SUB_URL_B64": invalid_large})

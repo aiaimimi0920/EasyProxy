@@ -14,6 +14,7 @@ from aggregator_publish import ARTIFACTS, RAW, _validate
 from aggregator_runtime import prepare_runtime, verify_runtime
 from artifact_store import ArtifactError, MAX_BYTES, require
 from diagnostics import phase
+from sealed_box import secret_value
 from sources import inspect_checkout, inspect_gitlink_checkout
 
 
@@ -65,11 +66,19 @@ def _read_output(artifacts: Path, name: str) -> bytes:
         raise GenerationOutputError(name, "read-error") from None
 
 
+def _seed_secret_valid(name: str, value: str) -> bool:
+    if not isinstance(value, str):
+        return False
+    if name == "EASYPROXY_AGGREGATOR_ISSUE91_SUB_URL_B64":
+        compact = "".join(value.split())
+        return secret_value(value) and bool(compact) and all(33 <= ord(char) <= 126 for char in compact)
+    return 0 < len(value) <= 4096 and all(33 <= ord(char) <= 126 for char in value)
+
+
 def configured_seed_secrets(values: dict) -> dict:
     """可选旧私有种子允许显式停用；不把占位字符串当成真实 URL/token。"""
     require(type(values) is dict and set(values) <= SEED_SECRETS
-            and all(isinstance(value, str) and 0 < len(value) <= 4096 and all(33 <= ord(char) <= 126 for char in value)
-                    for value in values.values()), "SECRETS")
+            and all(_seed_secret_valid(name, value) for name, value in values.items()), "SECRETS")
     return {name: value for name, value in values.items() if value != DISABLED_SEED}
 
 

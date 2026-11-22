@@ -2,8 +2,8 @@
   "schemaVersion": 3,
   "id": "easyproxy-cloud",
   "name": "EasyProxy 云套件",
-  "version": "1.0.25",
-  "entrypoint": "springbok.ps1",
+  "version": "1.0.26",
+  "entrypoint": "springbok.mjs",
   "runtime": {
     "runner": "ubuntu-24.04",
     "powershell": "7.6.9",

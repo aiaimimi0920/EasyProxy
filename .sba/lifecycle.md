@@ -2,7 +2,7 @@
 
 ## 正式入口与资源合同
 
-SpringBok 调用 `springbok.ps1 -RequestPath ... -ResultPath ...`。stdlib bootstrap 从批准
+SpringBok 调用 `springbok.mjs -RequestPath ... -ResultPath ...`（保留 `springbok.ps1` 兼容脚本）。stdlib bootstrap 从批准
 根 SHA 和三个准确 gitlink 创建源码外独立工作区，再安装带哈希的 Python wheel。
 Node 22.23.3、npm 10.9.7、esbuild 0.28.2、Go 1.27.3 与审计镜像来源均有固定校验。
 runtime 为 Ubuntu 24.04 / PowerShell 7.6.9 / Python 3.12 / Node 22。
@@ -18,7 +18,7 @@ databaseId、databaseName、bucketName、refreshTarget、pagesOrigin、workerOri
 所有动作业务预算为 3300 秒，父进程另留 120 秒子进程清理，平台上限 3600 秒。
 结果是 create-only、UTF-8 无 BOM 的协议文件，不以 stdout 或进程退出 0 代替业务回执。
 发生写入结果不明时报告 UNKNOWN，不自动重放、回滚或清锁。
-回执只记录固定白名单阶段错误码，不含内部异常或 provider 响应正文。
+回执只记录固定白名单阶段错误码与无秘密结构化 `diagnostics`（`failedStep`、`providerStatus`、`providerCode`、`durationMs`），不含内部异常或 provider 响应正文。
 诊断仅返回固定白名单错误码，不能代替真实部署或业务验收。
 
 ## 五个生命周期动作
@@ -27,7 +27,7 @@ databaseId、databaseName、bucketName、refreshTarget、pagesOrigin、workerOri
   environment、发布 ECH/Pages，生成 Aggregator candidate，经真实 EasyProxy 消费审计后
   晋级并受限同步 MiSub；独立公开读回全部通过才提交版本。
 - **update**：复用同实例资源，先生成 age 备份，存私有 R2 并完整回读；真实 CLI 绑定
-  备份摘要执行审核迁移，核完整既有数据保持，再运行发布链。普通更新不轮换业务秘密。
+  备份摘要执行审核迁移，核完整既有数据保持，再运行发布链。普通更新默认沿用原实例秘密；若平台显式启用 `rotateApplicationSecrets` 同实例轮换，前置来源读取与备份支持核验身份后的直连 D1 回退，并在同一 Permit 内更新 GitHub environment、Worker 与 Pages 秘密。
 - **verify**：先返回只读路径，不读取占位秘密，不创建 writer，不构建部署工具；验证公开
   版本、不可变/稳定产物正文摘要、订阅结构和前端。它不证明外网代理出口端到端可用。
 - **preview**：复制源 D1 的真实数据到独立资源，演练审核迁移；创建前后及完成前比较源

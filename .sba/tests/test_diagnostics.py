@@ -52,6 +52,8 @@ def test_entry_receipt_preserves_repair_identity_without_exception_body(tmp_path
     assert entry.main() == 1
     value = json.loads(result.read_bytes())
     assert value["status"] == "unknown" and value["errorCode"] == expected
+    assert value["diagnostics"]["failedStep"] == ("tools" if isinstance(error, StageError) else "execute")
+    assert isinstance(value["diagnostics"]["durationMs"], int)
     assert value["action"] == "repair" and value["taskId"] == request.task_id and value["sourceSha"] == request.source_sha
     assert "DO_NOT_PRINT" not in result.read_text(encoding="utf-8") + capsys.readouterr().out
 

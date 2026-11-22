@@ -82,9 +82,22 @@ def test_explicitly_disabled_optional_seed_has_no_relay_dependency_and_keeps_pub
     assert build.DISABLED_SEED not in json.dumps(rendered) and "seed-relay" not in json.dumps(rendered)
 
 
-def test_configured_private_seed_is_preserved_and_unknown_secret_names_are_rejected():
+def test_configured_private_seed_is_preserved_and_unknown_secret_names_are_rejected(tmp_path, monkeypatch):
+    import base64
     value = {"EASYPROXY_AGGREGATOR_ISSUE91_SUB_URL_B64": "fixture-encoded-value"}
     assert build.configured_seed_secrets(value) == value
+    urls = "\n".join(f"https://fixture.invalid/sub-{index}?token={'a' * 80}" for index in range(60))
+    raw_b64 = base64.b64encode(urls.encode("utf-8")).decode("ascii")
+    wrapped_b64 = "\n".join(raw_b64[i:i + 76] for i in range(0, len(raw_b64), 76))
+    assert len(wrapped_b64) > 5000
+    assert build.configured_seed_secrets({"EASYPROXY_AGGREGATOR_ISSUE91_SUB_URL_B64": wrapped_b64}) == {
+        "EASYPROXY_AGGREGATOR_ISSUE91_SUB_URL_B64": wrapped_b64,
+    }
+    spec = importlib.util.spec_from_file_location("multiline_seed_materializer", ROOT / "scripts/materialize-aggregator-config.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setenv("EASYPROXY_AGGREGATOR_ISSUE91_SUB_URL_B64", wrapped_b64)
+    assert module.resolve_env_value("EASYPROXY_AGGREGATOR_ISSUE91_SUB_URL_B64") == urls
     with pytest.raises(ArtifactError, match="SECRETS"):
         build.configured_seed_secrets({"CLOUDFLARE_API_TOKEN": "fixture"})
 

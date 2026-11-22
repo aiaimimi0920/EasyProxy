@@ -32,6 +32,43 @@ def test_registry_reads_export_only_and_selects_all_enabled_subscriptions_even_f
     assert [path for _, path, _ in wire["requests"]] == ["/api/login", "/api/backup/export"]
 
 
+def test_rotated_admin_password_on_update_falls_back_to_verified_d1_subscriptions(monkeypatch):
+    import d1_init
+    import misub_sync
+
+    def deny_login(self, project, admin_password, manifest_token):
+        raise misub_sync.MiSubError("EASYPROXY_SBA_MISUB_LOGIN_DENIED")
+
+    class FakeD1:
+        def __init__(self, account_id, token, database_id):
+            assert (account_id, token, database_id) == ("c" * 32, "cf-token", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+        def identity(self):
+            return {"uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "name": "ep-testing-misub"}
+        def query(self, sql):
+            assert sql == "SELECT data FROM subscriptions ORDER BY id"
+            return [
+                {"data": json.dumps({"id": "second", "sortIndex": 2, "kind": "subscription", "enabled": True, "input": "https://fixture.invalid/two"})},
+                {"data": json.dumps({"id": "first", "sortIndex": 1, "kind": "subscription", "enabled": True, "input": "https://fixture.invalid/one", "options": {"trafficQuota": {"enabled": True}}})},
+                {"data": json.dumps({"id": "disabled", "sortIndex": 0, "kind": "subscription", "enabled": False, "input": "https://fixture.invalid/off"})},
+            ]
+        def close(self):
+            pass
+
+    monkeypatch.setattr(misub_sync.MiSubAPI, "__init__", deny_login)
+    monkeypatch.setattr(d1_init, "D1API", FakeD1)
+    config = SimpleNamespace(pages_name="ep-testing-misub", account_id="c" * 32,
+                             database_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", database_name="ep-testing-misub")
+    actual = sources.load_registered_subscriptions(config, {
+        "EASYPROXY_CLOUDFLARE_API_TOKEN": "cf-token",
+        "EASYPROXY_MISUB_ADMIN_PASSWORD": "rotated-admin-password",
+        "EASYPROXY_MANIFEST_TOKEN": "rotated-manifest-token",
+    })
+    assert actual == [
+        {"id": "first", "url": "https://fixture.invalid/one", "user_agent": "clash.meta", "quota_enabled": True},
+        {"id": "second", "url": "https://fixture.invalid/two", "user_agent": "clash.meta"},
+    ]
+
+
 @pytest.mark.parametrize("url", ["http://fixture.invalid/sub", "file:///private", "https://user:private@fixture.invalid/sub",
     "https://127.0.0.1/sub", "https://169.254.169.254/", "https://localhost/", "https://x.local/sub",
     "https://fixture.invalid/sub#fragment", "https://fixture.invalid:8080/sub", "https://fixture.invalid/a\nb"])

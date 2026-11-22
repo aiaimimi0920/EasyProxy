@@ -8,12 +8,19 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from response_diagnostics import ResponseDiagnostic, RESPONSE_REASONS
+from response_diagnostics import ResponseDiagnostic, RESPONSE_REASONS, valid_provider_status
 
 
-def _mark(diagnostic, reason):
+def _mark(diagnostic, reason, *, status=None, code=None):
     if diagnostic is not None:
-        diagnostic.reason = reason
+        if reason is None:
+            diagnostic.reset()
+        else:
+            diagnostic.reason = reason
+            if valid_provider_status(status):
+                diagnostic.provider_status = status
+            if type(code) is int and 0 <= code <= 999999999:
+                diagnostic.provider_code = code
 
 
 def _status_reason(status):
@@ -69,18 +76,21 @@ def api_result(session: requests.Session, token: str, method: str, path: str, re
                              allow_redirects=False, stream=True, **kwargs) as response:
             if not (200 <= response.status_code < 300 or
                     method == "GET" and missing_code is not None and response.status_code == 404):
-                _mark(diagnostic, _status_reason(response.status_code))
+                _mark(diagnostic, _status_reason(response.status_code), status=response.status_code)
             require(200 <= response.status_code < 300 or
                     method == "GET" and missing_code is not None and response.status_code == 404, "REQUEST_UNKNOWN")
             raw = bytearray()
             for chunk in response.iter_content(65536):
                 raw.extend(chunk)
                 if len(raw) > 1024 * 1024:
-                    _mark(diagnostic, "SIZE")
+                    _mark(diagnostic, "SIZE", status=response.status_code)
                 require(len(raw) <= 1024 * 1024, "RESPONSE_UNKNOWN")
-            _mark(diagnostic, "DECODE")
+            _mark(diagnostic, "DECODE", status=response.status_code)
             payload = decode_object(bytes(raw), require)
-            _mark(diagnostic, "ENVELOPE")
+            first_error = payload.get("errors")
+            error_code = (first_error[0].get("code")
+                          if type(first_error) is list and first_error and type(first_error[0]) is dict else None)
+            _mark(diagnostic, "ENVELOPE", status=response.status_code, code=error_code)
             if method == "GET" and missing_code is not None and response.status_code == 404:
                 errors = payload.get("errors")
                 require(payload.get("success") is False and type(errors) is list and len(errors) == 1

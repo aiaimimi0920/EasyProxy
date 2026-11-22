@@ -22,13 +22,25 @@ def require(value):
         raise SealError("EASYPROXY_SBA_SEAL_REJECTED")
 
 
+MAX_SECRET_BYTES = 16384
+MAX_TOKEN_BYTES = 512
+PLACEHOLDER_SECRETS = frozenset({"verification-not-applicable", "repair-not-applicable"})
+
+
 def secret_value(value) -> bool:
     try:
-        return (type(value) is str and 0 < len(value.encode("utf-8")) <= 512
-                and not any(char in value for char in ("\r", "\n", "\x00"))
-                and value != "verification-not-applicable")
+        if type(value) is not str or value in PLACEHOLDER_SECRETS:
+            return False
+        raw = value.encode("utf-8")
+        return (0 < len(raw) <= MAX_SECRET_BYTES
+                and not any((ord(char) < 32 and char not in ("\t", "\n", "\r")) or ord(char) == 127 for char in value))
     except UnicodeError:
         return False
+
+
+def single_line_secret(value) -> bool:
+    return (secret_value(value) and len(value.encode("utf-8")) <= MAX_TOKEN_BYTES
+            and not any(char in value for char in ("\t", "\n", "\r")))
 
 
 def decode_base64(value: str, size: int) -> bytes:
@@ -58,7 +70,7 @@ class Sealer:
             result = subprocess.run([str(self.executable)], input=json.dumps(
                 {"publicKey": public_key, "plaintext": plaintext}, ensure_ascii=True).encode("utf-8"),
                 env=env, cwd=self.executable.parent, capture_output=True, timeout=10, check=False)
-            require(result.returncode == 0 and result.stderr == b"" and len(result.stdout) <= 800)
+            require(result.returncode == 0 and result.stderr == b"" and len(result.stdout) <= 24576)
             encoded = result.stdout.decode("ascii").removesuffix("\n")
             decode_base64(encoded, len(plaintext.encode("utf-8")) + 48)
             return encoded

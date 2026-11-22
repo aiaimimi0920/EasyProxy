@@ -98,6 +98,35 @@ def test_bootstrap_missing_child_receipt_is_unknown_not_success(bootstrap_input,
     assert entry.bootstrap(request_path, result_path, environment={"RUNNER_TEMP": str(task)}) == 1
     value = json.loads(result_path.read_bytes())
     assert value["status"] == "unknown" and value["errorCode"] == "EASYPROXY_SBA_RESULT_MISSING"
+    assert value["diagnostics"]["failedStep"] == "result-missing" and isinstance(value["diagnostics"]["durationMs"], int)
+
+
+def test_structured_diagnostics_and_check_durations_follow_springbok_opt05_contract(tmp_path):
+    request = parse(fixture())
+    path = tmp_path / "result.json"
+    write_result(path, request, status="unknown", checks={"service-ready": False},
+                 error_code="EASYPROXY_SBA_PAGES_ASSET_UPLOAD_HTTP_403_UNKNOWN",
+                 diagnostics={"failedStep": "pages-asset-upload", "providerStatus": 403, "providerCode": 10000, "durationMs": 250},
+                 check_durations={"service-ready": 120})
+    value = json.loads(path.read_bytes())
+    assert value["checks"] == [{"id": "service-ready", "passed": False, "durationMs": 120}]
+    assert value["diagnostics"] == {"failedStep": "pages-asset-upload", "providerStatus": 403, "providerCode": 10000, "durationMs": 250}
+    for bad_diag in ({}, {"unknownField": 1}, {"failedStep": "UPPER"}, {"providerStatus": 99},
+                     {"providerCode": "private_secret"}, {"durationMs": True}, {"durationMs": 3600001}):
+        with pytest.raises(ResultError):
+            write_result(tmp_path / "bad.json", request, status="unknown", checks={}, diagnostics=bad_diag)
+
+
+def test_mjs_entrypoint_rejects_malformed_arguments_before_invoking_python():
+    import shutil
+    import subprocess
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node required")
+    entrypoint = Path(__file__).resolve().parents[1] / "springbok.mjs"
+    for bad_args in ([], ["-RequestPath", "only"], ["-RequestPath", "a", "-RequestPath", "b"], ["-Unknown", "a", "-ResultPath", "b"]):
+        completed = subprocess.run([node, str(entrypoint), *bad_args], capture_output=True, timeout=10, check=False)
+        assert completed.returncode == 1
 
 
 def test_bootstrap_never_replaces_an_unknown_or_failed_child_receipt(bootstrap_input, monkeypatch):

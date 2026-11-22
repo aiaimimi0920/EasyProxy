@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from refresh_registry import unique
-from sealed_box import secret_value
+from sealed_box import secret_value, single_line_secret
 from suite_config import parse_configuration
 
 
@@ -53,7 +53,8 @@ def context(environment):
 
 def credentials(environment) -> dict:
     values = {name: environment.get(name) for name in REFRESH_SECRETS}
-    require(all(secret_value(value) for value in values.values()))
+    require(all((secret_value if name == "EASYPROXY_AGGREGATOR_ISSUE91_SUB_URL_B64" else single_line_secret)(value)
+                for name, value in values.items()))
     return values
 
 

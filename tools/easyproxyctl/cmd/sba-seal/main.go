@@ -10,18 +10,32 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"unicode/utf8"
 
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/nacl/box"
 )
 
+const (
+	maxInputBytes     = 131072
+	maxPlaintextBytes = 16384
+)
+
 var rejected = errors.New("EASYPROXY_SBA_SEAL_REJECTED")
 
+func disallowedSecretControl(value string) bool {
+	for i := 0; i < len(value); i++ {
+		b := value[i]
+		if (b < 0x20 && b != '\t' && b != '\n' && b != '\r') || b == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
 func encrypt(input io.Reader, output io.Writer) error {
-	data, err := io.ReadAll(io.LimitReader(input, 8193))
-	if err != nil || len(data) > 8192 || !utf8.Valid(data) {
+	data, err := io.ReadAll(io.LimitReader(input, maxInputBytes+1))
+	if err != nil || len(data) > maxInputBytes || !utf8.Valid(data) {
 		return rejected
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
@@ -53,7 +67,8 @@ func encrypt(input io.Reader, output io.Writer) error {
 		return rejected
 	}
 	plaintext := values["plaintext"]
-	if len(plaintext) == 0 || len(plaintext) > 512 || strings.ContainsAny(plaintext, "\r\n\x00") {
+	if len(plaintext) == 0 || len(plaintext) > maxPlaintextBytes || disallowedSecretControl(plaintext) ||
+		plaintext == "verification-not-applicable" || plaintext == "repair-not-applicable" {
 		return rejected
 	}
 	key, err := base64.StdEncoding.Strict().DecodeString(values["publicKey"])

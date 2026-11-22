@@ -19,7 +19,7 @@ from github_environment import configure_environment, reviewed_workflow
 from misub_sync import sync_misub
 from pages import PagesDeployment, publish_pages
 from refresh_context import object_json, require
-from request import ApplicationRequest, SECRETS
+from request import ApplicationRequest, LARGE_SECRETS, SECRETS
 from sealed_box import Sealer, secret_value
 from sources import inspect_checkout
 from suite_config import parse_configuration
@@ -83,7 +83,7 @@ def preview_suite(request: ApplicationRequest, root: Path, tools: LinuxTools, im
             and output.resolve() == output and not output.exists() and root != output and root not in output.parents
             and set(credentials) == SECRETS and all(secret_value(value) for value in credentials.values())
             and image.source_sha == sealer.source_sha == release["sourceSha"] and image.repository == config.repository)
-    require(all(credential(credentials[name]) for name in SECRETS - {"EASYPROXY_BACKUP_PASSPHRASE"})
+    require(all(credential(credentials[name]) for name in SECRETS - LARGE_SECRETS)
             and re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+", credentials["EASYPROXY_ECH_TOKEN"]) is not None)
     image_identity(image)
     _validate(bodies, RAW)

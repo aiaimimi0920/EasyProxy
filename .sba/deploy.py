@@ -37,7 +37,7 @@ from pages_diagnostic_repair import begin_recovery as begin_pages_diagnostic_rec
 from repair_context import PAGES_REPAIR_ID, ASSETS_REPAIR_ID, GENERATION_REPAIR_ID, PAGES_DIAGNOSTIC_REPAIR_ID
 from repair_context import GENERATION_OUTPUTS_REPAIR_ID, PAGES_ASSET_PROTOCOL_REPAIR_ID
 from repair_context import FRESH_DOMAIN_REPAIR_ID
-from request import ApplicationRequest, SECRETS
+from request import ApplicationRequest, LARGE_SECRETS, SECRETS
 from sealed_box import Sealer, secret_value
 from sources import inspect_checkout
 from toolchain import LinuxTools
@@ -80,7 +80,7 @@ def deploy_suite(request: ApplicationRequest, root: Path, tools: LinuxTools, ima
     require(type(credentials) is dict and set(credentials) == SECRETS
             and all(secret_value(value) for value in credentials.values()))
     # These provider/Pages channels intentionally accept only visible ASCII.
-    require(all(credential(credentials[name]) for name in SECRETS - {"EASYPROXY_BACKUP_PASSPHRASE"}))
+    require(all(credential(credentials[name]) for name in SECRETS - LARGE_SECRETS))
     require(image.source_sha == sealer.source_sha == release["sourceSha"] and image.repository == config.repository)
     image_identity(image)
     _validate(bodies, RAW)

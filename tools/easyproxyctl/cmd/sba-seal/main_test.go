@@ -16,7 +16,12 @@ func TestAnonymousRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, message := range []string{"fixture-secret", "含中文的密钥 with spaces", strings.Repeat("x", 512)} {
+	for _, message := range []string{
+		"fixture-secret",
+		"含中文的密钥 with spaces",
+		"multiline\nsecret\r\n\twith-tab",
+		strings.Repeat("x", 16384),
+	} {
 		input, _ := json.Marshal(map[string]string{"publicKey": base64.StdEncoding.EncodeToString(public[:]), "plaintext": message})
 		var outputs []string
 		for i := 0; i < 2; i++ {
@@ -44,13 +49,18 @@ func TestRejectsInvalidInputWithoutOutput(t *testing.T) {
 	public, _, _ := box.GenerateKey(rand.Reader)
 	key := base64.StdEncoding.EncodeToString(public[:])
 	valid := `{"publicKey":"` + key + `","plaintext":"fixture-secret"}`
-	cases := []string{"", "{}", "[]", valid + "{}", valid + " null", strings.Repeat(" ", 8193),
+	cases := []string{"", "{}", "[]", valid + "{}", valid + " null", strings.Repeat(" ", 131073),
 		strings.Replace(valid, `"plaintext":`, `"extra":1,"plaintext":`, 1),
 		strings.Replace(valid, `"plaintext":`, `"plaintext":"duplicate","plaintext":`, 1),
 		strings.Replace(valid, "fixture-secret", "", 1),
-		strings.Replace(valid, "fixture-secret", strings.Repeat("x", 513), 1),
-		strings.Replace(valid, "fixture-secret", `line\nbreak`, 1),
+		strings.Replace(valid, "fixture-secret", "verification-not-applicable", 1),
+		strings.Replace(valid, "fixture-secret", "repair-not-applicable", 1),
+		strings.Replace(valid, "fixture-secret", strings.Repeat("x", 16385), 1),
 		strings.Replace(valid, "fixture-secret", `nul\u0000byte`, 1),
+		strings.Replace(valid, "fixture-secret", `vtab\u000bbyte`, 1),
+		strings.Replace(valid, "fixture-secret", `ff\u000cbyte`, 1),
+		strings.Replace(valid, "fixture-secret", `esc\u001bbyte`, 1),
+		strings.Replace(valid, "fixture-secret", `del\u007fbyte`, 1),
 		strings.Replace(valid, key, base64.StdEncoding.EncodeToString(make([]byte, 32)), 1),
 		strings.Replace(valid, key, "bad-key", 1),
 		strings.Replace(valid, "fixture-secret", string([]byte{0xff}), 1)}
