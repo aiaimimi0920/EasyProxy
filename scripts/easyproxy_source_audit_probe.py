@@ -367,12 +367,18 @@ def collect_direct_probe_candidates(nodes: list[dict[str, Any]], *, default_sche
     candidates.sort(key=candidate_priority)
     return candidates
 
+try:
+    from .easyproxy_source_audit_batch import batch_probe_in_container as _batch_probe_in_container
+except ImportError:
+    from easyproxy_source_audit_batch import batch_probe_in_container as _batch_probe_in_container
+
+
 def discover_directly_usable_nodes(
     candidates: list[dict[str, Any]],
     policy: dict[str, Any],
     *,
     network_container: str,
-    max_workers: int = 12,
+    max_workers: int = 48,
     deadline: float | None = None,
 ) -> tuple[list[str], list[dict[str, Any]]]:
     if not candidates:
@@ -383,70 +389,110 @@ def discover_directly_usable_nodes(
     retries = max(1, int(policy.get("direct_probe_retries", 1)))
     retry_delay = max(0, int(policy.get("direct_probe_retry_delay_seconds", 1)))
 
-    def probe_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
-        last_result: dict[str, Any] = {"ok": False, "attempts": [], "error": "probe not started"}
-        for attempt_index in range(retries):
-            if deadline is not None and time.time() >= deadline:
-                return last_result
-            probe_kwargs: dict[str, Any] = {"network_container": network_container}
-            if deadline is not None:
-                probe_kwargs["deadline"] = deadline
-            last_result = probe_http_proxy(
-                str(candidate.get("direct_proxy_url") or ""),
-                policy,
-                **probe_kwargs,
-            )
-            if last_result.get("ok"):
-                return last_result
-            if attempt_index < retries - 1 and retry_delay > 0:
-                if deadline is not None and time.time() + retry_delay >= deadline:
-                    break
-                time.sleep(retry_delay)
-        return last_result
+    batch_results: dict[str, dict[str, Any]] | None = None
+    if (
+        network_container.strip()
+        and len(candidates) > 1
+        and probe_http_proxy is _DEFAULT_PROBE_HTTP_PROXY
+        and policy.get("http_probe_targets")
+    ):
+        unique_urls = list(dict.fromkeys(
+            str(item.get("direct_proxy_url") or "")
+            for item in candidates
+            if str(item.get("direct_proxy_url") or "")
+        ))
+        batch_results = _batch_probe_in_container(
+            unique_urls,
+            policy,
+            network_container=network_container,
+            max_workers=max(max_workers, 64),
+            deadline=deadline,
+        )
 
-    worker_count = max(1, min(max_workers, len(candidates)))
-    with ThreadPoolExecutor(max_workers=worker_count) as executor:
-        future_to_candidate = {
-            executor.submit(probe_candidate, candidate): candidate
+    if batch_results is not None:
+        results_by_candidate = [
+            (candidate, batch_results.get(str(candidate.get("direct_proxy_url") or ""), {"ok": False, "attempts": []}))
             for candidate in candidates
-        }
-        for future in as_completed(future_to_candidate):
-            candidate = future_to_candidate[future]
-            probe_result: dict[str, Any]
-            try:
-                probe_result = future.result()
-            except Exception as exc:
-                probe_result = {"ok": False, "attempts": [], "error": str(exc)}
-
-            if not probe_result.get("ok"):
-                continue
-
-            uri = str(candidate.get("uri") or "").strip()
-            if not uri:
-                continue
-
-            stable_uris.append(uri)
-            stable_results.append(
-                {
-                    "tag": str(candidate.get("tag") or ""),
-                    "name": str(candidate.get("name") or ""),
-                    "source_ref": str(candidate.get("source_ref") or ""),
-                    "port": int(candidate.get("port") or 0),
-                    "uri": uri,
-                    "direct_proxy_url": str(candidate.get("direct_proxy_url") or ""),
-                    "effective_available": bool(candidate.get("effective_available") is True),
-                    "availability_source": str(candidate.get("availability_source") or ""),
-                    "traffic_proven_usable": bool(candidate.get("traffic_proven_usable") is True),
-                    "availability_score": int(candidate.get("availability_score") or 0),
-                    "last_latency_ms": int(candidate.get("last_latency_ms") or 0),
-                    "last_error": str(candidate.get("last_error") or ""),
-                    "direct_probe": probe_result,
-                }
+        ]
+    else:
+        direct_policy = dict(policy)
+        if "request_timeout_seconds" in direct_policy:
+            direct_policy["request_timeout_seconds"] = min(
+                max(1, int(direct_policy["request_timeout_seconds"])),
+                max(1, int(policy.get("direct_probe_timeout_seconds", 10))),
             )
+        targets = direct_policy.get("http_probe_targets")
+        max_targets = max(1, int(policy.get("direct_probe_max_targets", 2)))
+        if isinstance(targets, list) and len(targets) > max_targets:
+            direct_policy["http_probe_targets"] = targets[:max_targets]
+
+        def probe_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
+            last_result: dict[str, Any] = {"ok": False, "attempts": [], "error": "probe not started"}
+            for attempt_index in range(retries):
+                if deadline is not None and time.time() >= deadline:
+                    return last_result
+                probe_kwargs: dict[str, Any] = {"network_container": network_container}
+                if deadline is not None:
+                    probe_kwargs["deadline"] = deadline
+                last_result = probe_http_proxy(
+                    str(candidate.get("direct_proxy_url") or ""),
+                    direct_policy,
+                    **probe_kwargs,
+                )
+                if last_result.get("ok"):
+                    return last_result
+                if attempt_index < retries - 1 and retry_delay > 0:
+                    if deadline is not None and time.time() + retry_delay >= deadline:
+                        break
+                    time.sleep(retry_delay)
+            return last_result
+
+        worker_count = max(1, min(max_workers, len(candidates)))
+        results_by_candidate = []
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            future_to_candidate = {
+                executor.submit(probe_candidate, candidate): candidate
+                for candidate in candidates
+            }
+            for future in as_completed(future_to_candidate):
+                candidate = future_to_candidate[future]
+                try:
+                    probe_result = future.result()
+                except Exception as exc:
+                    probe_result = {"ok": False, "attempts": [], "error": str(exc)}
+                results_by_candidate.append((candidate, probe_result))
+
+    for candidate, probe_result in results_by_candidate:
+        if not probe_result.get("ok"):
+            continue
+        uri = str(candidate.get("uri") or "").strip()
+        if not uri:
+            continue
+        stable_uris.append(uri)
+        stable_results.append(
+            {
+                "tag": str(candidate.get("tag") or ""),
+                "name": str(candidate.get("name") or ""),
+                "source_ref": str(candidate.get("source_ref") or ""),
+                "port": int(candidate.get("port") or 0),
+                "uri": uri,
+                "direct_proxy_url": str(candidate.get("direct_proxy_url") or ""),
+                "effective_available": bool(candidate.get("effective_available") is True),
+                "availability_source": str(candidate.get("availability_source") or ""),
+                "traffic_proven_usable": bool(candidate.get("traffic_proven_usable") is True),
+                "availability_score": int(candidate.get("availability_score") or 0),
+                "last_latency_ms": int(candidate.get("last_latency_ms") or 0),
+                "last_error": str(candidate.get("last_error") or ""),
+                "direct_probe": probe_result,
+            }
+        )
 
     stable_uris = sorted(dict.fromkeys(stable_uris))
     stable_results.sort(key=lambda item: (int(item.get("last_latency_ms") or 1_000_000), str(item.get("tag") or "")))
     return stable_uris, stable_results
+
+
+_DEFAULT_PROBE_HTTP_PROXY = probe_http_proxy
 
 def stop_container(container_name: str) -> None:
     subprocess.run(["docker", "rm", "-f", container_name], capture_output=True, text=True, check=False)

@@ -76,14 +76,14 @@ def audit_candidate(owner: Coordinator, permit: Permit, candidate: Candidate, pu
         public.verify(f"candidate/{permit.operation_id}/subs/clash.yaml", candidate.artifacts["subs/clash.yaml"])
     except Exception:
         raise AuditStoppedError("EASYPROXY_SBA_ARTIFACT_PUBLIC_UNKNOWN") from None
-    audit_timeout, scenario_timeout = 1200, 720
+    audit_timeout, scenario_timeout = 1500, 1080
     if threading.current_thread() is threading.main_thread() and hasattr(signal, "getitimer"):
         alarm_left = signal.getitimer(signal.ITIMER_REAL)[0]
         if alarm_left > 0:
             if alarm_left < 300:
                 raise AuditStoppedError("EASYPROXY_SBA_ARTIFACT_AUDIT_UNKNOWN")
-            audit_timeout = min(1200, int(alarm_left - 240))
-            scenario_timeout = min(720, max(60, audit_timeout - 180))
+            audit_timeout = min(1500, int(alarm_left - 240))
+            scenario_timeout = min(1080, max(60, audit_timeout - 180))
     owner.claim_stage(permit, "aggregator-audit")
     lifecycle = container_owner(root, output, "sba-" + permit.operation_id, image.image_id, image.source_sha)
     run_audit([sys.executable, str(root / "scripts/easyproxy_source_audit.py"), "--audit-id", "sba-" + permit.operation_id,

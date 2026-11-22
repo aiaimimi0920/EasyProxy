@@ -264,6 +264,8 @@ def main() -> int:
         )
         probe_budget = max(1, scenario_timeout - 180) if scenario_timeout > 360 else scenario_timeout
         probe_deadline = time.time() + probe_budget
+        lease_reserve = min(120, max(45, probe_budget // 5)) if probe_budget >= 90 else 0
+        direct_deadline = probe_deadline - lease_reserve
         last_nodes: dict[str, Any] = {}
         last_source_sync: dict[str, Any] | None = None
         last_pool_probe: dict[str, Any] = {"ok": False, "attempts": []}
@@ -285,7 +287,7 @@ def main() -> int:
                 candidate_nodes,
                 policy,
                 network_container=container_name,
-                deadline=probe_deadline,
+                deadline=direct_deadline,
             )
             stable_source_refs = {
                 str(item.get("source_ref") or "").strip()
@@ -411,6 +413,8 @@ def main() -> int:
                 and len(stable_uris) >= args.require_stable_node_proxies
                 and not missing_stable_source_refs
             ):
+                break
+            if time.time() >= direct_deadline:
                 break
             time.sleep(8)
 

@@ -21,6 +21,7 @@ from repair_context import PROMOTION_CONTEXT, PROMOTION_PARENT_RELEASE
 from repair_context import EDGE_CONTEXT, EDGE_PARENT_RELEASE
 from repair_context import PROMOTION_COPY_CONTEXT, PROMOTION_COPY_PARENT_RELEASE
 from repair_context import WRITER_IDLE_CONTEXT, WRITER_IDLE_PARENT_RELEASE
+from repair_context import AUDIT_TIMEOUT_CONTEXT, AUDIT_TIMEOUT_PARENT_RELEASE
 from suite_config import ConfigurationError, SuiteConfig, parse_configuration
 
 
@@ -82,6 +83,11 @@ def repair_context(value, config):
     exact(context, CONTEXT_FIELDS)
     task(context["parentTaskId"])
     require(config.repository == "aiaimimi0920/easyproxy" and context["parentTaskId"] != value["taskId"])
+    if context['repairId'] == AUDIT_TIMEOUT_CONTEXT['repairId']:
+        require(type(context['parentRunId']) is int and context == AUDIT_TIMEOUT_CONTEXT
+                and value['previous'] == AUDIT_TIMEOUT_PARENT_RELEASE and configuration_matches(config)
+                and value['applicationVersion'] == '1.0.27')
+        return
     if context['repairId'] == WRITER_IDLE_CONTEXT['repairId']:
         require(type(context['parentRunId']) is int and context == WRITER_IDLE_CONTEXT
                 and value['previous'] == WRITER_IDLE_PARENT_RELEASE and configuration_matches(config)

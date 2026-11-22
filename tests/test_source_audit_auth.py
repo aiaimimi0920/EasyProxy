@@ -191,3 +191,48 @@ def test_proxy_probe_enforces_subprocess_timeout_and_deadline():
     assert len(timed_out["attempts"]) == 1
     assert "timed out" in timed_out["attempts"][0]["error"].lower()
     assert run.call_args.kwargs["timeout"] == 13
+
+
+def test_discover_directly_usable_nodes_uses_single_container_batch_exec_when_multi_candidate():
+    import json
+    import subprocess
+    import sys
+    from scripts.easyproxy_source_audit_batch import CONTAINER_BATCH_PROXY_PROBE
+
+    # Verify CONTAINER_BATCH_PROXY_PROBE syntax and output contract against an unreachable local port
+    batch_input = json.dumps({
+        "proxies": ["http://127.0.0.1:1"],
+        "targets": [{"url": "http://127.0.0.1:1/generate_204", "expected": [204]}],
+        "timeout": 1,
+        "accept_below_500": True,
+        "retries": 1,
+        "retry_delay": 0,
+        "budget": 5.0,
+        "workers": 4,
+    })
+    proc = subprocess.run([sys.executable, "-c", CONTAINER_BATCH_PROXY_PROBE], input=batch_input, text=True, capture_output=True, timeout=10, check=True)
+    parsed = json.loads(proc.stdout)
+    assert parsed["http://127.0.0.1:1"]["ok"] is False
+
+    candidates = [
+        {"tag": "n1", "name": "node-1", "source_ref": "sub:1", "port": 34001, "uri": "ss://one", "direct_proxy_url": "http://127.0.0.1:34001", "last_latency_ms": 50},
+        {"tag": "n2", "name": "node-2", "source_ref": "sub:1", "port": 34002, "uri": "ss://two", "direct_proxy_url": "http://127.0.0.1:34002", "last_latency_ms": 90},
+    ]
+    policy = {
+        "http_probe_targets": [
+            {"url": "https://connectivitycheck.gstatic.com/generate_204", "expected_status": [204]},
+            {"url": "https://cp.cloudflare.com/generate_204", "expected_status": [204]},
+            {"url": "https://www.google.com/generate_204", "expected_status": [204]},
+        ],
+        "request_timeout_seconds": 25,
+    }
+    mock_out = json.dumps({
+        "http://127.0.0.1:34001": {"ok": True, "attempts": [{"target": "https://connectivitycheck.gstatic.com/generate_204", "status_code": 204, "exit_code": 0, "ok": True, "stderr": ""}], "winning_target": "https://connectivitycheck.gstatic.com/generate_204", "winning_status": 204},
+        "http://127.0.0.1:34002": {"ok": False, "attempts": []},
+    })
+    with patch("scripts.easyproxy_source_audit_batch.subprocess.run", return_value=Mock(returncode=0, stdout=mock_out, stderr="")) as batch_run:
+        uris, results = discover_directly_usable_nodes(candidates, policy, network_container="audit-container")
+    assert batch_run.call_count == 1
+    sent = json.loads(batch_run.call_args.kwargs["input"])
+    assert len(sent["targets"]) == 2 and sent["timeout"] == 10
+    assert uris == ["ss://one"] and len(results) == 1 and results[0]["tag"] == "n1"

@@ -171,3 +171,17 @@ PROMOTION_COPY_CONTEXT = {
     'resultDigest': '9a7e932bc6754a457cc8753edb1a1acbf7281b03f06e15df5a35e03c9cc12e91',
     'errorCode': 'EASYPROXY_SBA_PROMOTION_UNKNOWN',
 }
+
+
+# 准确 1.0.26 在消费审计超时后停止；active/stable 仍为 1.0.24，Worker/Pages 已发 1.0.26。
+AUDIT_TIMEOUT_REPAIR_ID = "continue-update-after-audit-timeout"
+AUDIT_TIMEOUT_PARENT_RELEASE = {"sourceSha": "588820af544fd0df307dbc528451854dc8ffe5f6", "applicationVersion": "1.0.26"}
+AUDIT_TIMEOUT_ACTIVE_RELEASE = {"sourceSha": "db09ee2e752cd566097b9eb91b370f4a71ea26e4", "applicationVersion": "1.0.24"}
+AUDIT_TIMEOUT_CONTEXT = {
+    "repairId": AUDIT_TIMEOUT_REPAIR_ID,
+    "parentTaskId": "dc-a0aceaf4d18745bda28ce98e912663e2",
+    "parentRunId": 44987638372,
+    "requestDigest": "f27c2cf610a1cff51468432a89a43409eee5dafe3a881cf4b1ab9589a71e72d1",
+    "resultDigest": "2a2c4b5ee5eff7557589892b6b1ba3d566abd5008f97b9f56157182534975f75",
+    "errorCode": "EASYPROXY_SBA_AUDIT_UNKNOWN",
+}
