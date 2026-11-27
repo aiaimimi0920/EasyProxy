@@ -117,6 +117,18 @@ func (m *Manager) probeGeneration(
 	probeSeq uint64,
 	timeout time.Duration,
 ) (ProbeSummary, error) {
+	return m.probeGenerationWithOptions(ctx, generation, roundID, probeEpoch, probeSeq, timeout, false)
+}
+
+func (m *Manager) probeGenerationWithOptions(
+	ctx context.Context,
+	generation Generation,
+	roundID uint64,
+	probeEpoch uint64,
+	probeSeq uint64,
+	timeout time.Duration,
+	applyAuthCooldown bool,
+) (ProbeSummary, error) {
 	summary := ProbeSummary{Generation: generation}
 	if ctx == nil {
 		ctx = context.Background()
@@ -150,6 +162,12 @@ func (m *Manager) probeGeneration(
 		return summary, nil
 	}
 
+	authCooldown := time.Duration(0)
+	if applyAuthCooldown {
+		authCooldown = m.upstreamAuthProbeCooldown()
+	} else {
+		m.resetPeriodicHealthTicker()
+	}
 	workerLimit := probeAllWorkerLimit(len(tasks))
 	sem := make(chan struct{}, workerLimit)
 	var wg sync.WaitGroup
@@ -159,6 +177,11 @@ func (m *Manager) probeGeneration(
 	var scheduleErr error
 scheduling:
 	for _, task := range tasks {
+		if applyAuthCooldown && shouldSkipAuthFailedBackgroundProbe(task.entry, generation, time.Now(), authCooldown) {
+			completed.Add(1)
+			failed.Add(1)
+			continue
+		}
 		select {
 		case sem <- struct{}{}:
 		case <-ctx.Done():
@@ -269,6 +292,8 @@ func (m *Manager) applyProbeResult(
 		entry.available = false
 		if errors.Is(probeErr, ErrUpstreamAuthenticationRequired) {
 			entry.upstreamAuthFailed = true
+			entry.authProbeGen = generation
+			entry.authProbeAt = now
 		}
 		entry.appendTimelineLocked(false, 0, errText, "health-probe")
 		return true
@@ -282,6 +307,7 @@ func (m *Manager) applyProbeResult(
 	entry.recordProbeMetricLocked(now, latency)
 	entry.available = true
 	entry.upstreamAuthFailed = false
+	entry.authProbeAt = time.Time{}
 	latencyMs := latency.Milliseconds()
 	if latencyMs == 0 && latency > 0 {
 		latencyMs = 1

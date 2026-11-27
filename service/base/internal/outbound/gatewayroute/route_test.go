@@ -56,6 +56,7 @@ func (o *recordingOutbound) ListenPacket(ctx context.Context, destination M.Sock
 
 func newTestRoute(rules []string, final, fallback string, direct, proxy adapter.Outbound) *routeOutbound {
 	return &routeOutbound{
+		Totals:  new(Totals),
 		Adapter: sboutbound.NewAdapter(Type, Tag, []string{N.NetworkTCP, N.NetworkUDP}, nil),
 		options: Options{
 			FinalPolicy:            final,

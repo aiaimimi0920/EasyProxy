@@ -53,6 +53,7 @@ type Options struct {
 
 // Stats is a point-in-time route decision snapshot.
 type Stats struct {
+	Active         int64
 	Direct         uint64
 	Proxy          uint64
 	NoNodeFallback uint64
@@ -77,13 +78,40 @@ type routeOutbound struct {
 	pool            adapter.Outbound
 	resolveUDP      func(context.Context, M.Socksaddr) (M.Socksaddr, netip.Addr, error)
 
-	directCount         atomic.Uint64
-	proxyCount          atomic.Uint64
-	noNodeFallbackCount atomic.Uint64
-	tcpCount            atomic.Uint64
-	udpCount            atomic.Uint64
-	ipv4Count           atomic.Uint64
-	ipv6Count           atomic.Uint64
+	activeCount atomic.Int64
+	*Totals
+}
+
+type trackedRouteConn struct {
+	net.Conn
+	active *atomic.Int64
+	closed atomic.Bool
+}
+
+func (c *trackedRouteConn) Close() error {
+	if c.closed.CompareAndSwap(false, true) && c.active != nil {
+		c.active.Add(-1)
+	}
+	return c.Conn.Close()
+}
+
+func (c *trackedRouteConn) Upstream() any           { return c.Conn }
+func (c *trackedRouteConn) ReaderReplaceable() bool { return true }
+func (c *trackedRouteConn) WriterReplaceable() bool { return true }
+
+func (r *routeOutbound) trackConn(network string, conn net.Conn) net.Conn {
+	if conn == nil || network == N.NetworkUDP {
+		return conn
+	}
+	r.activeCount.Add(1)
+	tracked := &trackedRouteConn{Conn: conn, active: &r.activeCount}
+	if half, ok := conn.(N.WriteCloser); ok {
+		return struct {
+			*trackedRouteConn
+			N.WriteCloser
+		}{tracked, half}
+	}
+	return tracked
 }
 
 var _ adapter.Lifecycle = (*routeOutbound)(nil)
@@ -107,6 +135,7 @@ func newRoute(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag st
 		dependencies = append(dependencies, options.PoolTag)
 	}
 	route := &routeOutbound{
+		Totals:          totalsFrom(ctx),
 		Adapter:         sboutbound.NewAdapter(Type, tag, []string{N.NetworkTCP, N.NetworkUDP}, dependencies),
 		manager:         manager,
 		sharedSelection: pool.SharedSelectionFrom(ctx),
@@ -181,14 +210,18 @@ func (r *routeOutbound) DialContext(ctx context.Context, network string, destina
 		return nil, err
 	}
 	if policy == routerule.PolicyDirect {
+		conn, err := r.direct.DialContext(ctx, network, destination)
+		if err != nil {
+			return nil, err
+		}
 		r.directCount.Add(1)
-		return r.direct.DialContext(ctx, network, destination)
+		return r.trackConn(network, conn), nil
 	}
 	if r.pool != nil {
 		conn, err := r.pool.DialContext(pool.WithDirective(ctx, directive), network, proxyDestination(ctx, destination))
 		if err == nil {
 			r.proxyCount.Add(1)
-			return conn, nil
+			return r.trackConn(network, conn), nil
 		}
 		if !r.mayFallback(directive) {
 			return nil, err
@@ -197,9 +230,13 @@ func (r *routeOutbound) DialContext(ctx context.Context, network string, destina
 	if !r.mayFallback(directive) {
 		return nil, E.New("no healthy proxy available")
 	}
+	conn, err := r.direct.DialContext(ctx, network, destination)
+	if err != nil {
+		return nil, err
+	}
 	r.noNodeFallbackCount.Add(1)
 	r.directCount.Add(1)
-	return r.direct.DialContext(ctx, network, destination)
+	return r.trackConn(network, conn), nil
 }
 
 func (r *routeOutbound) ListenPacket(ctx context.Context, destination M.Socksaddr) (net.PacketConn, error) {
@@ -243,8 +280,10 @@ func (r *routeOutbound) ListenPacketWithDestination(ctx context.Context, destina
 	}
 	resolvedDestination, destinationAddress := r.resolvePacketDestination(ctx, packetDestination)
 	if policy == routerule.PolicyDirect {
-		r.directCount.Add(1)
 		packetConn, err := r.direct.ListenPacket(ctx, resolvedDestination)
+		if err == nil {
+			r.directCount.Add(1)
+		}
 		return packetConn, destinationAddress, err
 	}
 	if r.pool != nil {
@@ -260,9 +299,11 @@ func (r *routeOutbound) ListenPacketWithDestination(ctx context.Context, destina
 	if !r.mayFallback(directive) {
 		return nil, netip.Addr{}, E.New("no healthy UDP proxy available")
 	}
-	r.noNodeFallbackCount.Add(1)
-	r.directCount.Add(1)
 	packetConn, err := r.direct.ListenPacket(ctx, resolvedDestination)
+	if err == nil {
+		r.noNodeFallbackCount.Add(1)
+		r.directCount.Add(1)
+	}
 	return packetConn, destinationAddress, err
 }
 
@@ -315,15 +356,9 @@ func (r *routeOutbound) recordNetwork(network string, destination M.Socksaddr) {
 }
 
 func (r *routeOutbound) Snapshot() Stats {
-	return Stats{
-		Direct:         r.directCount.Load(),
-		Proxy:          r.proxyCount.Load(),
-		NoNodeFallback: r.noNodeFallbackCount.Load(),
-		TCP:            r.tcpCount.Load(),
-		UDP:            r.udpCount.Load(),
-		IPv4:           r.ipv4Count.Load(),
-		IPv6:           r.ipv6Count.Load(),
-	}
+	s := r.Totals.Snapshot()
+	s.Active = r.activeCount.Load()
+	return s
 }
 
 // Exact pins must never inherit a shared fail-open setting.

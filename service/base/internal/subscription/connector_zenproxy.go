@@ -16,13 +16,48 @@ import (
 	"easy_proxies/internal/config"
 )
 
+var errZenProxyTransientStatus = errors.New("zenproxy transient upstream error")
+
+type retainedZenNodes int
+
+func (n retainedZenNodes) Error() string { return fmt.Sprintf("retained %d cached ZenProxy nodes", n) }
+
+func (m *connectorRuntimeManager) pruneZenProxyCache(sources []RuntimeSource) {
+	if len(m.zenProxyCache) == 0 {
+		return
+	}
+	active := make(map[connectorCacheKey]bool)
+	for _, s := range sources {
+		if s.Kind == SourceKindConnector && extractStringOption(s.Options, "connector_type") == connectorTypeZenProxyClient {
+			active[cacheKeyFor(s)] = true
+		}
+	}
+	for key := range m.zenProxyCache {
+		if !active[key] {
+			delete(m.zenProxyCache, key)
+		}
+	}
+}
+
+func isTransientZenProxyFailure(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return false
+	}
+	return errors.Is(err, errZenProxyTransientStatus) || errors.Is(err, context.DeadlineExceeded) || isRetryableZenProxyTransportError(err)
+}
+
 func (m *connectorRuntimeManager) fetchZenProxyRuntimeSources(cfg *config.Config, sources []RuntimeSource) ([]RuntimeSource, error) {
 	if cfg == nil || len(sources) == 0 {
+		m.zenProxyCache = nil
 		return nil, nil
+	}
+	if m.zenProxyCache == nil {
+		m.zenProxyCache = make(map[connectorCacheKey]cachedZenProxySources)
 	}
 
 	var runtimeSources []RuntimeSource
 	var errs []string
+	var retained retainedZenNodes
 	timeout := cfg.SourceSync.RequestTimeout
 	if timeout <= 0 {
 		timeout = 15 * time.Second
@@ -36,22 +71,46 @@ func (m *connectorRuntimeManager) fetchZenProxyRuntimeSources(cfg *config.Config
 			continue
 		}
 
+		cacheKey := cacheKeyFor(source)
+
 		connectorCfg, err := parseZenProxyConnectorConfig(extractMapOption(source.Options, "connector_config"))
 		if err != nil {
+			delete(m.zenProxyCache, cacheKey)
 			errs = append(errs, fmt.Sprintf("zenproxy connector %s config: %v", source.Name, err))
 			continue
 		}
 
 		fetched, err := m.fetchZenProxyConnectorSource(cfg, source, connectorCfg, timeout)
+		now := m.now()
 		if err != nil {
+			if cached, ok := m.zenProxyCache[cacheKey]; ok &&
+				isTransientZenProxyFailure(err) &&
+				len(cached.sources) > 0 &&
+				now.Before(cached.cachedAt.Add(defaultZenProxyCacheTTL)) {
+				runtimeSources = append(runtimeSources, cloneRuntimeSources(cached.sources)...)
+				retained += retainedZenNodes(len(cached.sources))
+				errs = append(errs, fmt.Sprintf("zenproxy connector %s fetch: %v", source.Name, err))
+				continue
+			}
+			delete(m.zenProxyCache, cacheKey)
 			errs = append(errs, fmt.Sprintf("zenproxy connector %s fetch: %v", source.Name, err))
 			continue
+		}
+		if len(fetched) > 0 {
+			m.zenProxyCache[cacheKey] = cachedZenProxySources{
+				cachedAt: now,
+				sources:  cloneRuntimeSources(fetched),
+			}
 		}
 		runtimeSources = append(runtimeSources, fetched...)
 	}
 
 	if len(errs) > 0 {
-		return runtimeSources, errors.New(strings.Join(errs, "; "))
+		err := errors.New(strings.Join(errs, "; "))
+		if retained > 0 {
+			return runtimeSources, errors.Join(err, retained)
+		}
+		return runtimeSources, err
 	}
 	return runtimeSources, nil
 }
@@ -113,11 +172,10 @@ func (m *connectorRuntimeManager) fetchZenProxyConnectorSource(cfg *config.Confi
 	}
 
 	if statusCode != http.StatusOK {
-		body := responseBody
-		if len(body) > 16*1024 {
-			body = body[:16*1024]
+		if isRetryableZenProxyStatus(statusCode) {
+			return nil, fmt.Errorf("%w: unexpected status %d", errZenProxyTransientStatus, statusCode)
 		}
-		return nil, fmt.Errorf("unexpected status %d: %s", statusCode, strings.TrimSpace(string(body)))
+		return nil, fmt.Errorf("unexpected status %d", statusCode)
 	}
 
 	var payload zenProxyFetchResponse
@@ -207,7 +265,13 @@ func (m *connectorRuntimeManager) doZenProxyGET(ctx context.Context, requestFact
 			return 0, nil, err
 		}
 
-		body, readErr := io.ReadAll(io.LimitReader(resp.Body, zenProxyFetchBodyLimit+1))
+		// Once an HTTP failure is known, neither its body text nor a truncated
+		// diagnostic body can change the retry/authorization classification.
+		var body []byte
+		var readErr error
+		if resp.StatusCode == http.StatusOK {
+			body, readErr = io.ReadAll(io.LimitReader(resp.Body, zenProxyFetchBodyLimit+1))
+		}
 		_ = resp.Body.Close()
 		cancelAttempt()
 		if readErr != nil {

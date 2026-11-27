@@ -48,6 +48,7 @@ func (m *Manager) createBox(ctx context.Context, cfg *config.Config) (*box.Box, 
 
 	boxCtx := box.Context(ctx, inboundRegistry, outboundRegistry, endpointRegistry, dnsRegistry, serviceRegistry)
 	boxCtx = monitor.ContextWith(boxCtx, m.monitorMgr)
+	boxCtx = gatewayroute.WithTotals(boxCtx, &m.gatewayTotals)
 	if m.profiles != nil {
 		boxCtx = profileselect.WithResolver(boxCtx, m.profiles)
 		gate := profileselect.AdmissionFrom(ctx)

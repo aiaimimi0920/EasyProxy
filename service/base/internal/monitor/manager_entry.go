@@ -259,6 +259,7 @@ func (e *entry) recordSuccessWithLatency(latency time.Duration) {
 	e.recordProbeMetricLocked(now, latency)
 	e.available = true
 	e.upstreamAuthFailed = false
+	e.authProbeAt = time.Time{}
 	e.initialCheckDone = true
 	e.healthGen = e.reloadGen
 	latencyMs := latency.Milliseconds()

@@ -222,8 +222,7 @@ def probe_http_proxy(
                 status_code in expected
                 or (
                     accept_status_below_500
-                    and 200 <= status_code < 500
-                    and status_code != 407
+                    and 200 <= status_code < 400
                 )
             )
             attempts.append({
@@ -356,7 +355,7 @@ def candidate_priority(node: dict[str, Any]) -> tuple[int, int, int, int]:
 def collect_direct_probe_candidates(nodes: list[dict[str, Any]], *, default_scheme: str = "http") -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     for node in nodes:
-        if bool(node.get("blacklisted")):
+        if bool(node.get("blacklisted")) or bool(node.get("upstream_auth_failed")):
             continue
         proxy_url = build_direct_proxy_url(node, default_scheme=default_scheme)
         if not proxy_url:

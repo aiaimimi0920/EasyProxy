@@ -3,10 +3,22 @@ package subscription
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"easy_proxies/internal/config"
 	"easy_proxies/internal/monitor"
 )
+
+type preferredCacheKey struct {
+	connectorCacheKey
+	settings   config.PreferredIPGeneratorConfig
+	configPath string
+}
+
+type preferredCacheEntry struct {
+	sources      []RuntimeSource
+	refreshAfter time.Time
+}
 
 func (m *connectorRuntimeManager) expandConnectorSources(cfg *config.Config, sources []RuntimeSource) ([]RuntimeSource, error) {
 	if cfg == nil || len(sources) == 0 {
@@ -15,11 +27,11 @@ func (m *connectorRuntimeManager) expandConnectorSources(cfg *config.Config, sou
 
 	fanoutCount := cfg.SourceSync.ConnectorRuntime.PreferredIP.FanoutCount
 	if fanoutCount <= 1 {
+		m.fanoutCache = nil
 		return sources, nil
 	}
-
 	expanded := make([]RuntimeSource, 0, len(sources)*fanoutCount)
-	nextCache := make(map[string][]RuntimeSource, len(sources))
+	nextCache := make(map[preferredCacheKey]preferredCacheEntry, len(sources))
 	for _, source := range sources {
 		if source.Kind != SourceKindConnector {
 			expanded = append(expanded, source)
@@ -34,11 +46,11 @@ func (m *connectorRuntimeManager) expandConnectorSources(cfg *config.Config, sou
 			continue
 		}
 
-		cacheKey := sourceKey(source)
-		if cached, ok := m.fanoutCache[cacheKey]; ok && len(cached) > 0 {
-			cloned := cloneRuntimeSources(cached)
-			nextCache[cacheKey] = cloned
-			expanded = append(expanded, cloned...)
+		cacheKey := preferredCacheKey{cacheKeyFor(source), cfg.SourceSync.ConnectorRuntime.PreferredIP, cfg.FilePath()}
+		cached := m.fanoutCache[cacheKey]
+		if len(cached.sources) > 0 && m.now().Before(cached.refreshAfter) {
+			nextCache[cacheKey] = cached
+			expanded = append(expanded, cloneRuntimeSources(cached.sources)...)
 			expanded = append(expanded, source)
 			continue
 		}
@@ -57,18 +69,21 @@ func (m *connectorRuntimeManager) expandConnectorSources(cfg *config.Config, sou
 			template,
 			monitor.PreferredIPRefreshOptions{TopCount: fanoutCount},
 		)
-		if err != nil {
+		if err == nil && len(selected) == 0 {
+			err = fmt.Errorf("empty preferred IP selection")
+		}
+		if err == nil {
+			generated := buildPreferredRuntimeSources(source, selected)
+			nextCache[cacheKey] = preferredCacheEntry{cloneRuntimeSources(generated), m.now().Add(defaultPreferredIPFanoutTTL)}
+			expanded = append(expanded, generated...)
+		} else if len(cached.sources) > 0 {
+			m.logger.Warnf("preferred IP refresh failed for connector %s, retaining %d cached entries: %v", source.Name, len(cached.sources), err)
+			cached.refreshAfter = m.now().Add(5 * time.Minute)
+			nextCache[cacheKey] = cached
+			expanded = append(expanded, cloneRuntimeSources(cached.sources)...)
+		} else {
 			m.logger.Warnf("preferred IP fanout failed for connector %s, using single connector: %v", source.Name, err)
-			expanded = append(expanded, source)
-			continue
 		}
-		generated := buildPreferredRuntimeSources(source, selected)
-		if len(generated) == 0 {
-			expanded = append(expanded, source)
-			continue
-		}
-		nextCache[cacheKey] = cloneRuntimeSources(generated)
-		expanded = append(expanded, generated...)
 		expanded = append(expanded, source)
 	}
 

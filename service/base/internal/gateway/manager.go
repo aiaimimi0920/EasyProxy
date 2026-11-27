@@ -18,6 +18,14 @@ type RuleSupervisor interface {
 
 type ListenerFactory func(context.Context, config.GatewayConfig) (net.Listener, error)
 type RouterFactory func(config.GatewayConfig) *dispatch.TransparentRouter
+type TunStatsProvider func() (TunStats, bool)
+
+type TunStats struct {
+	ActiveConnections int64
+	DirectConnections uint64
+	ProxyConnections  uint64
+	DirectFallbacks   uint64
+}
 
 type Status struct {
 	Enabled           bool   `json:"enabled"`
@@ -47,13 +55,23 @@ type Manager struct {
 	listenerFn ListenerFactory
 	routerFn   RouterFactory
 
-	mu       sync.Mutex
-	cancel   context.CancelFunc
-	listener net.Listener
-	router   *dispatch.TransparentRouter
-	wg       sync.WaitGroup
-	active   atomic.Int64
-	status   Status
+	mu         sync.Mutex
+	cancel     context.CancelFunc
+	listener   net.Listener
+	router     *dispatch.TransparentRouter
+	tunStatsFn TunStatsProvider
+	wg         sync.WaitGroup
+	active     atomic.Int64
+	status     Status
+}
+
+func (m *Manager) SetTunStatsProvider(fn TunStatsProvider) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.tunStatsFn = fn
+	m.mu.Unlock()
 }
 
 func NewManager(supervisor RuleSupervisor, listenerFn ListenerFactory, routerFn RouterFactory) *Manager {
@@ -165,7 +183,17 @@ func (m *Manager) Status() Status {
 	status.ActiveConnections = m.active.Load()
 	m.mu.Lock()
 	router := m.router
+	tunStatsFn := m.tunStatsFn
 	m.mu.Unlock()
+	if status.Mode == "tun" && tunStatsFn != nil {
+		if stats, ok := tunStatsFn(); ok {
+			status.ActiveConnections = stats.ActiveConnections
+			status.DirectConnections = stats.DirectConnections
+			status.ProxyConnections = stats.ProxyConnections
+			status.DirectFallbacks = stats.DirectFallbacks
+		}
+		return status
+	}
 	if router != nil {
 		stats := router.Stats()
 		status.DirectConnections = stats.DirectConnections

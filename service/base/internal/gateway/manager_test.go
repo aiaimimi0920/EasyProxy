@@ -84,3 +84,28 @@ func TestManagerTunModeAppliesWithoutTransparentListener(t *testing.T) {
 		t.Fatalf("TUN Stop calls = %d, want 1", rules.stopCalls)
 	}
 }
+
+func TestManagerTunModeReportsProvidedRouteStats(t *testing.T) {
+	rules := &recordingRuleSupervisor{}
+	manager := NewManager(rules, nil, nil)
+	manager.SetTunStatsProvider(func() (TunStats, bool) {
+		return TunStats{
+			ActiveConnections: 3,
+			DirectConnections: 42,
+			ProxyConnections:  108,
+			DirectFallbacks:   2,
+		}, true
+	})
+	cfg := config.GatewayConfig{
+		Enabled: true,
+		Mode:    "tun",
+		Tun:     config.GatewayTunConfig{InterfaceName: "easyproxy0", Stack: "mixed", MTU: 1500, IPv4: true},
+	}
+	if err := manager.Start(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	status := manager.Status()
+	if status.ActiveConnections != 3 || status.DirectConnections != 42 || status.ProxyConnections != 108 || status.DirectFallbacks != 2 {
+		t.Fatalf("unexpected TUN stats in status: %+v", status)
+	}
+}

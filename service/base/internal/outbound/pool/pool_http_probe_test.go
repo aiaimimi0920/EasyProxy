@@ -149,6 +149,45 @@ func TestHTTPProbeTargetRejectsOpenAIAuthChallenge403(t *testing.T) {
 	}
 }
 
+func TestHTTPProbeTargetRejects4xxClientErrorsOnConnectivityTargets(t *testing.T) {
+	for _, path := range []string{"/GENERATE_204?v=1", "/sub/generate_204?target=/custom", "/robots.txt?v=1", "/connecttest.txt?q=1"} {
+		if err := validateProbeStatus(monitor.ProbeTargetSpec{Path: path}, 404); err == nil {
+			t.Errorf("strict path %q accepted 404", path)
+		}
+	}
+	if err := validateProbeStatus(monitor.ProbeTargetSpec{Path: "/custom?q=/generate_204"}, 404); err != nil {
+		t.Errorf("query changed custom path policy: %v", err)
+	}
+	for _, status := range []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusTooManyRequests} {
+		target := monitor.ProbeTargetSpec{
+			Original: "https://www.google.com/generate_204",
+			Scheme:   "https",
+			Host:     "www.google.com",
+			Port:     443,
+			Path:     "/generate_204",
+			HostHdr:  "www.google.com",
+			Dst:      M.ParseSocksaddrHostPort("www.google.com", 443),
+		}
+		if err := validateProbeStatus(target, status); err == nil {
+			t.Fatalf("expected connectivity probe status %d to fail", status)
+		}
+	}
+	genericTarget := monitor.ProbeTargetSpec{
+		Original: "https://example.org/custom",
+		Scheme:   "https",
+		Host:     "example.org",
+		Port:     443,
+		Path:     "/custom",
+		HostHdr:  "example.org",
+		Dst:      M.ParseSocksaddrHostPort("example.org", 443),
+	}
+	for _, status := range []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests} {
+		if err := validateProbeStatus(genericTarget, status); err == nil {
+			t.Fatalf("expected generic probe status %d to fail", status)
+		}
+	}
+}
+
 func TestHTTPProbeTargetUsesWarmSecondRequestDelay(t *testing.T) {
 	var requests atomic.Int32
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

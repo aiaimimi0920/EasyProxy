@@ -152,8 +152,9 @@ func (m *Manager) ProbeGenerationAtLeast(
 	m.setActiveRoundLocked(round)
 	m.probeRound = round
 	m.probeRoundMu.Unlock()
+	m.resetPeriodicHealthTicker()
 
-	var completed atomic.Int32
+	authCooldown := m.upstreamAuthProbeCooldown()
 	var available atomic.Int32
 	var failed atomic.Int32
 	quorumCh := make(chan struct{})
@@ -181,6 +182,10 @@ func (m *Manager) ProbeGenerationAtLeast(
 
 	scheduling:
 		for _, task := range tasks {
+			if shouldSkipAuthFailedBackgroundProbe(task.entry, generation, time.Now(), authCooldown) {
+				failed.Add(1)
+				continue
+			}
 			select {
 			case sem <- struct{}{}:
 			case <-roundCtx.Done():
@@ -215,7 +220,6 @@ func (m *Manager) ProbeGenerationAtLeast(
 				) {
 					return
 				}
-				completed.Add(1)
 				if probeErr != nil {
 					failed.Add(1)
 					if m.logger != nil {
@@ -254,12 +258,13 @@ func (m *Manager) ProbeGenerationAtLeast(
 	}
 
 	snapshotSummary := func() ProbeSummary {
+		ok, bad := int(available.Load()), int(failed.Load())
 		return ProbeSummary{
 			Generation: generation,
 			Total:      len(tasks),
-			Completed:  int(completed.Load()),
-			Available:  int(available.Load()),
-			Failed:     int(failed.Load()),
+			Completed:  ok + bad,
+			Available:  ok,
+			Failed:     bad,
 		}
 	}
 

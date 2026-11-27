@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"easy_proxies/internal/config"
 	"easy_proxies/internal/monitor"
@@ -183,10 +184,9 @@ func TestBuildConnectorSpecsAutoFanoutPreservesDomainFallback(t *testing.T) {
 
 	selectionRuns := 0
 	manager := &connectorRuntimeManager{
-		ctx:         context.Background(),
-		logger:      defaultLogger{},
-		instances:   make(map[string]*connectorInstance),
-		fanoutCache: make(map[string][]RuntimeSource),
+		ctx:       context.Background(),
+		logger:    defaultLogger{},
+		instances: make(map[string]*connectorInstance),
 		preferredIPSelector: func(_ context.Context, _ string, _ config.ConnectorRuntimeConfig, _ config.ConnectorSourceConfig, options monitor.PreferredIPRefreshOptions) ([]preferredIPResultRow, string, string, error) {
 			selectionRuns++
 			if options.TopCount != 2 {
@@ -258,6 +258,36 @@ func TestBuildConnectorSpecsAutoFanoutPreservesDomainFallback(t *testing.T) {
 	}
 	if selectionRuns != 1 {
 		t.Fatalf("preferred IP selector ran %d times, want 1", selectionRuns)
+	}
+
+	// Advance clock beyond defaultPreferredIPFanoutTTL to verify automatic refresh.
+	currentNow := time.Now().Add(defaultPreferredIPFanoutTTL + time.Minute)
+	manager.nowFn = func() time.Time { return currentNow }
+	refreshedSpecs, err := manager.buildConnectorSpecs(cfg, sources)
+	if err != nil || len(refreshedSpecs) != 3 {
+		t.Fatalf("refreshed buildConnectorSpecs() = (%d, %v), want 3 specs", len(refreshedSpecs), err)
+	}
+	if selectionRuns != 2 {
+		t.Fatalf("preferred IP selector ran %d times after TTL expiry, want 2", selectionRuns)
+	}
+	currentNow = currentNow.Add(defaultPreferredIPFanoutTTL)
+	manager.preferredIPSelector = func(context.Context, string, config.ConnectorRuntimeConfig, config.ConnectorSourceConfig, monitor.PreferredIPRefreshOptions) ([]preferredIPResultRow, string, string, error) {
+		selectionRuns++
+		return nil, "", "", context.DeadlineExceeded
+	}
+	retained, err := manager.expandConnectorSources(cfg, sources)
+	if err != nil || len(retained) != 3 || selectionRuns != 3 {
+		t.Fatalf("refresh fallback: count=%d runs=%d err=%v", len(retained), selectionRuns, err)
+	}
+	retained[0].Options["connector_config"].(map[string]any)["server_ip"] = "modified"
+	again, err := manager.expandConnectorSources(cfg, sources)
+	if err != nil || len(again) != 3 || selectionRuns != 3 || again[0].Options["connector_config"].(map[string]any)["server_ip"] != "198.41.132.114" {
+		t.Fatal("cache isolation or retry deadline violated")
+	}
+	cfg.SourceSync.ConnectorRuntime.PreferredIP.FanoutCount++
+	again, err = manager.expandConnectorSources(cfg, sources)
+	if err != nil || len(again) != 1 || selectionRuns != 4 {
+		t.Fatal("different fanout configuration reused an invalid cached selection")
 	}
 }
 

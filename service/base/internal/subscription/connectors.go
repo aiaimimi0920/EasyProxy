@@ -24,9 +24,24 @@ const (
 	zenProxyFetchMaxAttempts    = 3
 	zenProxyFetchRetryBaseDelay = 100 * time.Millisecond
 	zenProxyFetchBodyLimit      = 2 * 1024 * 1024
+	defaultPreferredIPFanoutTTL = 12 * time.Hour
+	defaultZenProxyCacheTTL     = 6 * time.Hour
 )
 
 type preferredIPRuntimeSelector func(context.Context, string, config.ConnectorRuntimeConfig, config.ConnectorSourceConfig, monitor.PreferredIPRefreshOptions) ([]preferredIPResultRow, string, string, error)
+
+type connectorCacheKey struct {
+	key, id, name, origin string
+}
+
+func cacheKeyFor(source RuntimeSource) connectorCacheKey {
+	return connectorCacheKey{sourceKey(source), source.ID, source.Name, source.Origin}
+}
+
+type cachedZenProxySources struct {
+	cachedAt time.Time
+	sources  []RuntimeSource
+}
 
 type connectorRuntimeManager struct {
 	mu                  sync.Mutex
@@ -35,7 +50,9 @@ type connectorRuntimeManager struct {
 	logger              Logger
 	httpClient          *http.Client
 	instances           map[string]*connectorInstance
-	fanoutCache         map[string][]RuntimeSource
+	fanoutCache         map[preferredCacheKey]preferredCacheEntry
+	zenProxyCache       map[connectorCacheKey]cachedZenProxySources
+	nowFn               func() time.Time
 	preferredIPSelector preferredIPRuntimeSelector
 }
 
@@ -113,9 +130,15 @@ func newConnectorRuntimeManager(parent context.Context, logger Logger) Connector
 		logger:              logger,
 		httpClient:          newConnectorHTTPClient(),
 		instances:           make(map[string]*connectorInstance),
-		fanoutCache:         make(map[string][]RuntimeSource),
 		preferredIPSelector: runPreferredIPSelection,
 	}
+}
+
+func (m *connectorRuntimeManager) now() time.Time {
+	if m != nil && m.nowFn != nil {
+		return m.nowFn()
+	}
+	return time.Now()
 }
 
 func (m *connectorRuntimeManager) StopAll() error {
@@ -131,7 +154,8 @@ func (m *connectorRuntimeManager) StopAll() error {
 		}
 	}
 	m.instances = make(map[string]*connectorInstance)
-	m.fanoutCache = make(map[string][]RuntimeSource)
+	m.fanoutCache = nil
+	m.zenProxyCache = nil
 
 	if len(errs) > 0 {
 		return errors.New(strings.Join(errs, "; "))
@@ -150,6 +174,7 @@ func (m *connectorRuntimeManager) Reconcile(cfg *config.Config, sources []Runtim
 		return m.stopAllLocked()
 	}
 
+	m.pruneZenProxyCache(sources)
 	specs, err := m.buildConnectorSpecs(cfg, sources)
 	if err != nil {
 		return nil, err
@@ -214,14 +239,10 @@ func (m *connectorRuntimeManager) Reconcile(cfg *config.Config, sources []Runtim
 	if len(zenProxySources) > 0 {
 		runtimeSources = dedupeSourcesWithPrecedence(runtimeSources, zenProxySources)
 	}
-	if zenErr != nil {
-		errs = append(errs, zenErr.Error())
-	}
-
 	if len(errs) > 0 {
-		return runtimeSources, errors.New(strings.Join(errs, "; "))
+		zenErr = errors.Join(errors.New(strings.Join(errs, "; ")), zenErr)
 	}
-	return runtimeSources, nil
+	return runtimeSources, zenErr
 }
 
 func (m *connectorRuntimeManager) stopAllLocked() ([]RuntimeSource, error) {
@@ -232,7 +253,8 @@ func (m *connectorRuntimeManager) stopAllLocked() ([]RuntimeSource, error) {
 		}
 	}
 	m.instances = make(map[string]*connectorInstance)
-	m.fanoutCache = make(map[string][]RuntimeSource)
+	m.fanoutCache = nil
+	m.zenProxyCache = nil
 	if len(errs) > 0 {
 		return nil, errors.New(strings.Join(errs, "; "))
 	}
@@ -251,6 +273,7 @@ func (m *connectorRuntimeManager) buildConnectorSpecs(cfg *config.Config, source
 		}
 	}
 	if !hasECHSource {
+		m.fanoutCache = nil
 		return nil, nil
 	}
 

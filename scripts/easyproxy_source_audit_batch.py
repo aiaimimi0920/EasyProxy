@@ -52,7 +52,7 @@ def probe_one(proxy_url):
             except Exception as exc:
                 exit_code = 7
                 stderr = type(exc).__name__
-            ok = exit_code == 0 and (code in expected or (accept_below_500 and 200 <= code < 500 and code != 407))
+            ok = exit_code == 0 and (code in expected or (accept_below_500 and 200 <= code < 400))
             attempts.append({"target": url, "status_code": code, "exit_code": exit_code, "ok": ok, "stderr": stderr[:400]})
             if ok:
                 return proxy_url, {"ok": True, "attempts": attempts, "winning_target": url, "winning_status": code}

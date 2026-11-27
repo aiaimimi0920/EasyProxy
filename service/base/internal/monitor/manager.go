@@ -28,9 +28,12 @@ type Config struct {
 	// LongLivedMinUptime / LongLivedMinSuccessRate control when a node is
 	// considered "long-lived" (stable enough for sticky/anti-ban use). Zero
 	// values fall back to defaults (2h / 0.9).
-	LongLivedMinUptime      time.Duration
-	LongLivedMinSuccessRate float64
+	LongLivedMinUptime        time.Duration
+	LongLivedMinSuccessRate   float64
+	UpstreamAuthProbeCooldown time.Duration
 }
+
+const defaultUpstreamAuthProbeCooldown = 6 * time.Hour
 
 // Generation identifies one node-registration epoch across box reloads.
 type Generation uint64
@@ -284,6 +287,8 @@ type entry struct {
 	initialCheckDone   bool
 	available          bool
 	upstreamAuthFailed bool
+	authProbeGen       Generation    // not inherited when an unchanged URI is registered in a new box
+	authProbeAt        time.Time     // last actual 407 probe, not the last generic failure
 	firstSeenAt        time.Time     // first registration time, used for long-lived uptime
 	longLivedMinUptime time.Duration // resolved long-lived min uptime threshold
 	longLivedMinRate   float64       // resolved long-lived min success-rate threshold

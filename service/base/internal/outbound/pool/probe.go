@@ -142,15 +142,28 @@ func validateProbeStatus(target monitor.ProbeTargetSpec, status int) error {
 		if status < 200 || status >= 400 {
 			return fmt.Errorf("unexpected HTTP status %d from %s", status, target.Original)
 		}
-	} else if status < 200 || status >= 500 {
+	} else if status < 200 || status >= 500 || isRejectedProbeClientErrorStatus(status) {
 		return fmt.Errorf("unexpected HTTP status %d from %s", status, target.Original)
 	}
 	return nil
 }
 
+func isRejectedProbeClientErrorStatus(status int) bool {
+	switch status {
+	case 400, 401, 403, 429:
+		return true
+	default:
+		return false
+	}
+}
+
 func probeTargetRequiresStrictSuccessStatus(target monitor.ProbeTargetSpec) bool {
 	host := strings.ToLower(strings.TrimSpace(target.Host))
-	path := strings.ToLower(strings.TrimSpace(target.Path))
+	requestPath, _, _ := strings.Cut(target.Path, "?")
+	path := strings.ToLower(strings.TrimSpace(requestPath))
+	if path == "/generate_204" || strings.HasSuffix(path, "/generate_204") || path == "/connecttest.txt" || path == "/robots.txt" {
+		return true
+	}
 	switch host {
 	case "auth.openai.com":
 		return path == "" || strings.HasPrefix(path, "/")

@@ -134,15 +134,24 @@ func cloneConnectorOptions(input map[string]any) map[string]any {
 	}
 	cloned := make(map[string]any, len(input))
 	for key, value := range input {
-		if nested, ok := value.(map[string]any); ok {
-			child := make(map[string]any, len(nested))
-			for childKey, childValue := range nested {
-				child[childKey] = childValue
-			}
-			cloned[key] = child
-			continue
-		}
-		cloned[key] = value
+		cloned[key] = cloneConnectorValue(value)
 	}
 	return cloned
+}
+
+func cloneConnectorValue(value any) any {
+	switch v := value.(type) {
+	case map[string]any:
+		return cloneConnectorOptions(v)
+	case []any:
+		out := make([]any, len(v))
+		for i := range v {
+			out[i] = cloneConnectorValue(v[i])
+		}
+		return out
+	case []string:
+		return append([]string(nil), v...)
+	default:
+		return v
+	}
 }

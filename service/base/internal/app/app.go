@@ -166,6 +166,18 @@ func RunWithContext(ctx context.Context, cfg *config.Config) error {
 			NoAvailableProxyPolicy: fallback,
 		}, boxMgr, nil, dispatchLogger{})
 	})
+	gatewayMgr.SetTunStatsProvider(func() (gateway.TunStats, bool) {
+		stats, ok := boxMgr.GatewayRouteStats()
+		if !ok {
+			return gateway.TunStats{}, false
+		}
+		return gateway.TunStats{
+			ActiveConnections: stats.Active,
+			DirectConnections: stats.Direct,
+			ProxyConnections:  stats.Proxy,
+			DirectFallbacks:   stats.NoNodeFallback,
+		}, true
+	})
 	boxMgr.AddReloadLifecycleListener(gatewayMgr)
 	if err := gatewayMgr.Start(ctx, cfg.Gateway); err != nil {
 		return fmt.Errorf("start transparent gateway: %w", err)

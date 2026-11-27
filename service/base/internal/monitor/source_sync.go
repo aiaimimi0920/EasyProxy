@@ -10,6 +10,7 @@ type SourceSyncStatus struct {
 	LastSync               time.Time `json:"last_sync"`
 	LastSuccess            time.Time `json:"last_success"`
 	LastError              string    `json:"last_error,omitempty"`
+	ConnectorWarning       string    `json:"connector_warning,omitempty"`
 	FallbackActive         bool      `json:"fallback_active"`
 	LocalSourceCount       int       `json:"local_source_count"`
 	ManifestSourceCount    int       `json:"manifest_source_count"`

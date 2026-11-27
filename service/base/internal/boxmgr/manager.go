@@ -11,6 +11,7 @@ import (
 	"easy_proxies/internal/builder"
 	"easy_proxies/internal/config"
 	"easy_proxies/internal/monitor"
+	"easy_proxies/internal/outbound/gatewayroute"
 	"easy_proxies/internal/outbound/pool"
 	"easy_proxies/internal/outbound/profileselect"
 	"easy_proxies/internal/store"
@@ -154,6 +155,8 @@ type Manager struct {
 	// since m.cfg may have been mutated by updateAllSettings before reload.
 	lastAppliedMode     string
 	lastAppliedBasePort uint16
+
+	gatewayTotals gatewayroute.Totals
 }
 
 // New creates a BoxManager with the given config.

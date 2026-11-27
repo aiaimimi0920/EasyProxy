@@ -236,3 +236,29 @@ def test_discover_directly_usable_nodes_uses_single_container_batch_exec_when_mu
     sent = json.loads(batch_run.call_args.kwargs["input"])
     assert len(sent["targets"]) == 2 and sent["timeout"] == 10
     assert uris == ["ss://one"] and len(results) == 1 and results[0]["tag"] == "n1"
+
+
+def test_collect_candidates_skips_upstream_auth_failed_and_probe_rejects_4xx():
+    from scripts.easyproxy_source_audit_probe import collect_direct_probe_candidates
+
+    raw_nodes = [
+        {"tag": "ok-node", "port": 34001, "uri": "http://1.2.3.4:8080", "upstream_auth_failed": False},
+        {"tag": "auth-fail-node", "port": 34002, "uri": "http://1.2.3.5:8080", "upstream_auth_failed": True},
+        {"tag": "bl-node", "port": 34003, "uri": "http://1.2.3.6:8080", "blacklisted": True},
+    ]
+    filtered = collect_direct_probe_candidates(raw_nodes)
+    assert [item["tag"] for item in filtered] == ["ok-node"]
+
+    policy = {
+        "accept_http_status_below_500": True,
+        "http_probe_targets": [
+            {"url": "https://connectivitycheck.gstatic.com/generate_204", "expected_status": [204]},
+        ],
+    }
+    for bad_status in ("401\n", "403\n", "407\n", "429\n"):
+        with patch(
+            "scripts.easyproxy_source_audit_probe.subprocess.run",
+            return_value=Mock(returncode=0, stdout=bad_status, stderr=""),
+        ):
+            res = probe_http_proxy("http://127.0.0.1:34001", policy, network_container="audit-container")
+        assert res["ok"] is False

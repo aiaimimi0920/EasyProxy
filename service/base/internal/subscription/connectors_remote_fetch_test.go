@@ -267,3 +267,73 @@ func TestZenProxyFetchRetriesOnlyTransientStatuses(t *testing.T) {
 		})
 	}
 }
+
+func TestZenProxyReconcileRetainsLastKnownGoodOnTransientFailureAndEvictsOnAuthError(t *testing.T) {
+	statusCode := http.StatusOK
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if statusCode != http.StatusOK {
+			if statusCode == http.StatusForbidden {
+				w.Header().Set("Content-Length", "900")
+			}
+			w.WriteHeader(statusCode)
+			_, _ = io.WriteString(w, "authorization timeout")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"count":1,"proxies":[{"id":"proxy-1","name":"HTTP Node","type":"http","outbound":{"type":"http","server":"proxy.example.com","server_port":8080}}]}`))
+	}))
+	defer server.Close()
+
+	now := time.Now()
+	runtime := newConnectorRuntimeManager(context.Background(), defaultLogger{}).(*connectorRuntimeManager)
+	runtime.nowFn = func() time.Time { return now }
+	cfg := &config.Config{SourceSync: config.SourceSyncConfig{RequestTimeout: time.Second}}
+	sources := []RuntimeSource{{
+		ID:     "manifest-zenproxy",
+		Kind:   SourceKindConnector,
+		Name:   "ZenProxy",
+		Input:  server.URL,
+		Origin: "manifest",
+		Options: map[string]any{
+			"connector_type": connectorTypeZenProxyClient,
+			"connector_config": map[string]any{
+				"api_key": "zen-key",
+				"count":   1,
+			},
+		},
+	}}
+
+	initial, err := runtime.Reconcile(cfg, sources)
+	if err != nil || len(initial) != 1 {
+		t.Fatalf("initial Reconcile() = (%d, %v), want 1 source", len(initial), err)
+	}
+
+	// Transient 502 retains cached source while surfacing warning error.
+	statusCode = http.StatusBadGateway
+	now = now.Add(30 * time.Minute)
+	retained, err := runtime.Reconcile(cfg, sources)
+	if err == nil || len(retained) != 1 || retained[0].Input != initial[0].Input {
+		t.Fatalf("transient 502 Reconcile() = (%#v, %v), want retained source and warning", retained, err)
+	}
+	if got := connectorWarning(err); got != "connector reconcile degraded: retained 1 cached ZenProxy nodes" {
+		t.Fatalf("public warning = %q", got)
+	}
+
+	// Non-transient 401 evicts cache immediately.
+	statusCode = http.StatusUnauthorized
+	evicted, err := runtime.Reconcile(cfg, sources)
+	if err == nil || len(evicted) != 0 {
+		t.Fatalf("401 Reconcile() = (%#v, %v), want empty sources after auth failure", evicted, err)
+	}
+	for _, status := range []int{http.StatusBadGateway, http.StatusOK, http.StatusForbidden, http.StatusBadGateway} {
+		statusCode = status
+		got, err := runtime.Reconcile(cfg, sources)
+		if status == http.StatusOK {
+			if err != nil || len(got) != 1 {
+				t.Fatal("could not seed cache")
+			}
+		} else if len(got) != 0 || err == nil {
+			t.Fatalf("HTTP %d: stale nodes=%d, error=%v", status, len(got), err)
+		}
+	}
+}

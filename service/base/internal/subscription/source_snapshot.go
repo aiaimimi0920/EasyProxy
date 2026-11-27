@@ -53,6 +53,7 @@ func (m *Manager) buildActiveSourceSnapshot() (activeSourceSnapshot, error) {
 		m.sourceSyncStatus.ManifestURL = strings.TrimSpace(cfg.SourceSync.ManifestURL)
 		m.sourceSyncStatus.ManifestHealthy = false
 		m.sourceSyncStatus.LastError = ""
+		m.sourceSyncStatus.ConnectorWarning = connectorWarning(connectorErr)
 		m.sourceSyncStatus.LocalSourceCount = snapshot.LocalSourceCount
 		m.sourceSyncStatus.ManifestSourceCount = 0
 		m.sourceSyncStatus.FallbackSourceCount = 0
@@ -108,6 +109,7 @@ func (m *Manager) buildActiveSourceSnapshot() (activeSourceSnapshot, error) {
 		m.sourceSyncStatus.LastSync = time.Now()
 		m.sourceSyncStatus.LastSuccess = m.sourceSyncStatus.LastSync
 		m.sourceSyncStatus.LastError = ""
+		m.sourceSyncStatus.ConnectorWarning = connectorWarning(connectorErr)
 		m.sourceSyncStatus.FallbackActive = false
 		m.sourceSyncStatus.LocalSourceCount = snapshot.LocalSourceCount
 		m.sourceSyncStatus.ManifestSourceCount = snapshot.ManifestSourceCount
@@ -150,6 +152,7 @@ func (m *Manager) buildActiveSourceSnapshot() (activeSourceSnapshot, error) {
 	m.sourceSyncStatus.ManifestHealthy = false
 	m.sourceSyncStatus.LastSync = time.Now()
 	m.sourceSyncStatus.LastError = err.Error()
+	m.sourceSyncStatus.ConnectorWarning = connectorWarning(connectorErr)
 	m.sourceSyncStatus.FallbackActive = snapshot.FallbackActive
 	m.sourceSyncStatus.LocalSourceCount = snapshot.LocalSourceCount
 	m.sourceSyncStatus.ManifestSourceCount = 0
@@ -162,6 +165,19 @@ func (m *Manager) buildActiveSourceSnapshot() (activeSourceSnapshot, error) {
 		return snapshot, err
 	}
 	return snapshot, nil
+}
+
+// Never send remote response text, credential-bearing URLs or raw connector
+// configuration back to the status endpoint.
+func connectorWarning(err error) string {
+	if err == nil {
+		return ""
+	}
+	var retained retainedZenNodes
+	if errors.As(err, &retained) {
+		return "connector reconcile degraded: " + retained.Error()
+	}
+	return "connector reconcile failed"
 }
 
 func (m *Manager) reconcileConnectorSources(cfg *config.Config, connectorSources []RuntimeSource) ([]RuntimeSource, error) {

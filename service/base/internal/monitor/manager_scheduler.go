@@ -78,7 +78,7 @@ func (m *Manager) StartPeriodicHealthCheck(interval, timeout time.Duration) {
 					m.logger.Info("periodic health check interval updated: ", newInterval)
 				}
 			case <-ticker.C:
-				m.RequestProbeAllOnce(timeout)
+				m.startBackgroundProbe(timeout)
 			}
 		}
 	}()
@@ -112,6 +112,12 @@ func (m *Manager) SetHealthCheckInterval(d time.Duration) {
 // same generation and probe topology are de-duplicated; a newer generation or
 // probe replacement supersedes and drains the older coordinator first.
 func (m *Manager) RequestProbeAllOnce(timeout time.Duration) {
+	if m.startBackgroundProbe(timeout) {
+		m.resetPeriodicHealthTicker()
+	}
+}
+
+func (m *Manager) startBackgroundProbe(timeout time.Duration) bool {
 	m.probeRoundMu.Lock()
 	defer m.probeRoundMu.Unlock()
 	if exclusive := m.exclusive; exclusive != nil {
@@ -122,7 +128,7 @@ func (m *Manager) RequestProbeAllOnce(timeout time.Duration) {
 		default:
 			// A synchronous generation probe owns the scheduler. The caller will
 			// run its own fresh round, so a periodic tick must not compete with it.
-			return
+			return false
 		}
 	}
 
@@ -131,7 +137,7 @@ func (m *Manager) RequestProbeAllOnce(timeout time.Duration) {
 	generation := m.reloadGen
 	m.mu.RUnlock()
 	if !ready {
-		return
+		return false
 	}
 	probeEpoch := m.probeEpoch.Load()
 
@@ -142,7 +148,7 @@ func (m *Manager) RequestProbeAllOnce(timeout time.Duration) {
 			m.clearActiveRoundLocked(active)
 		default:
 			if active.generation == generation && active.probeEpoch == probeEpoch {
-				return
+				return false
 			}
 			m.invalidateActiveRoundLocked(active)
 			active.cancel()
@@ -170,6 +176,7 @@ func (m *Manager) RequestProbeAllOnce(timeout time.Duration) {
 	m.setActiveRoundLocked(round)
 	m.probeRound = round
 	go m.runPeriodicProbeRound(roundCtx, round, timeout)
+	return true
 }
 
 // probeAllNodes checks all registered nodes concurrently.
@@ -236,6 +243,34 @@ func (m *Manager) clearActiveRoundLocked(round *periodicProbeRound) {
 	m.invalidateActiveRoundLocked(round)
 }
 
+func (m *Manager) resetPeriodicHealthTicker() {
+	m.healthMu.Lock()
+	if m.healthTicker != nil && m.healthInterval > 0 {
+		m.healthTicker.Reset(m.healthInterval)
+	}
+	m.healthMu.Unlock()
+}
+
+func (m *Manager) upstreamAuthProbeCooldown() time.Duration {
+	m.mu.RLock()
+	cooldown := m.cfg.UpstreamAuthProbeCooldown
+	m.mu.RUnlock()
+	if cooldown <= 0 {
+		return defaultUpstreamAuthProbeCooldown
+	}
+	return cooldown
+}
+
+func shouldSkipAuthFailedBackgroundProbe(e *entry, generation Generation, now time.Time, cooldown time.Duration) bool {
+	if e == nil || cooldown <= 0 {
+		return false
+	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.initialCheckDone && e.reloadGen == generation && e.authProbeGen == generation &&
+		e.upstreamAuthFailed && !e.authProbeAt.IsZero() && now.Before(e.authProbeAt.Add(cooldown))
+}
+
 func (m *Manager) probeAllNodesForGeneration(
 	ctx context.Context,
 	generation Generation,
@@ -245,7 +280,7 @@ func (m *Manager) probeAllNodesForGeneration(
 	gateRev uint64,
 	timeout time.Duration,
 ) {
-	summary, err := m.probeGeneration(ctx, generation, roundID, probeEpoch, probeSeq, timeout)
+	summary, err := m.probeGenerationWithOptions(ctx, generation, roundID, probeEpoch, probeSeq, timeout, true)
 	m.completeInitialProbeGateForRound(generation, roundID, probeEpoch, gateRev, err)
 	if err != nil && !errors.Is(err, ErrStaleGeneration) && m.logger != nil {
 		m.logger.Warn("health check failed: ", err)
